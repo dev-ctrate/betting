@@ -4,22 +4,21 @@ const app = express();
 
 const PORT = process.env.PORT || 3000;
 
-// LIVE MODE:
+// ===== MODE =====
+// For tomorrow, switch to:
 // const API_KEY = process.env.API_KEY;
-
-// MOCK MODE FOR TESTING:
 const API_KEY = null;
 
+// ===== CONFIG =====
+const NBA_SEASON = "2025-26";
+const NBA_SEASON_TYPE = "Regular Season";
+const TEAM_FEATURE_TTL_MS = 30 * 60 * 1000;
+
+// ===== STORES =====
 const historyStore = {};
 const teamFeatureCache = {};
 
-// Cache NBA Stats features for 30 minutes
-const TEAM_FEATURE_TTL_MS = 30 * 60 * 1000;
-
-// 2025-26 for April 2026
-const NBA_SEASON = "2025-26";
-const NBA_SEASON_TYPE = "Regular Season";
-
+// ===== TEAM IDS =====
 const TEAM_ID_MAP = {
   "Atlanta Hawks": 1610612737,
   "Boston Celtics": 1610612738,
@@ -53,6 +52,7 @@ const TEAM_ID_MAP = {
   "Washington Wizards": 1610612764
 };
 
+// ===== BASIC HELPERS =====
 function clamp(x, min, max) {
   return Math.max(min, Math.min(max, x));
 }
@@ -72,10 +72,12 @@ function weightedAverage(pairs) {
   if (!pairs.length) return null;
   let numerator = 0;
   let denominator = 0;
+
   for (const pair of pairs) {
     numerator += pair.value * pair.weight;
     denominator += pair.weight;
   }
+
   return denominator === 0 ? null : numerator / denominator;
 }
 
@@ -83,6 +85,7 @@ function noVigTwoWayProb(priceA, priceB) {
   const rawA = 1 / priceA;
   const rawB = 1 / priceB;
   const total = rawA + rawB;
+
   return {
     a: rawA / total,
     b: rawB / total
@@ -127,10 +130,22 @@ function getNbaStatsHeaders() {
   };
 }
 
+async function fetchJson(url, headers = {}) {
+  const response = await fetch(url, { headers });
+
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(`Request failed ${response.status}: ${text}`);
+  }
+
+  return await response.json();
+}
+
 function getResultSetRow(data, targetNameContains = null) {
   if (!data || !Array.isArray(data.resultSets)) return null;
 
   let resultSet = data.resultSets[0];
+
   if (targetNameContains) {
     const found = data.resultSets.find(rs =>
       typeof rs.name === "string" &&
@@ -145,28 +160,17 @@ function getResultSetRow(data, targetNameContains = null) {
 
   if (!resultSet.rowSet.length) return null;
 
-  const headers = resultSet.headers;
   const row = resultSet.rowSet[0];
   const obj = {};
 
-  headers.forEach((header, index) => {
+  resultSet.headers.forEach((header, index) => {
     obj[header] = row[index];
   });
 
   return obj;
 }
 
-async function fetchJson(url, headers = {}) {
-  const response = await fetch(url, { headers });
-
-  if (!response.ok) {
-    const text = await response.text();
-    throw new Error(`Request failed ${response.status}: ${text}`);
-  }
-
-  return await response.json();
-}
-
+// ===== ODDS API =====
 async function fetchNbaOdds() {
   const url =
     `https://api.the-odds-api.com/v4/sports/basketball_nba/odds/` +
@@ -178,6 +182,7 @@ async function fetchNbaOdds() {
   return await fetchJson(url);
 }
 
+// ===== NBA STATS HELPERS =====
 async function fetchTeamDashboard({ teamId, measureType, lastNGames = 0, location = "" }) {
   const params = new URLSearchParams({
     DateFrom: "",
@@ -211,14 +216,10 @@ async function fetchTeamDashboard({ teamId, measureType, lastNGames = 0, locatio
 
 async function getTeamFeatures(teamName) {
   const teamId = TEAM_ID_MAP[teamName];
-  if (!teamId) {
-    return null;
-  }
+  if (!teamId) return null;
 
-  const cacheKey = `${teamId}`;
-  const cached = teamFeatureCache[cacheKey];
-
-  if (cached && (Date.now() - cached.timestamp < TEAM_FEATURE_TTL_MS)) {
+  const cached = teamFeatureCache[teamId];
+  if (cached && Date.now() - cached.timestamp < TEAM_FEATURE_TTL_MS) {
     return cached.data;
   }
 
@@ -227,13 +228,17 @@ async function getTeamFeatures(teamName) {
     last10AdvancedRaw,
     homeAdvancedRaw,
     roadAdvancedRaw,
-    fourFactorsRaw
+    fourFactorsRaw,
+    scoringRaw,
+    opponentRaw
   ] = await Promise.all([
     fetchTeamDashboard({ teamId, measureType: "Advanced", lastNGames: 0, location: "" }),
     fetchTeamDashboard({ teamId, measureType: "Advanced", lastNGames: 10, location: "" }),
     fetchTeamDashboard({ teamId, measureType: "Advanced", lastNGames: 0, location: "Home" }),
     fetchTeamDashboard({ teamId, measureType: "Advanced", lastNGames: 0, location: "Road" }),
-    fetchTeamDashboard({ teamId, measureType: "Four Factors", lastNGames: 0, location: "" })
+    fetchTeamDashboard({ teamId, measureType: "Four Factors", lastNGames: 0, location: "" }),
+    fetchTeamDashboard({ teamId, measureType: "Scoring", lastNGames: 0, location: "" }),
+    fetchTeamDashboard({ teamId, measureType: "Opponent", lastNGames: 0, location: "" })
   ]);
 
   const seasonAdvanced = getResultSetRow(seasonAdvancedRaw);
@@ -241,82 +246,148 @@ async function getTeamFeatures(teamName) {
   const homeAdvanced = getResultSetRow(homeAdvancedRaw);
   const roadAdvanced = getResultSetRow(roadAdvancedRaw);
   const fourFactors = getResultSetRow(fourFactorsRaw);
+  const scoring = getResultSetRow(scoringRaw);
+  const opponent = getResultSetRow(opponentRaw);
 
-  const features = {
-    teamId,
-    netRating: Number(seasonAdvanced?.NET_RATING ?? 0),
+  const f = {
+    // advanced
     offRating: Number(seasonAdvanced?.OFF_RATING ?? 0),
     defRating: Number(seasonAdvanced?.DEF_RATING ?? 0),
+    netRating: Number(seasonAdvanced?.NET_RATING ?? 0),
     pace: Number(seasonAdvanced?.PACE ?? 0),
     pie: Number(seasonAdvanced?.PIE ?? 0),
 
+    // recent form
     last10NetRating: Number(last10Advanced?.NET_RATING ?? 0),
+    last10OffRating: Number(last10Advanced?.OFF_RATING ?? 0),
+    last10DefRating: Number(last10Advanced?.DEF_RATING ?? 0),
 
+    // home/road
     homeNetRating: Number(homeAdvanced?.NET_RATING ?? 0),
     roadNetRating: Number(roadAdvanced?.NET_RATING ?? 0),
 
+    // four factors
     efgPct: Number(fourFactors?.EFG_PCT ?? 0),
     tovPct: Number(fourFactors?.TM_TOV_PCT ?? 0),
     orebPct: Number(fourFactors?.OREB_PCT ?? 0),
-    ftRate: Number(fourFactors?.FTA_RATE ?? 0)
+    ftRate: Number(fourFactors?.FTA_RATE ?? 0),
+
+    // scoring-ish
+    pctFGA2PT: Number(scoring?.PCT_FGA_2PT ?? 0),
+    pctFGA3PT: Number(scoring?.PCT_FGA_3PT ?? 0),
+    pctPTS2PT: Number(scoring?.PCT_PTS_2PT ?? 0),
+    pctPTS2PT_MR: Number(scoring?.PCT_PTS_2PT_MR ?? 0),
+    pctPTS3PT: Number(scoring?.PCT_PTS_3PT ?? 0),
+    pctPTSFBPS: Number(scoring?.PCT_PTS_FBPS ?? 0),
+    pctPTSOFFTOV: Number(scoring?.PCT_PTS_OFF_TOV ?? 0),
+    pctPTSInPaint: Number(scoring?.PCT_PTS_PAINT ?? 0),
+
+    // opponent context
+    oppEfgPct: Number(opponent?.OPP_EFG_PCT ?? 0),
+    oppTovPct: Number(opponent?.OPP_TOV_PCT ?? 0),
+    oppOrebPct: Number(opponent?.OPP_OREB_PCT ?? 0),
+    oppFtRate: Number(opponent?.OPP_FTA_RATE ?? 0)
   };
 
-  teamFeatureCache[cacheKey] = {
+  // Derived features
+  f.shotProfileEntropy = computeEntropy([
+    f.pctFGA2PT,
+    f.pctFGA3PT
+  ]);
+
+  f.transitionBias = f.pctPTSFBPS;
+  f.turnoverPressure = f.oppTovPct;
+  f.paintPressure = f.pctPTSInPaint;
+  f.midrangeLean = f.pctPTS2PT_MR;
+
+  teamFeatureCache[teamId] = {
     timestamp: Date.now(),
-    data: features
+    data: f
   };
 
-  return features;
+  return f;
 }
 
-function buildStatsAdjustment(homeFeatures, awayFeatures) {
-  if (!homeFeatures || !awayFeatures) {
-    return 0;
-  }
+function computeEntropy(parts) {
+  const filtered = parts.filter(x => x > 0);
+  if (!filtered.length) return 0;
 
-  // Season strength
+  return -filtered.reduce((sum, p) => sum + p * Math.log(p), 0);
+}
+
+// ===== MODEL ADJUSTMENTS =====
+function buildStatsAdjustment(homeFeatures, awayFeatures) {
+  if (!homeFeatures || !awayFeatures) return 0;
+
+  // 1. Season strength
   const seasonNetAdj = clamp(
     (homeFeatures.netRating - awayFeatures.netRating) * 0.0045,
     -0.08,
     0.08
   );
 
-  // Recent form / momentum
+  // 2. Recent form / momentum
   const formAdj = clamp(
     (homeFeatures.last10NetRating - awayFeatures.last10NetRating) * 0.003,
     -0.05,
     0.05
   );
 
-  // Home/Road context
+  // 3. Home / away split
   const splitAdj = clamp(
     (homeFeatures.homeNetRating - awayFeatures.roadNetRating) * 0.0025,
     -0.04,
     0.04
   );
 
-  // Four Factors blend
-  const fourFactorScoreHome =
+  // 4. Four Factors matchup
+  const fourFactorHome =
     (homeFeatures.efgPct * 0.40) -
     (homeFeatures.tovPct * 0.25) +
     (homeFeatures.orebPct * 0.20) +
     (homeFeatures.ftRate * 0.15);
 
-  const fourFactorScoreAway =
+  const fourFactorAway =
     (awayFeatures.efgPct * 0.40) -
     (awayFeatures.tovPct * 0.25) +
     (awayFeatures.orebPct * 0.20) +
     (awayFeatures.ftRate * 0.15);
 
   const fourFactorAdj = clamp(
-    (fourFactorScoreHome - fourFactorScoreAway) * 0.30,
+    (fourFactorHome - fourFactorAway) * 0.30,
     -0.03,
     0.03
   );
 
-  return seasonNetAdj + formAdj + splitAdj + fourFactorAdj;
+  // 5. Opponent weakness exploitation
+  const exploitAdj = clamp(
+    (
+      (homeFeatures.efgPct - awayFeatures.oppEfgPct) * 0.20 +
+      (homeFeatures.paintPressure - awayFeatures.oppOrebPct) * 0.05 +
+      (homeFeatures.turnoverPressure - awayFeatures.oppTovPct) * 0.05
+    ),
+    -0.02,
+    0.02
+  );
+
+  // 6. Pace / game environment
+  const paceAdj = clamp(
+    (homeFeatures.pace - awayFeatures.pace) * 0.0008,
+    -0.01,
+    0.01
+  );
+
+  // 7. Shot profile diversity
+  const entropyAdj = clamp(
+    (homeFeatures.shotProfileEntropy - awayFeatures.shotProfileEntropy) * 0.01,
+    -0.01,
+    0.01
+  );
+
+  return seasonNetAdj + formAdj + splitAdj + fourFactorAdj + exploitAdj + paceAdj + entropyAdj;
 }
 
+// ===== GAME DATA =====
 async function getGameData(rawGame) {
   if (!rawGame.bookmakers || rawGame.bookmakers.length === 0) {
     return null;
@@ -378,9 +449,11 @@ async function getGameData(rawGame) {
     return null;
   }
 
+  // market baseline
   const homeMarketProb = weightedAverage(homeProbPairs);
   const awayMarketProb = weightedAverage(awayProbPairs);
 
+  // disagreement penalty
   const homeDisagreement = variance(homeProbUnweighted);
   const awayDisagreement = variance(awayProbUnweighted);
   const disagreementPenalty = clamp(
@@ -389,13 +462,15 @@ async function getGameData(rawGame) {
     0.03
   );
 
+  // spread + total context
   const spreadAdj = weightedAverage(spreadSignals) || 0;
-
   const totalConsensus = weightedAverage(totalSignals) || 0;
+
   let totalAdj = 0;
   if (totalConsensus < 220) totalAdj = 0.004;
   if (totalConsensus > 235) totalAdj = -0.004;
 
+  // NBA stats features
   const [homeFeatures, awayFeatures] = await Promise.all([
     getTeamFeatures(rawGame.home_team),
     getTeamFeatures(rawGame.away_team)
@@ -403,6 +478,7 @@ async function getGameData(rawGame) {
 
   const statsAdj = buildStatsAdjustment(homeFeatures, awayFeatures);
 
+  // final probabilities
   let homeTrueProbability =
     homeMarketProb + spreadAdj + totalAdj + statsAdj - disagreementPenalty;
   let awayTrueProbability =
@@ -426,7 +502,8 @@ async function getGameData(rawGame) {
   const trueProbability =
     pickSide === "home" ? homeTrueProbability : awayTrueProbability;
 
-  const edge = pickSide === "home" ? homeEdge : awayEdge;
+  const edge =
+    pickSide === "home" ? homeEdge : awayEdge;
 
   const pick =
     pickSide === "home"
@@ -473,6 +550,7 @@ async function getGameData(rawGame) {
   };
 }
 
+// ===== ROUTES =====
 app.get("/", (req, res) => {
   res.sendFile(path.join(__dirname, "index.html"));
 });
