@@ -1078,20 +1078,35 @@ app.get("/odds", async (req, res) => {
     const propSections = buildStructuredPropSections(props);
     const propSignal = buildPropSignal(propSections);
 
-    const [injuriesInfo, lineupsInfo, depthInfo] = await Promise.all([
-      getFantasyNerdsInjuries(),
-      getFantasyNerdsLineups(),
-      getFantasyNerdsDepthCharts()
-    ]);
+    const [injuriesFN, lineupsFN, depthFN, injuriesBDL] = await Promise.all([
+  getFantasyNerdsInjuries(),
+  getFantasyNerdsLineups(),
+  getFantasyNerdsDepthCharts(),
+  getBDLInjuries()
+]);
 
-    const injurySummary = summarizeInjuryLineup(
-      featured.home_team,
-      featured.away_team,
-      injuriesInfo.rows || [],
-      lineupsInfo.rows || [],
-      depthInfo.rows || [],
-      propSections
-    );
+let injuriesRows = [];
+let sourceUsed = "none";
+
+if (injuriesFN.available && injuriesFN.rows.length > 0) {
+  injuriesRows = injuriesFN.rows;
+  sourceUsed = "fantasynerds";
+} else if (injuriesBDL && injuriesBDL.length > 0) {
+  injuriesRows = injuriesBDL;
+  sourceUsed = "balldontlie";
+}
+
+const lineupsRows = lineupsFN.rows || [];
+const depthRows = depthFN.rows || [];
+
+const injurySummary = summarizeInjuryLineup(
+  featured.home_team,
+  featured.away_team,
+  injuriesRows,
+  lineupsRows,
+  depthRows,
+  propSections
+);
 
     const model = buildProbabilityModel(
       currentConsensus,
