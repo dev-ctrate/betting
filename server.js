@@ -4,8 +4,10 @@ const app = express();
 
 const PORT = process.env.PORT || 3000;
 
-// API disabled for now.
-// Tomorrow, switch this back to: const API_KEY = process.env.API_KEY;
+// LIVE MODE:
+// const API_KEY = process.env.API_KEY;
+
+// MOCK MODE FOR TESTING:
 const API_KEY = null;
 
 // Store last 15 minutes of edge history per game
@@ -27,11 +29,63 @@ function trimHistory(gameId) {
   });
 }
 
+function clamp(x, min, max) {
+  return Math.max(min, Math.min(max, x));
+}
+
+function average(values) {
+  if (!values.length) return null;
+  return values.reduce((sum, v) => sum + v, 0) / values.length;
+}
+
+function variance(values) {
+  if (!values.length) return 0;
+  const avg = average(values);
+  return average(values.map(v => (v - avg) ** 2));
+}
+
+function weightedAverage(pairs) {
+  if (!pairs.length) return null;
+
+  let numerator = 0;
+  let denominator = 0;
+
+  for (const pair of pairs) {
+    numerator += pair.value * pair.weight;
+    denominator += pair.weight;
+  }
+
+  return denominator === 0 ? null : numerator / denominator;
+}
+
+function noVigTwoWayProb(priceA, priceB) {
+  const rawA = 1 / priceA;
+  const rawB = 1 / priceB;
+  const total = rawA + rawB;
+
+  return {
+    a: rawA / total,
+    b: rawB / total
+  };
+}
+
+function getBookWeight(bookKey) {
+  const sharpBooks = ["pinnacle", "circasports", "matchbook"];
+  const solidBooks = ["draftkings", "fanduel", "betmgm"];
+
+  if (sharpBooks.includes(bookKey)) return 1.35;
+  if (solidBooks.includes(bookKey)) return 1.1;
+  return 1.0;
+}
+
 // Fetch real NBA odds
 async function fetchNbaOdds() {
   const url =
     `https://api.the-odds-api.com/v4/sports/basketball_nba/odds/` +
-    `?apiKey=${API_KEY}&regions=us&markets=h2h&oddsFormat=decimal`;
+    `?apiKey=${API_KEY}` +
+    `&regions=us` +
+    `&markets=h2h,spreads,totals` +
+    `&oddsFormat=decimal`;
 
   const response = await fetch(url);
 
@@ -43,63 +97,145 @@ async function fetchNbaOdds() {
   return await response.json();
 }
 
-// Convert real API game into dashboard data
+// Best possible "true probability" from odds-only inputs
 function getGameData(rawGame) {
   if (!rawGame.bookmakers || rawGame.bookmakers.length === 0) {
     return null;
   }
 
-  const bookmaker = rawGame.bookmakers[0];
-  if (!bookmaker.markets || bookmaker.markets.length === 0) {
+  const homeProbPairs = [];
+  const awayProbPairs = [];
+  const homeProbUnweighted = [];
+  const awayProbUnweighted = [];
+  const spreadSignals = [];
+  const totalSignals = [];
+
+  for (const bookmaker of rawGame.bookmakers) {
+    const weight = getBookWeight(bookmaker.key || "");
+
+    const h2hMarket = bookmaker.markets?.find(m => m.key === "h2h");
+    const spreadsMarket = bookmaker.markets?.find(m => m.key === "spreads");
+    const totalsMarket = bookmaker.markets?.find(m => m.key === "totals");
+
+    // Moneyline consensus
+    if (h2hMarket?.outcomes?.length >= 2) {
+      const homeOutcome = h2hMarket.outcomes.find(
+        o => o.name === rawGame.home_team
+      );
+      const awayOutcome = h2hMarket.outcomes.find(
+        o => o.name === rawGame.away_team
+      );
+
+      if (homeOutcome && awayOutcome) {
+        const nv = noVigTwoWayProb(homeOutcome.price, awayOutcome.price);
+
+        homeProbPairs.push({ value: nv.a, weight });
+        awayProbPairs.push({ value: nv.b, weight });
+
+        homeProbUnweighted.push(nv.a);
+        awayProbUnweighted.push(nv.b);
+      }
+    }
+
+    // Spread context
+    if (spreadsMarket?.outcomes?.length >= 2) {
+      const homeSpread = spreadsMarket.outcomes.find(
+        o => o.name === rawGame.home_team
+      );
+
+      if (homeSpread && typeof homeSpread.point === "number") {
+        // More negative home spread means stronger home team
+        const spreadAdj = clamp((-homeSpread.point) * 0.010, -0.08, 0.08);
+        spreadSignals.push({ value: spreadAdj, weight });
+      }
+    }
+
+    // Total context
+    if (totalsMarket?.outcomes?.length >= 2) {
+      const over = totalsMarket.outcomes.find(o => o.name === "Over");
+      if (over && typeof over.point === "number") {
+        totalSignals.push({ value: over.point, weight });
+      }
+    }
+  }
+
+  if (!homeProbPairs.length || !awayProbPairs.length) {
     return null;
   }
 
-  const market = bookmaker.markets[0];
-  if (!market.outcomes || market.outcomes.length < 2) {
-    return null;
-  }
+  // Base fair probabilities from no-vig consensus
+  const homeMarketProb = weightedAverage(homeProbPairs);
+  const awayMarketProb = weightedAverage(awayProbPairs);
 
-  const homeOutcome = market.outcomes.find(
-    outcome => outcome.name === rawGame.home_team
+  // Penalize disagreement between books
+  const homeDisagreement = variance(homeProbUnweighted);
+  const awayDisagreement = variance(awayProbUnweighted);
+  const disagreementPenalty = clamp(
+    (homeDisagreement + awayDisagreement) * 8,
+    0,
+    0.03
   );
-  const awayOutcome = market.outcomes.find(
-    outcome => outcome.name === rawGame.away_team
-  );
 
-  if (!homeOutcome || !awayOutcome) {
-    return null;
-  }
+  // Spread signal
+  const spreadAdj = weightedAverage(spreadSignals) || 0;
 
-  const homeOdds = homeOutcome.price;
-  const awayOdds = awayOutcome.price;
+  // Totals signal
+  const totalConsensus = weightedAverage(totalSignals) || 0;
+  let totalAdj = 0;
+  if (totalConsensus < 220) totalAdj = 0.004;
+  if (totalConsensus > 235) totalAdj = -0.004;
 
-  const homeImpliedProbability = 1 / homeOdds;
-  const awayImpliedProbability = 1 / awayOdds;
+  // Build "true" probabilities from available market info
+  let homeTrueProbability =
+    homeMarketProb + spreadAdj + totalAdj - disagreementPenalty;
+  let awayTrueProbability =
+    awayMarketProb - spreadAdj - totalAdj - disagreementPenalty;
 
-  // Temporary edge model placeholder
-  const homeTrueProbability = Math.min(homeImpliedProbability + 0.03, 0.95);
-  const awayTrueProbability = Math.min(awayImpliedProbability + 0.03, 0.95);
+  homeTrueProbability = clamp(homeTrueProbability, 0.01, 0.99);
+  awayTrueProbability = clamp(awayTrueProbability, 0.01, 0.99);
 
-  const homeEdge = homeTrueProbability - homeImpliedProbability;
-  const awayEdge = awayTrueProbability - awayImpliedProbability;
+  // Normalize back to 100%
+  const totalProb = homeTrueProbability + awayTrueProbability;
+  homeTrueProbability = homeTrueProbability / totalProb;
+  awayTrueProbability = awayTrueProbability / totalProb;
+
+  const homeEdge = homeTrueProbability - homeMarketProb;
+  const awayEdge = awayTrueProbability - awayMarketProb;
 
   const pickSide = homeEdge >= awayEdge ? "home" : "away";
 
-  const selectedOdds = pickSide === "home" ? homeOdds : awayOdds;
   const impliedProbability =
-    pickSide === "home" ? homeImpliedProbability : awayImpliedProbability;
+    pickSide === "home" ? homeMarketProb : awayMarketProb;
+
   const trueProbability =
     pickSide === "home" ? homeTrueProbability : awayTrueProbability;
-  const edge = pickSide === "home" ? homeEdge : awayEdge;
+
+  const edge =
+    pickSide === "home" ? homeEdge : awayEdge;
+
   const pick =
     pickSide === "home"
       ? `${rawGame.home_team} to win`
       : `${rawGame.away_team} to win`;
 
+  // Display chosen side's odds from first bookmaker for UI
+  let sportsbookOddsDecimal = null;
+  const firstBookH2H = rawGame.bookmakers[0]?.markets?.find(m => m.key === "h2h");
+
+  if (firstBookH2H?.outcomes?.length >= 2) {
+    const chosenOutcome = firstBookH2H.outcomes.find(o =>
+      o.name === (pickSide === "home" ? rawGame.home_team : rawGame.away_team)
+    );
+
+    if (chosenOutcome) {
+      sportsbookOddsDecimal = chosenOutcome.price;
+    }
+  }
+
   let verdict = "Bad value";
-  if (edge >= 0.05) {
+  if (edge >= 0.04) {
     verdict = "Good value";
-  } else if (edge > 0) {
+  } else if (edge >= 0.015) {
     verdict = "Small edge";
   }
 
@@ -109,12 +245,14 @@ function getGameData(rawGame) {
     homeTeam: rawGame.home_team,
     awayTeam: rawGame.away_team,
     commenceTime: rawGame.commence_time,
-    sportsbookOddsDecimal: selectedOdds,
+    sportsbookOddsDecimal,
     impliedProbability,
     trueProbability,
     edge,
     verdict,
     pick,
+    disagreementPenalty,
+    totalConsensus,
     timestamp: new Date().toISOString()
   };
 }
@@ -226,17 +364,29 @@ app.get("/odds", async (req, res) => {
         });
       }
 
-      const impliedProbability = 1 / game.sportsbookOddsDecimal;
-      const trueProbability = Math.min(
-        impliedProbability + 0.01 + Math.random() * 0.05,
-        0.95
-      );
-      const edge = trueProbability - impliedProbability;
+      const rawHome = 1 / game.sportsbookOddsDecimal;
+      const rawAway = 1 / (game.sportsbookOddsDecimal + 0.25);
+      const total = rawHome + rawAway;
+      const impliedProbability = rawHome / total;
+
+      let trueProbability = impliedProbability + 0.02 + Math.random() * 0.02;
+      trueProbability = clamp(trueProbability, 0.01, 0.99);
+
+      let edge = trueProbability - impliedProbability;
+
+      if (!historyStore[gameId]) {
+        historyStore[gameId] = [];
+      }
+
+      if (historyStore[gameId].length > 0) {
+        const previousEdge = historyStore[gameId][historyStore[gameId].length - 1].edge;
+        edge = previousEdge * 0.65 + edge * 0.35;
+      }
 
       let verdict = "Bad value";
-      if (edge >= 0.05) {
+      if (edge >= 0.04) {
         verdict = "Good value";
-      } else if (edge > 0) {
+      } else if (edge >= 0.015) {
         verdict = "Small edge";
       }
 
@@ -248,10 +398,6 @@ app.get("/odds", async (req, res) => {
         verdict,
         timestamp: new Date().toISOString()
       };
-
-      if (!historyStore[gameId]) {
-        historyStore[gameId] = [];
-      }
 
       historyStore[gameId].push({
         timestamp: current.timestamp,
@@ -285,6 +431,11 @@ app.get("/odds", async (req, res) => {
 
     if (!historyStore[gameId]) {
       historyStore[gameId] = [];
+    }
+
+    if (historyStore[gameId].length > 0) {
+      const previousEdge = historyStore[gameId][historyStore[gameId].length - 1].edge;
+      current.edge = previousEdge * 0.65 + current.edge * 0.35;
     }
 
     historyStore[gameId].push({
