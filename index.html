@@ -30,6 +30,19 @@
       margin: 0 0 10px 0;
     }
 
+    .selector-row {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+
+    select {
+      padding: 10px;
+      border-radius: 8px;
+      border: none;
+      font-size: 16px;
+    }
+
     .stats {
       display: grid;
       grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -64,6 +77,13 @@
     <div class="card">
       <h1>NBA Edge Tracker</h1>
       <p class="small">Updates every 30 seconds · shows last 15 minutes</p>
+    </div>
+
+    <div class="card">
+      <div class="selector-row">
+        <label for="gameSelect">Select NBA game (now to next 24 hours)</label>
+        <select id="gameSelect"></select>
+      </div>
     </div>
 
     <div class="card">
@@ -105,6 +125,9 @@
   </div>
 
   <script>
+    const gameSelect = document.getElementById("gameSelect");
+    let selectedGameId = null;
+
     const ctx = document.getElementById("edgeChart").getContext("2d");
 
     const edgeChart = new Chart(ctx, {
@@ -150,9 +173,44 @@
       }
     }
 
-    async function loadData() {
-      const res = await fetch("/odds");
+    async function loadGames() {
+      const res = await fetch("/games");
+      const games = await res.json();
+
+      gameSelect.innerHTML = "";
+
+      if (!Array.isArray(games) || games.length === 0) {
+        const option = document.createElement("option");
+        option.textContent = "No NBA games found in next 24 hours";
+        option.value = "";
+        gameSelect.appendChild(option);
+        return;
+      }
+
+      games.forEach(game => {
+        const option = document.createElement("option");
+        option.value = game.id;
+        option.textContent = game.label;
+        gameSelect.appendChild(option);
+      });
+
+      if (!selectedGameId) {
+        selectedGameId = games[0].id;
+      }
+
+      gameSelect.value = selectedGameId;
+    }
+
+    async function loadSelectedGame() {
+      if (!selectedGameId) return;
+
+      const res = await fetch(`/odds?gameId=${encodeURIComponent(selectedGameId)}`);
       const data = await res.json();
+
+      if (data.error) {
+        document.getElementById("matchup").textContent = data.error;
+        return;
+      }
 
       document.getElementById("matchup").textContent =
         `${data.awayTeam} @ ${data.homeTeam}`;
@@ -173,8 +231,18 @@
       edgeChart.update();
     }
 
-    loadData();
-    setInterval(loadData, 30000);
+    gameSelect.addEventListener("change", async (event) => {
+      selectedGameId = event.target.value;
+      await loadSelectedGame();
+    });
+
+    async function refreshAll() {
+      await loadGames();
+      await loadSelectedGame();
+    }
+
+    refreshAll();
+    setInterval(refreshAll, 30000);
   </script>
 </body>
 </html>
