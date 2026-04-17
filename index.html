@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>NBA Edge Tracker</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      background: #111;
+      color: #fff;
+      margin: 0;
+      padding: 20px;
+    }
+
+    .container {
+      max-width: 900px;
+      margin: 0 auto;
+    }
+
+    .card {
+      background: #1c1c1c;
+      border-radius: 12px;
+      padding: 20px;
+      margin-bottom: 20px;
+    }
+
+    h1, h2, p {
+      margin: 0 0 10px 0;
+    }
+
+    .stats {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 12px;
+      margin-top: 15px;
+    }
+
+    .stat {
+      background: #2a2a2a;
+      padding: 12px;
+      border-radius: 10px;
+    }
+
+    canvas {
+      background: #fff;
+      border-radius: 10px;
+      padding: 10px;
+    }
+
+    .small {
+      color: #bbb;
+      font-size: 14px;
+    }
+
+    .good { color: #4ade80; }
+    .small-edge { color: #facc15; }
+    .bad { color: #f87171; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="card">
+      <h1>NBA Edge Tracker</h1>
+      <p class="small">Updates every 30 seconds · shows last 15 minutes</p>
+    </div>
+
+    <div class="card">
+      <h2 id="matchup">Loading...</h2>
+      <p id="pick"></p>
+
+      <div class="stats">
+        <div class="stat">
+          <strong>Current Edge</strong>
+          <p id="edgeValue">-</p>
+        </div>
+        <div class="stat">
+          <strong>Verdict</strong>
+          <p id="verdict">-</p>
+        </div>
+        <div class="stat">
+          <strong>Sportsbook Odds</strong>
+          <p id="odds">-</p>
+        </div>
+        <div class="stat">
+          <strong>Implied Probability</strong>
+          <p id="implied">-</p>
+        </div>
+        <div class="stat">
+          <strong>True Probability</strong>
+          <p id="trueProb">-</p>
+        </div>
+        <div class="stat">
+          <strong>Last Update</strong>
+          <p id="updatedAt">-</p>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Edge — Last 15 Minutes</h2>
+      <canvas id="edgeChart"></canvas>
+    </div>
+  </div>
+
+  <script>
+    const ctx = document.getElementById("edgeChart").getContext("2d");
+
+    const edgeChart = new Chart(ctx, {
+      type: "line",
+      data: {
+        labels: [],
+        datasets: [{
+          label: "Edge",
+          data: [],
+          borderColor: "blue",
+          backgroundColor: "rgba(0, 0, 255, 0.1)",
+          tension: 0.2
+        }]
+      },
+      options: {
+        responsive: true,
+        scales: {
+          y: {
+            ticks: {
+              callback: function(value) {
+                return (value * 100).toFixed(1) + "%";
+              }
+            }
+          }
+        }
+      }
+    });
+
+    function formatPercent(value) {
+      return (value * 100).toFixed(2) + "%";
+    }
+
+    function setVerdictClass(verdict) {
+      const verdictEl = document.getElementById("verdict");
+      verdictEl.className = "";
+
+      if (verdict === "Good value") {
+        verdictEl.classList.add("good");
+      } else if (verdict === "Small edge") {
+        verdictEl.classList.add("small-edge");
+      } else {
+        verdictEl.classList.add("bad");
+      }
+    }
+
+    async function loadData() {
+      const res = await fetch("/odds");
+      const data = await res.json();
+
+      document.getElementById("matchup").textContent =
+        `${data.awayTeam} @ ${data.homeTeam}`;
+      document.getElementById("pick").textContent = `Pick: ${data.pick}`;
+      document.getElementById("edgeValue").textContent = formatPercent(data.edge);
+      document.getElementById("verdict").textContent = data.verdict;
+      document.getElementById("odds").textContent = data.sportsbookOddsDecimal;
+      document.getElementById("implied").textContent = formatPercent(data.impliedProbability);
+      document.getElementById("trueProb").textContent = formatPercent(data.trueProbability);
+      document.getElementById("updatedAt").textContent = new Date(data.timestamp).toLocaleTimeString();
+
+      setVerdictClass(data.verdict);
+
+      edgeChart.data.labels = data.history.map(point =>
+        new Date(point.timestamp).toLocaleTimeString()
+      );
+      edgeChart.data.datasets[0].data = data.history.map(point => point.edge);
+      edgeChart.update();
+    }
+
+    loadData();
+    setInterval(loadData, 30000);
+  </script>
+</body>
+</html>
