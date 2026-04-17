@@ -4,574 +4,856 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>NBA Edge Tracker</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
   <style>
-    * {
-      box-sizing: border-box;
-    }
-
     body {
-      margin: 0;
       font-family: Arial, sans-serif;
-      background: #0b1220;
-      color: #e5e7eb;
+      background: #111;
+      color: #fff;
+      margin: 0;
+      padding: 20px;
     }
 
-    .wrap {
-      max-width: 1200px;
+    .container {
+      max-width: 1180px;
       margin: 0 auto;
-      padding: 24px;
-    }
-
-    h1 {
-      margin: 0 0 8px;
-      font-size: 32px;
-    }
-
-    .sub {
-      color: #9ca3af;
-      margin-bottom: 24px;
-    }
-
-    .grid {
-      display: grid;
-      grid-template-columns: 320px 1fr;
-      gap: 20px;
     }
 
     .card {
-      background: #111827;
-      border: 1px solid #1f2937;
-      border-radius: 14px;
-      padding: 18px;
+      background: #1c1c1c;
+      border-radius: 12px;
+      padding: 20px;
+      margin-bottom: 20px;
     }
 
-    .card h2 {
-      margin-top: 0;
-      font-size: 20px;
+    h1, h2, h3, p {
+      margin: 0 0 10px 0;
     }
 
-    button,
     select {
       width: 100%;
-      padding: 12px;
-      border-radius: 10px;
-      border: 1px solid #374151;
-      background: #1f2937;
-      color: #fff;
-      font-size: 15px;
-      margin-bottom: 12px;
-    }
-
-    button {
-      cursor: pointer;
-      background: #2563eb;
+      padding: 10px;
+      border-radius: 8px;
       border: none;
-      font-weight: 600;
+      font-size: 16px;
+      background: #fff;
+      color: #111;
     }
 
-    button:hover {
-      background: #1d4ed8;
-    }
-
-    .muted {
-      color: #9ca3af;
-      font-size: 14px;
-    }
-
-    .pill {
-      display: inline-block;
-      padding: 6px 10px;
-      border-radius: 999px;
-      font-size: 13px;
-      font-weight: 700;
-      margin-right: 8px;
-      margin-bottom: 8px;
-    }
-
-    .good {
-      background: rgba(34, 197, 94, 0.18);
-      color: #86efac;
-    }
-
-    .warn {
-      background: rgba(250, 204, 21, 0.18);
-      color: #fde68a;
-    }
-
-    .bad {
-      background: rgba(239, 68, 68, 0.18);
-      color: #fca5a5;
-    }
-
-    .stat-grid {
+    .stats {
       display: grid;
-      grid-template-columns: repeat(3, 1fr);
+      grid-template-columns: repeat(2, minmax(0, 1fr));
       gap: 12px;
-      margin-top: 12px;
+      margin-top: 15px;
+    }
+
+    .row-3 {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 12px;
+    }
+
+    .row-4 {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 12px;
     }
 
     .stat {
-      background: #0f172a;
-      border: 1px solid #1f2937;
-      border-radius: 12px;
-      padding: 14px;
+      background: #2a2a2a;
+      padding: 12px;
+      border-radius: 10px;
     }
 
-    .stat-label {
-      color: #9ca3af;
-      font-size: 13px;
-      margin-bottom: 6px;
+    .message {
+      background: #2a2a2a;
+      padding: 12px;
+      border-radius: 10px;
+      margin-top: 12px;
+      color: #ddd;
     }
 
-    .stat-value {
-      font-size: 22px;
-      font-weight: 700;
+    .subtle {
+      color: #bbb;
+      font-size: 14px;
     }
 
-    .section-title {
-      margin: 22px 0 12px;
-      font-size: 18px;
+    canvas {
+      background: #fff;
+      border-radius: 10px;
+      padding: 10px;
     }
 
     table {
       width: 100%;
       border-collapse: collapse;
-      overflow: hidden;
-      border-radius: 12px;
-      margin-top: 10px;
+      font-size: 14px;
     }
 
-    th,
-    td {
+    th, td {
+      border-bottom: 1px solid #333;
+      padding: 8px;
       text-align: left;
-      padding: 10px;
-      border-bottom: 1px solid #1f2937;
-      font-size: 14px;
       vertical-align: top;
     }
 
-    th {
-      background: #0f172a;
-      color: #cbd5e1;
+    .bet { color: #4ade80; font-weight: 700; }
+    .watch { color: #facc15; font-weight: 700; }
+    .avoid { color: #f87171; font-weight: 700; }
+
+    .low { color: #f87171; }
+    .medium { color: #facc15; }
+    .high { color: #4ade80; }
+
+    .pill {
+      display: inline-block;
+      padding: 4px 10px;
+      border-radius: 999px;
+      background: #333;
+      font-size: 12px;
+      margin-right: 6px;
+      margin-bottom: 6px;
     }
 
-    tr:nth-child(even) td {
-      background: rgba(255, 255, 255, 0.015);
+    .injury-box {
+      background: #2a2a2a;
+      padding: 10px;
+      border-radius: 10px;
+      min-height: 70px;
     }
 
-    .history-box {
-      margin-top: 12px;
-      background: #0f172a;
-      border: 1px solid #1f2937;
-      border-radius: 12px;
+    .two-col {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 12px;
+    }
+
+    .props-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 12px;
+    }
+
+    .prop-section {
+      background: #2a2a2a;
       padding: 12px;
-      max-height: 260px;
-      overflow-y: auto;
+      border-radius: 10px;
     }
 
-    .history-item {
-      display: flex;
-      justify-content: space-between;
-      gap: 10px;
+    .prop-row {
       padding: 8px 0;
-      border-bottom: 1px solid #1f2937;
-      font-size: 14px;
+      border-bottom: 1px solid #333;
     }
 
-    .history-item:last-child {
+    .prop-row:last-child {
       border-bottom: none;
     }
 
-    .hidden {
-      display: none;
-    }
-
-    .error {
-      color: #fca5a5;
-      margin-top: 8px;
-      white-space: pre-wrap;
-    }
-
-    .small {
-      font-size: 12px;
-      color: #9ca3af;
-    }
-
     @media (max-width: 900px) {
-      .grid {
-        grid-template-columns: 1fr;
-      }
-
-      .stat-grid {
+      .stats, .row-3, .row-4, .two-col, .props-grid {
         grid-template-columns: 1fr;
       }
     }
   </style>
 </head>
 <body>
-  <div class="wrap">
-    <h1>NBA Edge Tracker</h1>
-    <div class="sub">Live game edge view with props, injuries, lineups, and sportsbook consensus.</div>
+  <div class="container">
+    <div class="card">
+      <h1>NBA Edge Tracker</h1>
+      <p class="subtle">Live dashboard · smarter refresh by game state · last 15 minutes graph</p>
+    </div>
 
-    <div class="grid">
-      <div class="card">
-        <h2>Controls</h2>
-        <button id="refreshGamesBtn">Refresh Games</button>
-        <select id="gameSelect">
-          <option value="">Loading games...</option>
-        </select>
-        <button id="analyzeBtn">Analyze Game</button>
-        <button id="autoBtn">Start Auto Refresh</button>
-        <div class="muted">Auto refresh runs every 30 seconds.</div>
-        <div id="status" class="muted" style="margin-top: 12px;">Ready.</div>
-        <div id="error" class="error"></div>
-      </div>
+    <div class="card">
+      <label for="gameSelect">Select NBA game</label>
+      <select id="gameSelect"></select>
+      <div id="statusMessage" class="message">Loading...</div>
+    </div>
 
-      <div class="card">
-        <h2 id="gameTitle">No game selected</h2>
-        <div id="summary" class="muted">Pick a game and press Analyze Game.</div>
+    <div class="card">
+      <h2 id="matchup">Waiting for game selection</h2>
+      <p id="pick">Pick: -</p>
 
-        <div id="results" class="hidden">
-          <div style="margin-top: 10px;">
-            <span id="verdictPill" class="pill"></span>
-            <span id="confidencePill" class="pill"></span>
-            <span id="stakePill" class="pill"></span>
-          </div>
-
-          <div class="stat-grid">
-            <div class="stat">
-              <div class="stat-label">Pick</div>
-              <div class="stat-value" id="pickValue">-</div>
-            </div>
-            <div class="stat">
-              <div class="stat-label">Edge</div>
-              <div class="stat-value" id="edgeValue">-</div>
-            </div>
-            <div class="stat">
-              <div class="stat-label">Best Odds</div>
-              <div class="stat-value" id="oddsValue">-</div>
-            </div>
-            <div class="stat">
-              <div class="stat-label">Implied Probability</div>
-              <div class="stat-value" id="impliedValue">-</div>
-            </div>
-            <div class="stat">
-              <div class="stat-label">True Probability</div>
-              <div class="stat-value" id="trueValue">-</div>
-            </div>
-            <div class="stat">
-              <div class="stat-label">Mode</div>
-              <div class="stat-value" id="modeValue">-</div>
-            </div>
-          </div>
-
-          <div class="section-title">Model Details</div>
-          <table>
-            <tbody id="modelDetailsBody"></tbody>
-          </table>
-
-          <div class="section-title">Props</div>
-          <div id="propsTables"></div>
-
-          <div class="section-title">Bookmakers</div>
-          <table>
-            <thead>
-              <tr>
-                <th>Book</th>
-                <th>Home</th>
-                <th>Away</th>
-                <th>Spread</th>
-                <th>Total</th>
-              </tr>
-            </thead>
-            <tbody id="bookmakersBody"></tbody>
-          </table>
-
-          <div class="section-title">Injury / Lineup Status</div>
-          <table>
-            <tbody id="injuryBody"></tbody>
-          </table>
-
-          <div class="section-title">Edge History</div>
-          <div class="history-box" id="historyBox"></div>
+      <div class="stats">
+        <div class="stat">
+          <strong>Current Edge</strong>
+          <p id="edgeValue">-</p>
+        </div>
+        <div class="stat">
+          <strong>Verdict</strong>
+          <p id="verdict">-</p>
+        </div>
+        <div class="stat">
+          <strong>Game Mode</strong>
+          <p id="gameMode">-</p>
+        </div>
+        <div class="stat">
+          <strong>Last Update</strong>
+          <p id="updatedAt">-</p>
         </div>
       </div>
+    </div>
+
+    <div class="card">
+      <h2>Odds / Probability</h2>
+      <div class="row-4">
+        <div class="stat">
+          <strong>Sportsbook Odds</strong>
+          <p id="oddsDecimal">-</p>
+          <p id="oddsAmerican" class="subtle">-</p>
+        </div>
+        <div class="stat">
+          <strong>Implied Probability</strong>
+          <p id="impliedPercent">-</p>
+          <p id="impliedAmerican" class="subtle">-</p>
+        </div>
+        <div class="stat">
+          <strong>True Probability</strong>
+          <p id="truePercent">-</p>
+          <p id="trueAmerican" class="subtle">-</p>
+        </div>
+        <div class="stat">
+          <strong>Stake Suggestion</strong>
+          <p id="stakeTier">-</p>
+          <p id="stakeFraction" class="subtle">-</p>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Confidence</h2>
+      <div class="row-3">
+        <div class="stat">
+          <strong>Confidence Label</strong>
+          <p id="confidenceLabel">-</p>
+        </div>
+        <div class="stat">
+          <strong>Confidence %</strong>
+          <p id="confidencePercent">-</p>
+        </div>
+        <div class="stat">
+          <strong>Book Count</strong>
+          <p id="bookCount">-</p>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Line Movement</h2>
+      <div class="stats">
+        <div class="stat">
+          <strong>2h Probability Move</strong>
+          <p id="move2h">-</p>
+        </div>
+        <div class="stat">
+          <strong>24h Probability Move</strong>
+          <p id="move24h">-</p>
+        </div>
+        <div class="stat">
+          <strong>Average Home Spread</strong>
+          <p id="avgSpread">-</p>
+        </div>
+        <div class="stat">
+          <strong>Average Total</strong>
+          <p id="avgTotal">-</p>
+        </div>
+        <div class="stat">
+          <strong>Disagreement Penalty</strong>
+          <p id="disagreementPenalty">-</p>
+        </div>
+        <div class="stat">
+          <strong>Model Adjustments</strong>
+          <p id="modelAdjustments">-</p>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Best Price vs Market Average</h2>
+      <div class="stats">
+        <div class="stat">
+          <strong>Best Home</strong>
+          <p id="bestHome">-</p>
+        </div>
+        <div class="stat">
+          <strong>Best Away</strong>
+          <p id="bestAway">-</p>
+        </div>
+        <div class="stat">
+          <strong>Average Home</strong>
+          <p id="avgHome">-</p>
+        </div>
+        <div class="stat">
+          <strong>Average Away</strong>
+          <p id="avgAway">-</p>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Edge — Last 15 Minutes</h2>
+      <canvas id="edgeChart"></canvas>
+    </div>
+
+    <div class="card">
+      <h2>Bookmaker Comparison</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>Book</th>
+            <th>Home Odds</th>
+            <th>Away Odds</th>
+            <th>Home Spread</th>
+            <th>Total</th>
+          </tr>
+        </thead>
+        <tbody id="bookmakerTableBody"></tbody>
+      </table>
+    </div>
+
+    <div class="card">
+      <h2>Player Props</h2>
+      <div class="props-grid">
+        <div class="prop-section">
+          <h3>Points</h3>
+          <div id="propsPoints">No data</div>
+        </div>
+        <div class="prop-section">
+          <h3>Assists</h3>
+          <div id="propsAssists">No data</div>
+        </div>
+        <div class="prop-section">
+          <h3>Rebounds</h3>
+          <div id="propsRebounds">No data</div>
+        </div>
+        <div class="prop-section">
+          <h3>PRA</h3>
+          <div id="propsPra">No data</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Injuries / Starters</h2>
+      <div class="row-4">
+        <div class="stat">
+          <strong>Home Injuries</strong>
+          <p id="homeInjuryCount">-</p>
+        </div>
+        <div class="stat">
+          <strong>Away Injuries</strong>
+          <p id="awayInjuryCount">-</p>
+        </div>
+        <div class="stat">
+          <strong>Home Starters Out</strong>
+          <p id="homeStartersOut">-</p>
+        </div>
+        <div class="stat">
+          <strong>Away Starters Out</strong>
+          <p id="awayStartersOut">-</p>
+        </div>
+      </div>
+
+      <div class="row-4" style="margin-top:12px;">
+        <div class="stat">
+          <strong>Home Starter Certainty</strong>
+          <p id="homeStarterCertainty">-</p>
+        </div>
+        <div class="stat">
+          <strong>Away Starter Certainty</strong>
+          <p id="awayStarterCertainty">-</p>
+        </div>
+        <div class="stat">
+          <strong>Home Penalty</strong>
+          <p id="homePenalty">-</p>
+        </div>
+        <div class="stat">
+          <strong>Away Penalty</strong>
+          <p id="awayPenalty">-</p>
+        </div>
+      </div>
+
+      <div class="two-col" style="margin-top:12px;">
+        <div>
+          <h3>Home Injuries</h3>
+          <div id="homeInjuriesBox" class="injury-box">No data</div>
+        </div>
+        <div>
+          <h3>Away Injuries</h3>
+          <div id="awayInjuriesBox" class="injury-box">No data</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Lineups</h2>
+      <div id="lineupsBox" class="message">No lineup source connected yet.</div>
     </div>
   </div>
 
   <script>
     const gameSelect = document.getElementById("gameSelect");
-    const refreshGamesBtn = document.getElementById("refreshGamesBtn");
-    const analyzeBtn = document.getElementById("analyzeBtn");
-    const autoBtn = document.getElementById("autoBtn");
-    const statusEl = document.getElementById("status");
-    const errorEl = document.getElementById("error");
+    const statusMessage = document.getElementById("statusMessage");
 
-    const resultsEl = document.getElementById("results");
-    const gameTitleEl = document.getElementById("gameTitle");
-    const summaryEl = document.getElementById("summary");
+    let selectedGameId = null;
+    let selectedGameMode = "pregame";
+    let refreshTimer = null;
 
-    const verdictPill = document.getElementById("verdictPill");
-    const confidencePill = document.getElementById("confidencePill");
-    const stakePill = document.getElementById("stakePill");
+    const ctx = document.getElementById("edgeChart").getContext("2d");
+    const edgeChart = new Chart(ctx, {
+      type: "line",
+      data: {
+        labels: [],
+        datasets: [{
+          label: "Edge",
+          data: [],
+          borderColor: "#2563eb",
+          backgroundColor: "rgba(37, 99, 235, 0.12)",
+          fill: true,
+          tension: 0.25,
+          pointRadius: 2,
+          pointHoverRadius: 4
+        }]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: true,
+        scales: {
+          y: {
+            min: -0.10,
+            max: 0.15,
+            ticks: {
+              color: "#111",
+              callback: function(value) {
+                return (value * 100).toFixed(1) + "%";
+              }
+            },
+            grid: {
+              color: "rgba(0,0,0,0.08)"
+            }
+          },
+          x: {
+            ticks: {
+              color: "#111",
+              maxRotation: 0,
+              autoSkip: true,
+              maxTicksLimit: 8
+            },
+            grid: {
+              color: "rgba(0,0,0,0.05)"
+            }
+          }
+        },
+        plugins: {
+          legend: {
+            labels: {
+              color: "#111"
+            }
+          },
+          tooltip: {
+            callbacks: {
+              label: function(context) {
+                const y = context.parsed.y;
+                return `Edge: ${(y * 100).toFixed(2)}%`;
+              }
+            }
+          }
+        }
+      }
+    });
 
-    const pickValue = document.getElementById("pickValue");
-    const edgeValue = document.getElementById("edgeValue");
-    const oddsValue = document.getElementById("oddsValue");
-    const impliedValue = document.getElementById("impliedValue");
-    const trueValue = document.getElementById("trueValue");
-    const modeValue = document.getElementById("modeValue");
-
-    const modelDetailsBody = document.getElementById("modelDetailsBody");
-    const bookmakersBody = document.getElementById("bookmakersBody");
-    const injuryBody = document.getElementById("injuryBody");
-    const historyBox = document.getElementById("historyBox");
-    const propsTables = document.getElementById("propsTables");
-
-    let autoTimer = null;
-
-    function setStatus(msg) {
-      statusEl.textContent = msg;
-    }
-
-    function setError(msg) {
-      errorEl.textContent = msg || "";
-    }
-
-    function safe(value, fallback = "-") {
-      return value === null || value === undefined || value === "" ? fallback : value;
-    }
-
-    function pct(value) {
+    function formatPercent(value) {
       if (typeof value !== "number") return "-";
       return (value * 100).toFixed(2) + "%";
     }
 
-    function num(value) {
+    function formatNum(value) {
       if (typeof value !== "number") return "-";
       return value.toFixed(2);
     }
 
-    function badgeClass(text) {
-      const t = String(text || "").toLowerCase();
-      if (t.includes("bet now") || t.includes("high") || t.includes("strong")) return "pill good";
-      if (t.includes("watch") || t.includes("medium") || t.includes("small") || t.includes("normal")) return "pill warn";
-      return "pill bad";
+    function formatAmerican(value) {
+      if (typeof value !== "number") return "-";
+      return value > 0 ? `+${value}` : `${value}`;
     }
 
-    function buildRow(label, value) {
-      return `<tr><th>${label}</th><td>${safe(value)}</td></tr>`;
+    function decimalToAmericanClient(decimalOdds) {
+      if (typeof decimalOdds !== "number" || decimalOdds <= 1) return null;
+      if (decimalOdds >= 2) return Math.round((decimalOdds - 1) * 100);
+      return Math.round(-100 / (decimalOdds - 1));
     }
 
-    async function fetchJson(url) {
-      const res = await fetch(url);
-      const data = await res.json();
-      if (!res.ok) {
-        throw new Error(data.error || "Request failed");
+    function setVerdictClass(text) {
+      const el = document.getElementById("verdict");
+      el.className = "";
+      if (text === "Bet now") el.classList.add("bet");
+      else if (text === "Watch") el.classList.add("watch");
+      else el.classList.add("avoid");
+    }
+
+    function setConfidenceClass(label) {
+      const el = document.getElementById("confidenceLabel");
+      el.className = "";
+      if (label === "High") el.classList.add("high");
+      else if (label === "Medium") el.classList.add("medium");
+      else el.classList.add("low");
+    }
+
+    function clearDashboard(message) {
+      document.getElementById("matchup").textContent = message;
+      document.getElementById("pick").textContent = "Pick: -";
+      document.getElementById("edgeValue").textContent = "-";
+      document.getElementById("verdict").textContent = "-";
+      document.getElementById("gameMode").textContent = "-";
+      document.getElementById("updatedAt").textContent = "-";
+
+      document.getElementById("oddsDecimal").textContent = "-";
+      document.getElementById("oddsAmerican").textContent = "-";
+      document.getElementById("impliedPercent").textContent = "-";
+      document.getElementById("impliedAmerican").textContent = "-";
+      document.getElementById("truePercent").textContent = "-";
+      document.getElementById("trueAmerican").textContent = "-";
+
+      document.getElementById("confidenceLabel").textContent = "-";
+      document.getElementById("confidencePercent").textContent = "-";
+      document.getElementById("bookCount").textContent = "-";
+
+      document.getElementById("stakeTier").textContent = "-";
+      document.getElementById("stakeFraction").textContent = "-";
+
+      document.getElementById("move2h").textContent = "-";
+      document.getElementById("move24h").textContent = "-";
+      document.getElementById("avgSpread").textContent = "-";
+      document.getElementById("avgTotal").textContent = "-";
+      document.getElementById("disagreementPenalty").textContent = "-";
+      document.getElementById("modelAdjustments").textContent = "-";
+
+      document.getElementById("bestHome").textContent = "-";
+      document.getElementById("bestAway").textContent = "-";
+      document.getElementById("avgHome").textContent = "-";
+      document.getElementById("avgAway").textContent = "-";
+
+      document.getElementById("homeInjuryCount").textContent = "-";
+      document.getElementById("awayInjuryCount").textContent = "-";
+      document.getElementById("homeStartersOut").textContent = "-";
+      document.getElementById("awayStartersOut").textContent = "-";
+      document.getElementById("homeStarterCertainty").textContent = "-";
+      document.getElementById("awayStarterCertainty").textContent = "-";
+      document.getElementById("homePenalty").textContent = "-";
+      document.getElementById("awayPenalty").textContent = "-";
+
+      document.getElementById("homeInjuriesBox").textContent = "No data";
+      document.getElementById("awayInjuriesBox").textContent = "No data";
+      document.getElementById("lineupsBox").textContent = "No lineup source connected yet.";
+
+      document.getElementById("bookmakerTableBody").innerHTML = "";
+      document.getElementById("propsPoints").innerHTML = "No data";
+      document.getElementById("propsAssists").innerHTML = "No data";
+      document.getElementById("propsRebounds").innerHTML = "No data";
+      document.getElementById("propsPra").innerHTML = "No data";
+
+      edgeChart.data.labels = [];
+      edgeChart.data.datasets[0].data = [];
+      edgeChart.update();
+    }
+
+    function getProbMoveText(current, past) {
+      if (typeof current !== "number" || typeof past !== "number") return "-";
+      const delta = current - past;
+      return `${delta >= 0 ? "+" : ""}${(delta * 100).toFixed(2)}%`;
+    }
+
+    function formatOddsPair(decimal, american) {
+      const dec = typeof decimal === "number" ? decimal.toFixed(2) : "-";
+      const am = typeof american === "number" ? formatAmerican(american) : "-";
+      return `${dec} / ${am}`;
+    }
+
+    function renderBookmakerTable(rows) {
+      const body = document.getElementById("bookmakerTableBody");
+      body.innerHTML = "";
+
+      if (!Array.isArray(rows) || !rows.length) {
+        body.innerHTML = `<tr><td colspan="5">No bookmaker data</td></tr>`;
+        return;
       }
-      return data;
+
+      for (const row of rows) {
+        const tr = document.createElement("tr");
+        tr.innerHTML = `
+          <td>${row.book || "-"}</td>
+          <td>${formatOddsPair(row.homeDecimal, row.homeAmerican)}</td>
+          <td>${formatOddsPair(row.awayDecimal, row.awayAmerican)}</td>
+          <td>${row.homeSpread ?? "-"}</td>
+          <td>${row.total ?? "-"}</td>
+        `;
+        body.appendChild(tr);
+      }
+    }
+
+    function renderPropRows(rows, targetId) {
+      const target = document.getElementById(targetId);
+
+      if (!Array.isArray(rows) || !rows.length) {
+        target.innerHTML = "No data";
+        return;
+      }
+
+      target.innerHTML = rows.slice(0, 8).map(row => `
+        <div class="prop-row">
+          <div><strong>${row.player || "-"}</strong></div>
+          <div>Line: ${row.line ?? "-"}</div>
+          <div>Pick: ${row.pick || "-"}</div>
+          <div>Pick chance: ${formatPercent(row.pickProbability)}</div>
+          <div>Over: ${typeof row.overDecimal === "number" ? row.overDecimal.toFixed(2) : "-"} / ${typeof row.overAmerican === "number" ? formatAmerican(row.overAmerican) : "-"}</div>
+          <div>Over hit chance: ${formatPercent(row.hitProbability)}</div>
+          <div>Coverage: ${row.coverage ?? "-"}</div>
+        </div>
+      `).join("");
+    }
+
+    function renderInjuries(items, targetId) {
+      const box = document.getElementById(targetId);
+
+      if (!Array.isArray(items) || !items.length) {
+        box.textContent = "No listed injuries found.";
+        return;
+      }
+
+      box.innerHTML = items.slice(0, 8).map(item => {
+        const text = Object.values(item).slice(0, 6).join(" · ");
+        return `<div class="pill">${text}</div>`;
+      }).join("");
+    }
+
+    function renderLineups(items, sourceSelection) {
+      const box = document.getElementById("lineupsBox");
+      const sourceText = sourceSelection?.lineups ? `Source: ${sourceSelection.lineups}` : "Source: none";
+
+      if (!Array.isArray(items) || !items.length) {
+        box.innerHTML = `${sourceText}<br><br>No lineups found.`;
+        return;
+      }
+
+      box.innerHTML = `${sourceText}<br><br>` + items.slice(0, 10).map(item => {
+        const text = Object.values(item).slice(0, 8).join(" · ");
+        return `<div style="margin-bottom:8px;">${text}</div>`;
+      }).join("");
+    }
+
+    function setRefreshTimer() {
+      if (refreshTimer) clearInterval(refreshTimer);
+
+      let interval = 5 * 60 * 1000;
+      if (selectedGameMode === "live") interval = 30 * 1000;
+      else if (selectedGameMode === "pregame") interval = 60 * 1000;
+
+      refreshTimer = setInterval(loadSelectedGame, interval);
     }
 
     async function loadGames() {
       try {
-        setError("");
-        setStatus("Loading games...");
-        const data = await fetchJson("/games");
-        const games = data.games || [];
+        const res = await fetch("/games");
+        const payload = await res.json();
 
-        if (!games.length) {
-          gameSelect.innerHTML = `<option value="">No games found</option>`;
-          setStatus("No games found.");
+        gameSelect.innerHTML = "";
+
+        if (!payload.games || payload.games.length === 0) {
+          const option = document.createElement("option");
+          option.textContent = "No games available";
+          option.value = "";
+          gameSelect.appendChild(option);
+          selectedGameId = null;
+          statusMessage.textContent = payload.error || "No games available right now.";
+          clearDashboard("No games available");
           return;
         }
 
-        gameSelect.innerHTML = `<option value="">Select a game</option>` + games.map(game => {
-          return `<option value="${game.id}">${game.label} — ${game.mode}</option>`;
-        }).join("");
+        payload.games.forEach(game => {
+          const option = document.createElement("option");
+          option.value = game.id;
+          option.textContent = game.label;
+          option.dataset.mode = game.mode || "pregame";
+          gameSelect.appendChild(option);
+        });
 
-        setStatus(`Loaded ${games.length} game(s).`);
+        if (!selectedGameId || !payload.games.some(g => g.id === selectedGameId)) {
+          selectedGameId = payload.games[0].id;
+        }
+
+        gameSelect.value = selectedGameId;
+        const selected = payload.games.find(g => g.id === selectedGameId);
+        selectedGameMode = selected?.mode || "pregame";
+
+        statusMessage.textContent = `${payload.games.length} game(s) loaded. Refresh mode: ${selectedGameMode}.`;
+        setRefreshTimer();
       } catch (err) {
-        setStatus("Failed to load games.");
-        setError(err.message);
+        statusMessage.textContent = `Failed to load games: ${err.message}`;
+        clearDashboard("Failed to load games");
       }
     }
 
-    function renderProps(propSections) {
-      const entries = Object.entries(propSections || {});
-      if (!entries.length) {
-        propsTables.innerHTML = `<div class="muted">No props available.</div>`;
-        return;
-      }
-
-      propsTables.innerHTML = entries.map(([section, rows]) => {
-        const pretty = section.toUpperCase();
-        const body = (rows || []).length
-          ? rows.map(row => `
-              <tr>
-                <td>${safe(row.player)}</td>
-                <td>${safe(row.line)}</td>
-                <td>${safe(row.pick)}</td>
-                <td>${typeof row.pickProbability === "number" ? pct(row.pickProbability) : "-"}</td>
-                <td>${safe(row.overDecimal)}</td>
-                <td>${safe(row.overAmerican)}</td>
-                <td>${safe(row.coverage)}</td>
-              </tr>
-            `).join("")
-          : `<tr><td colspan="7">No data</td></tr>`;
-
-        return `
-          <div style="margin-bottom: 18px;">
-            <div class="small" style="margin-bottom: 8px;">${pretty}</div>
-            <table>
-              <thead>
-                <tr>
-                  <th>Player</th>
-                  <th>Line</th>
-                  <th>Pick</th>
-                  <th>Pick Prob</th>
-                  <th>Over Dec</th>
-                  <th>Over Am</th>
-                  <th>Coverage</th>
-                </tr>
-              </thead>
-              <tbody>${body}</tbody>
-            </table>
-          </div>
-        `;
-      }).join("");
-    }
-
-    function renderBookmakers(rows) {
-      bookmakersBody.innerHTML = (rows || []).length
-        ? rows.map(row => `
-            <tr>
-              <td>${safe(row.book)}</td>
-              <td>${safe(row.homePrice)} / ${safe(row.homeAmerican)}</td>
-              <td>${safe(row.awayPrice)} / ${safe(row.awayAmerican)}</td>
-              <td>${safe(row.homeSpread)}</td>
-              <td>${safe(row.total)}</td>
-            </tr>
-          `).join("")
-        : `<tr><td colspan="5">No bookmaker data</td></tr>`;
-    }
-
-    function renderHistory(history) {
-      historyBox.innerHTML = (history || []).length
-        ? history.slice().reverse().map(point => `
-            <div class="history-item">
-              <div>${new Date(point.timestamp).toLocaleTimeString()}</div>
-              <div>${typeof point.edge === "number" ? num(point.edge) : "-"}</div>
-            </div>
-          `).join("")
-        : `<div class="muted">No history yet.</div>`;
-    }
-
-    function renderInjuryStatus(injuryStatus) {
-      injuryBody.innerHTML = [
-        buildRow("Available", safe(String(injuryStatus?.available))),
-        buildRow("Injuries Source", safe(injuryStatus?.sourceSelection?.injuries)),
-        buildRow("Lineups Source", safe(injuryStatus?.sourceSelection?.lineups)),
-        buildRow("Depth Source", safe(injuryStatus?.sourceSelection?.depth)),
-        buildRow("Home Injuries Count", safe(injuryStatus?.homeInjuriesCount)),
-        buildRow("Away Injuries Count", safe(injuryStatus?.awayInjuriesCount)),
-        buildRow("Lineup Rows Count", safe(injuryStatus?.lineupRowsCount)),
-        buildRow("Home Penalty", safe(injuryStatus?.homePenalty)),
-        buildRow("Away Penalty", safe(injuryStatus?.awayPenalty)),
-        buildRow("Home Starters Out", safe(injuryStatus?.homeStartersOut)),
-        buildRow("Away Starters Out", safe(injuryStatus?.awayStartersOut)),
-        buildRow("Home Starter Certainty", safe(injuryStatus?.homeStarterCertainty)),
-        buildRow("Away Starter Certainty", safe(injuryStatus?.awayStarterCertainty))
-      ].join("");
-    }
-
-    function renderModelDetails(modelDetails) {
-      modelDetailsBody.innerHTML = [
-        buildRow("Spread Adj", safe(modelDetails?.spreadAdj)),
-        buildRow("Total Consensus", safe(modelDetails?.totalConsensus)),
-        buildRow("Total Adj", safe(modelDetails?.totalAdj)),
-        buildRow("Disagreement Penalty", safe(modelDetails?.disagreementPenalty)),
-        buildRow("Line Movement Adj", safe(modelDetails?.lineMovementAdj)),
-        buildRow("Prop Adj", safe(modelDetails?.propAdj)),
-        buildRow("Injury Adj Home", safe(modelDetails?.injuryAdjHome)),
-        buildRow("Avg Home Price", safe(modelDetails?.avgHomePrice)),
-        buildRow("Avg Away Price", safe(modelDetails?.avgAwayPrice)),
-        buildRow("Best Home Price", safe(modelDetails?.bestHomePrice)),
-        buildRow("Best Away Price", safe(modelDetails?.bestAwayPrice)),
-        buildRow("Avg Home Spread", safe(modelDetails?.avgHomeSpread)),
-        buildRow("Avg Total", safe(modelDetails?.avgTotal)),
-        buildRow("Book Count", safe(modelDetails?.bookCount))
-      ].join("");
-    }
-
-    async function analyzeGame() {
-      const gameId = gameSelect.value;
-      if (!gameId) {
-        setError("Select a game first.");
+    async function loadSelectedGame() {
+      if (!selectedGameId) {
+        clearDashboard("Waiting for game selection");
         return;
       }
 
       try {
-        setError("");
-        setStatus("Analyzing game...");
-        const data = await fetchJson(`/odds?gameId=${encodeURIComponent(gameId)}`);
+        const res = await fetch(`/odds?gameId=${encodeURIComponent(selectedGameId)}`);
+        const data = await res.json();
 
-        gameTitleEl.textContent = `${data.awayTeam} @ ${data.homeTeam}`;
-        summaryEl.textContent = `Updated ${new Date(data.timestamp).toLocaleString()}`;
-        resultsEl.classList.remove("hidden");
-
-        verdictPill.className = badgeClass(data.verdict);
-        verdictPill.textContent = data.verdict;
-
-        confidencePill.className = badgeClass(data.confidence?.label);
-        confidencePill.textContent = `Confidence: ${safe(data.confidence?.label)} (${pct(data.confidence?.percent)})`;
-
-        stakePill.className = badgeClass(data.stakeSuggestion?.tier);
-        stakePill.textContent = `Stake: ${safe(data.stakeSuggestion?.tier)} (${num(data.stakeSuggestion?.fraction)})`;
-
-        pickValue.textContent = safe(data.pick);
-        edgeValue.textContent = typeof data.edge === "number" ? num(data.edge) : "-";
-        oddsValue.textContent = `${safe(data.sportsbookOddsDecimal)} / ${safe(data.oddsFormats?.american)}`;
-        impliedValue.textContent = typeof data.impliedProbability === "number" ? pct(data.impliedProbability) : "-";
-        trueValue.textContent = typeof data.trueProbability === "number" ? pct(data.trueProbability) : "-";
-        modeValue.textContent = safe(data.gameMode);
-
-        renderModelDetails(data.modelDetails);
-        renderProps(data.propSections);
-        renderBookmakers(data.bookmakerTable);
-        renderInjuryStatus(data.injuryStatus);
-        renderHistory(data.history);
-
-        setStatus("Analysis complete.");
-      } catch (err) {
-        setStatus("Analysis failed.");
-        setError(err.message);
-      }
-    }
-
-    function toggleAuto() {
-      if (autoTimer) {
-        clearInterval(autoTimer);
-        autoTimer = null;
-        autoBtn.textContent = "Start Auto Refresh";
-        setStatus("Auto refresh stopped.");
-        return;
-      }
-
-      autoTimer = setInterval(() => {
-        if (gameSelect.value) {
-          analyzeGame();
+        if (data.error) {
+          statusMessage.textContent = data.error;
+          clearDashboard(data.error);
+          return;
         }
-      }, 30000);
 
-      autoBtn.textContent = "Stop Auto Refresh";
-      setStatus("Auto refresh started.");
+        selectedGameMode = data.gameMode || "pregame";
+        setRefreshTimer();
+
+        document.getElementById("matchup").textContent =
+          `${data.awayTeam} @ ${data.homeTeam}`;
+        document.getElementById("pick").textContent = `Pick: ${data.pick}`;
+        document.getElementById("edgeValue").textContent = formatPercent(data.edge);
+        document.getElementById("verdict").textContent = data.verdict || "-";
+        document.getElementById("gameMode").textContent = data.gameMode || "-";
+        document.getElementById("updatedAt").textContent =
+          new Date(data.timestamp).toLocaleTimeString();
+
+        document.getElementById("oddsDecimal").textContent =
+          typeof data.oddsFormats?.decimal === "number" ? data.oddsFormats.decimal.toFixed(2) : "-";
+        document.getElementById("oddsAmerican").textContent =
+          typeof data.oddsFormats?.american === "number" ? formatAmerican(data.oddsFormats.american) : "-";
+
+        document.getElementById("impliedPercent").textContent =
+          formatPercent(data.impliedProbability);
+        document.getElementById("impliedAmerican").textContent =
+          typeof data.impliedProbabilityFormats?.american === "number"
+            ? formatAmerican(data.impliedProbabilityFormats.american)
+            : "-";
+
+        document.getElementById("truePercent").textContent =
+          formatPercent(data.trueProbability);
+        document.getElementById("trueAmerican").textContent =
+          typeof data.trueProbabilityFormats?.american === "number"
+            ? formatAmerican(data.trueProbabilityFormats.american)
+            : "-";
+
+        document.getElementById("confidenceLabel").textContent =
+          data.confidence?.label || "-";
+        document.getElementById("confidencePercent").textContent =
+          formatPercent(data.confidence?.percent);
+        document.getElementById("bookCount").textContent =
+          data.modelDetails?.bookCount ?? "-";
+
+        document.getElementById("stakeTier").textContent =
+          data.stakeSuggestion?.tier || "-";
+        document.getElementById("stakeFraction").textContent =
+          typeof data.stakeSuggestion?.fraction === "number"
+            ? `${(data.stakeSuggestion.fraction * 100).toFixed(0)}% unit`
+            : "-";
+
+        const hist = data.modelDetails?.historicalComparisons || {};
+        document.getElementById("move2h").textContent =
+          getProbMoveText(data.impliedProbability, hist["2h"]?.homeMarketProb);
+        document.getElementById("move24h").textContent =
+          getProbMoveText(data.impliedProbability, hist["24h"]?.homeMarketProb);
+
+        document.getElementById("avgSpread").textContent =
+          formatNum(data.modelDetails?.avgHomeSpread);
+        document.getElementById("avgTotal").textContent =
+          formatNum(data.modelDetails?.avgTotal);
+        document.getElementById("disagreementPenalty").textContent =
+          formatPercent(data.modelDetails?.disagreementPenalty);
+
+        const modelAdjustmentsText = [
+          `Spread ${formatPercent(data.modelDetails?.spreadAdj)}`,
+          `Total ${formatPercent(data.modelDetails?.totalAdj)}`,
+          `Move ${formatPercent(data.modelDetails?.lineMovementAdj)}`,
+          `Props ${formatPercent(data.modelDetails?.propAdj)}`,
+          `Injury ${formatPercent(data.modelDetails?.injuryAdjHome)}`
+        ].join(" · ");
+        document.getElementById("modelAdjustments").textContent = modelAdjustmentsText;
+
+        document.getElementById("bestHome").textContent =
+          formatOddsPair(
+            data.modelDetails?.bestHomePrice,
+            decimalToAmericanClient(data.modelDetails?.bestHomePrice)
+          );
+        document.getElementById("bestAway").textContent =
+          formatOddsPair(
+            data.modelDetails?.bestAwayPrice,
+            decimalToAmericanClient(data.modelDetails?.bestAwayPrice)
+          );
+        document.getElementById("avgHome").textContent =
+          formatOddsPair(
+            data.modelDetails?.avgHomePrice,
+            decimalToAmericanClient(data.modelDetails?.avgHomePrice)
+          );
+        document.getElementById("avgAway").textContent =
+          formatOddsPair(
+            data.modelDetails?.avgAwayPrice,
+            decimalToAmericanClient(data.modelDetails?.avgAwayPrice)
+          );
+
+        document.getElementById("homeInjuryCount").textContent =
+          data.injuryStatus?.homeInjuriesCount ?? "-";
+        document.getElementById("awayInjuryCount").textContent =
+          data.injuryStatus?.awayInjuriesCount ?? "-";
+        document.getElementById("homeStartersOut").textContent =
+          data.injuryStatus?.homeStartersOut ?? "-";
+        document.getElementById("awayStartersOut").textContent =
+          data.injuryStatus?.awayStartersOut ?? "-";
+        document.getElementById("homeStarterCertainty").textContent =
+          formatPercent(data.injuryStatus?.homeStarterCertainty);
+        document.getElementById("awayStarterCertainty").textContent =
+          formatPercent(data.injuryStatus?.awayStarterCertainty);
+        document.getElementById("homePenalty").textContent =
+          formatPercent(data.injuryStatus?.homePenalty);
+        document.getElementById("awayPenalty").textContent =
+          formatPercent(data.injuryStatus?.awayPenalty);
+
+        renderInjuries(data.injuryStatus?.homeInjuries || [], "homeInjuriesBox");
+        renderInjuries(data.injuryStatus?.awayInjuries || [], "awayInjuriesBox");
+        renderLineups(data.injuryStatus?.lineups || [], data.injuryStatus?.sourceSelection);
+
+        setVerdictClass(data.verdict || "");
+        setConfidenceClass(data.confidence?.label || "");
+
+        const history = Array.isArray(data.history) ? data.history : [];
+        edgeChart.data.labels = history.map(point =>
+          new Date(point.timestamp).toLocaleTimeString()
+        );
+        edgeChart.data.datasets[0].data = history.map(point => point.edge);
+        edgeChart.update();
+
+        renderBookmakerTable(data.bookmakerTable);
+
+        renderPropRows(data.propSections?.points || [], "propsPoints");
+        renderPropRows(data.propSections?.assists || [], "propsAssists");
+        renderPropRows(data.propSections?.rebounds || [], "propsRebounds");
+        renderPropRows(data.propSections?.pra || [], "propsPra");
+
+        statusMessage.textContent = `Loaded ${data.awayTeam} @ ${data.homeTeam} · ${data.gameMode} · updated ${new Date(data.timestamp).toLocaleTimeString()}`;
+      } catch (err) {
+        statusMessage.textContent = `Failed to load game: ${err.message}`;
+        clearDashboard("Failed to load selected game");
+      }
     }
 
-    refreshGamesBtn.addEventListener("click", loadGames);
-    analyzeBtn.addEventListener("click", analyzeGame);
-    autoBtn.addEventListener("click", toggleAuto);
+    gameSelect.addEventListener("change", async (event) => {
+      selectedGameId = event.target.value;
+      const selectedOption = gameSelect.options[gameSelect.selectedIndex];
+      selectedGameMode = selectedOption?.dataset?.mode || "pregame";
+      await loadSelectedGame();
+    });
 
-    loadGames();
+    async function refreshAll() {
+      await loadGames();
+      await loadSelectedGame();
+    }
+
+    refreshAll();
   </script>
 </body>
 </html>
