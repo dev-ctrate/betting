@@ -74,22 +74,27 @@ async function fetchJson(url, options = {}) {
       ...options,
       signal: controller.signal
     });
+
     const text = await response.text();
 
     if (!response.ok) {
-      throw new Error(⁠ Request failed ${response.status}: ${text} ⁠);
+      throw new Error(`Request failed ${response.status}: ${text}`);
     }
 
-    return JSON.parse(text);
+    try {
+      return JSON.parse(text);
+    } catch {
+      throw new Error(`Invalid JSON response from ${url}: ${text.slice(0, 300)}`);
+    }
   } finally {
     clearTimeout(timeout);
   }
 }
 
 function buildOddsUrl(pathname, params) {
-  const base = ⁠ https://api.the-odds-api.com${pathname} ⁠;
+  const base = `https://api.the-odds-api.com${pathname}`;
   const sp = new URLSearchParams(params);
-  return ⁠ ${base}?${sp.toString()} ⁠;
+  return `${base}?${sp.toString()}`;
 }
 
 function toYmd(date) {
@@ -97,13 +102,13 @@ function toYmd(date) {
 }
 
 function addDays(ymd, days) {
-  const d = new Date(⁠ ${ymd}T00:00:00Z ⁠);
+  const d = new Date(`${ymd}T00:00:00Z`);
   d.setUTCDate(d.getUTCDate() + days);
   return toYmd(d);
 }
 
 function getSeasonFromDate(ymd) {
-  const d = new Date(⁠ ${ymd}T00:00:00Z ⁠);
+  const d = new Date(`${ymd}T00:00:00Z`);
   const year = d.getUTCFullYear();
   const month = d.getUTCMonth() + 1;
   return month >= 10 ? year : year - 1;
@@ -118,9 +123,7 @@ function normalizeName(name) {
 }
 
 function namesMatch(a, b) {
-  const na = normalizeName(a);
-  const nb = normalizeName(b);
-  return na === nb;
+  return normalizeName(a) === normalizeName(b);
 }
 
 function decimalToAmerican(decimalOdds) {
@@ -161,6 +164,7 @@ function extractFeaturedConsensus(eventOdds) {
       if (homeOutcome && awayOutcome) {
         bookHomePrice = homeOutcome.price;
         bookAwayPrice = awayOutcome.price;
+
         const nv = noVigTwoWayProb(homeOutcome.price, awayOutcome.price);
         homeProbPairs.push({ value: nv.a, weight });
         awayProbPairs.push({ value: nv.b, weight });
@@ -243,7 +247,9 @@ function extractFeaturedConsensus(eventOdds) {
     avgAwayPrice: average(awayPrices),
     avgHomeSpread: average(homeSpreads),
     avgTotal: average(totals),
-    bookCount: books.filter(b => typeof b.homePrice === "number" && typeof b.awayPrice === "number").length,
+    bookCount: books.filter(
+      b => typeof b.homePrice === "number" && typeof b.awayPrice === "number"
+    ).length,
     books
   };
 }
@@ -291,7 +297,7 @@ function buildSimpleHistoricalModel(consensus) {
 }
 
 async function getHistoricalOddsSnapshot(dateIso) {
-  const url = buildOddsUrl(⁠ /v4/historical/sports/${SPORT_KEY}/odds ⁠, {
+  const url = buildOddsUrl(`/v4/historical/sports/${SPORT_KEY}/odds`, {
     apiKey: ODDS_API_KEY,
     regions: REGIONS,
     markets: FEATURED_MARKETS,
@@ -304,7 +310,7 @@ async function getHistoricalOddsSnapshot(dateIso) {
 
 async function getBalldontlieGamesForDate(ymd) {
   const season = getSeasonFromDate(ymd);
-  const url = ⁠ https://api.balldontlie.io/v1/games?dates[]=${encodeURIComponent(ymd)}&seasons[]=${season}&per_page=100 ⁠;
+  const url = `https://api.balldontlie.io/v1/games?dates[]=${encodeURIComponent(ymd)}&seasons[]=${season}&per_page=100`;
 
   const raw = await fetchJson(url, {
     headers: {
@@ -340,7 +346,7 @@ function isFinalGame(game) {
 }
 
 async function backfillDate(ymd) {
-  console.log(⁠ Backfilling ${ymd}... ⁠);
+  console.log(`Backfilling ${ymd}...`);
 
   const games = await getBalldontlieGamesForDate(ymd);
   const finalGames = games.filter(isFinalGame);
@@ -350,8 +356,7 @@ async function backfillDate(ymd) {
     return { date: ymd, added: 0, skipped: 0 };
   }
 
-  // use a midday UTC snapshot for stable pregame coverage
-  const snapshotIso = ⁠ ${ymd}T16:00:00Z ⁠;
+  const snapshotIso = `${ymd}T16:00:00Z`;
   const historical = await getHistoricalOddsSnapshot(snapshotIso);
   const oddsEvents = historical?.data || historical || [];
 
@@ -360,6 +365,7 @@ async function backfillDate(ymd) {
 
   for (const game of finalGames) {
     const oddsEvent = findHistoricalOddsEvent(oddsEvents, game);
+
     if (!oddsEvent) {
       skipped += 1;
       continue;
@@ -373,6 +379,7 @@ async function backfillDate(ymd) {
 
     const model = buildSimpleHistoricalModel(consensus);
     const finalWinner = deriveFinalWinner(game);
+
     if (!finalWinner) {
       skipped += 1;
       continue;
@@ -448,7 +455,7 @@ async function main() {
       totalAdded += result.added;
       totalSkipped += result.skipped;
     } catch (err) {
-      console.error(⁠ Failed on ${current}: ⁠, err.message);
+      console.error(`Failed on ${current}:`, err.message);
     }
 
     current = addDays(current, 1);
