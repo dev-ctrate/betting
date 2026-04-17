@@ -27,8 +27,11 @@ const HISTORICAL_LOOKBACKS = [
 const currentCache = new Map();
 const historicalCache = new Map();
 const edgeHistoryStore = {};
+const snapshotLogStore = {};
+
 const CURRENT_TTL_MS = 25 * 1000;
 const HISTORICAL_TTL_MS = 30 * 60 * 1000;
+const SNAPSHOT_RETENTION = 500;
 
 function clamp(x, min, max) {
   return Math.max(min, Math.min(max, x));
@@ -132,8 +135,8 @@ function addEdgeHistory(gameId, edge, timestamp) {
 
   let smoothedEdge = edge;
   if (edgeHistoryStore[gameId].length > 0) {
-    const previousEdge = edgeHistoryStore[gameId][edgeHistoryStore[gameId].length - 1].edge;
-    smoothedEdge = previousEdge * 0.55 + edge * 0.45;
+    const prev = edgeHistoryStore[gameId][edgeHistoryStore[gameId].length - 1].edge;
+    smoothedEdge = prev * 0.55 + edge * 0.45;
   }
 
   edgeHistoryStore[gameId].push({
@@ -143,6 +146,16 @@ function addEdgeHistory(gameId, edge, timestamp) {
 
   trimEdgeHistory(gameId);
   return smoothedEdge;
+}
+
+function logSnapshot(gameId, snapshot) {
+  if (!snapshotLogStore[gameId]) {
+    snapshotLogStore[gameId] = [];
+  }
+  snapshotLogStore[gameId].push(snapshot);
+  if (snapshotLogStore[gameId].length > SNAPSHOT_RETENTION) {
+    snapshotLogStore[gameId] = snapshotLogStore[gameId].slice(-SNAPSHOT_RETENTION);
+  }
 }
 
 async function getUpcomingEvents() {
@@ -230,8 +243,7 @@ function extractFeaturedConsensus(eventOdds) {
   const awayProbRaw = [];
   const spreadSignals = [];
   const totalSignals = [];
-  const allHomePrices = [];
-  const allAwayPrices = [];
+  const books = [];
 
   for (const bookmaker of eventOdds.bookmakers || []) {
     const weight = getBookWeight(bookmaker.key || "");
@@ -239,13 +251,19 @@ function extractFeaturedConsensus(eventOdds) {
     const spreads = findMarket(bookmaker, "spreads");
     const totals = findMarket(bookmaker, "totals");
 
+    let bookHomePrice = null;
+    let bookAwayPrice = null;
+    let bookHomeSpread = null;
+    let bookAwaySpread = null;
+    let bookTotal = null;
+
     if (h2h?.outcomes?.length >= 2) {
       const homeOutcome = h2h.outcomes.find(o => o.name === eventOdds.home_team);
       const awayOutcome = h2h.outcomes.find(o => o.name === eventOdds.away_team);
 
       if (homeOutcome && awayOutcome) {
-        allHomePrices.push(homeOutcome.price);
-        allAwayPrices.push(awayOutcome.price);
+        bookHomePrice = homeOutcome.price;
+        bookAwayPrice = awayOutcome.price;
 
         const nv = noVigTwoWayProb(homeOutcome.price, awayOutcome.price);
         homeProbPairs.push({ value: nv.a, weight });
@@ -257,23 +275,40 @@ function extractFeaturedConsensus(eventOdds) {
 
     if (spreads?.outcomes?.length >= 2) {
       const homeSpread = spreads.outcomes.find(o => o.name === eventOdds.home_team);
+      const awaySpread = spreads.outcomes.find(o => o.name === eventOdds.away_team);
+
       if (homeSpread && typeof homeSpread.point === "number") {
+        bookHomeSpread = homeSpread.point;
         spreadSignals.push({
           value: clamp((-homeSpread.point) * 0.0105, -0.10, 0.10),
           weight
         });
+      }
+
+      if (awaySpread && typeof awaySpread.point === "number") {
+        bookAwaySpread = awaySpread.point;
       }
     }
 
     if (totals?.outcomes?.length >= 2) {
       const over = totals.outcomes.find(o => o.name === "Over");
       if (over && typeof over.point === "number") {
+        bookTotal = over.point;
         totalSignals.push({
           value: over.point,
           weight
         });
       }
     }
+
+    books.push({
+      book: bookmaker.key,
+      homePrice: bookHomePrice,
+      awayPrice: bookAwayPrice,
+      homeSpread: bookHomeSpread,
+      awaySpread: bookAwaySpread,
+      total: bookTotal
+    });
   }
 
   if (!homeProbPairs.length || !awayProbPairs.length) {
@@ -296,6 +331,11 @@ function extractFeaturedConsensus(eventOdds) {
     0.035
   );
 
+  const homePrices = books.map(b => b.homePrice).filter(v => typeof v === "number");
+  const awayPrices = books.map(b => b.awayPrice).filter(v => typeof v === "number");
+  const totals = books.map(b => b.total).filter(v => typeof v === "number");
+  const homeSpreads = books.map(b => b.homeSpread).filter(v => typeof v === "number");
+
   return {
     homeMarketProb,
     awayMarketProb,
@@ -303,10 +343,14 @@ function extractFeaturedConsensus(eventOdds) {
     totalConsensus,
     totalAdj,
     disagreementPenalty,
-    bestHomePrice: Math.max(...allHomePrices),
-    bestAwayPrice: Math.max(...allAwayPrices),
-    avgHomePrice: average(allHomePrices),
-    avgAwayPrice: average(allAwayPrices)
+    bestHomePrice: homePrices.length ? Math.max(...homePrices) : null,
+    bestAwayPrice: awayPrices.length ? Math.max(...awayPrices) : null,
+    avgHomePrice: average(homePrices),
+    avgAwayPrice: average(awayPrices),
+    avgHomeSpread: average(homeSpreads),
+    avgTotal: average(totals),
+    bookCount: books.filter(b => typeof b.homePrice === "number" && typeof b.awayPrice === "number").length,
+    books
   };
 }
 
@@ -364,53 +408,37 @@ function extractPropSummary(propsEventOdds) {
   return result;
 }
 
-function buildPropTeamSignal(propSummary, homeTeam, awayTeam) {
+function buildPropSignal(propSummary) {
   if (!propSummary || !propSummary.length) {
     return {
-      homeAdj: 0,
-      awayAdj: 0
+      adj: 0,
+      depth: 0
     };
   }
 
-  let homeStrength = 0;
-  let awayStrength = 0;
+  let strength = 0;
+  let observations = 0;
 
   for (const market of propSummary) {
     for (const row of market.top || []) {
-      if (!row.player || typeof row.point !== "number" || typeof row.avgPrice !== "number") {
+      if (typeof row.point !== "number" || typeof row.avgPrice !== "number") {
         continue;
       }
 
-      // Simple proxy:
-      // If many books support a higher prop line at lower price, player is viewed stronger.
       const booksBoost = clamp((row.booksCount - 1) * 0.0015, 0, 0.01);
       const priceStrength = clamp((2.2 - row.avgPrice) * 0.01, -0.01, 0.02);
-      const pointStrength = clamp(row.point * 0.0008, 0, 0.02);
+      const pointStrength = clamp(row.point * 0.0006, 0, 0.02);
 
-      const strength = booksBoost + priceStrength + pointStrength;
-
-      // Very light team assignment heuristic based on selected event teams:
-      // We only use player props as a general strength pool and split it by side name presence if possible.
-      const playerName = row.player.toLowerCase();
-
-      if (
-        playerName.includes(homeTeam.split(" ").slice(-1)[0].toLowerCase()) ||
-        false
-      ) {
-        homeStrength += strength;
-      } else if (
-        playerName.includes(awayTeam.split(" ").slice(-1)[0].toLowerCase()) ||
-        false
-      ) {
-        awayStrength += strength;
-      }
+      strength += booksBoost + priceStrength + pointStrength;
+      observations += 1;
     }
   }
 
-  // Since player name doesn't include team reliably, keep this conservative.
+  const adj = clamp((strength / Math.max(observations, 1)) * 0.4, 0, 0.01);
+
   return {
-    homeAdj: clamp(homeStrength, 0, 0.01),
-    awayAdj: clamp(awayStrength, 0, 0.01)
+    adj,
+    depth: observations
   };
 }
 
@@ -432,21 +460,85 @@ async function buildHistoricalComparisons(homeTeam, awayTeam) {
             homeMarketProb: extracted.homeMarketProb,
             awayMarketProb: extracted.awayMarketProb,
             spreadAdj: extracted.spreadAdj,
-            totalConsensus: extracted.totalConsensus
+            totalConsensus: extracted.totalConsensus,
+            avgHomeSpread: extracted.avgHomeSpread,
+            avgTotal: extracted.avgTotal
           };
         }
       }
     } catch (err) {
-      comparisons[lookback.label] = {
-        error: err.message
-      };
+      comparisons[lookback.label] = { error: err.message };
     }
   }
 
   return comparisons;
 }
 
-function buildProbabilityModel(currentConsensus, historicalComparisons, propSignal) {
+function buildMode(commenceTime) {
+  const startMs = new Date(commenceTime).getTime();
+  return Date.now() >= startMs ? "live" : "pregame";
+}
+
+function buildConfidence(currentConsensus, historicalComparisons, propSignal) {
+  let score = 50;
+
+  score += clamp((currentConsensus.bookCount - 3) * 6, 0, 25);
+  score -= clamp(currentConsensus.disagreementPenalty * 800, 0, 22);
+
+  if (historicalComparisons["2h"] && !historicalComparisons["2h"].error) score += 8;
+  if (historicalComparisons["24h"] && !historicalComparisons["24h"].error) score += 8;
+
+  score += clamp(propSignal.depth * 0.7, 0, 12);
+
+  score = clamp(score, 0, 100);
+
+  let label = "Low";
+  if (score >= 75) label = "High";
+  else if (score >= 55) label = "Medium";
+
+  return { score, label };
+}
+
+function buildStakeSuggestion(edge, confidenceLabel) {
+  if (edge < 0.02) {
+    return { tier: "No bet", fraction: 0 };
+  }
+  if (edge < 0.04) {
+    return confidenceLabel === "High"
+      ? { tier: "Small", fraction: 0.25 }
+      : { tier: "Tiny", fraction: 0.1 };
+  }
+  if (edge < 0.07) {
+    return confidenceLabel === "High"
+      ? { tier: "Normal", fraction: 0.5 }
+      : { tier: "Small", fraction: 0.25 };
+  }
+  return confidenceLabel === "High"
+    ? { tier: "Strong", fraction: 0.75 }
+    : { tier: "Normal", fraction: 0.5 };
+}
+
+function buildVerdict(rawEdge, confidence, mode, disagreementPenalty) {
+  if (rawEdge < 0.015) {
+    return "No edge";
+  }
+
+  if (confidence.label === "Low" || disagreementPenalty > 0.025) {
+    return "Low confidence";
+  }
+
+  if (mode === "live") {
+    if (rawEdge >= 0.05 && confidence.score >= 75) return "Bet now";
+    if (rawEdge >= 0.025) return "Watch";
+    return "Avoid";
+  }
+
+  if (rawEdge >= 0.045 && confidence.score >= 70) return "Bet now";
+  if (rawEdge >= 0.02) return "Watch";
+  return "Avoid";
+}
+
+function buildProbabilityModel(currentConsensus, historicalComparisons, propSignal, mode) {
   const homeMarketProb = currentConsensus.homeMarketProb;
   const awayMarketProb = currentConsensus.awayMarketProb;
 
@@ -457,16 +549,15 @@ function buildProbabilityModel(currentConsensus, historicalComparisons, propSign
 
   if (h24 && typeof h24.homeMarketProb === "number") {
     const delta24 = homeMarketProb - h24.homeMarketProb;
-    lineMovementAdj += clamp(delta24 * 0.50, -0.03, 0.03);
+    lineMovementAdj += clamp(delta24 * (mode === "pregame" ? 0.5 : 0.25), -0.03, 0.03);
   }
 
   if (h2 && typeof h2.homeMarketProb === "number") {
     const delta2 = homeMarketProb - h2.homeMarketProb;
-    lineMovementAdj += clamp(delta2 * 0.85, -0.025, 0.025);
+    lineMovementAdj += clamp(delta2 * (mode === "live" ? 1.0 : 0.8), -0.03, 0.03);
   }
 
-  // Keep prop signal light so it doesn't overpower the market.
-  const propAdj = clamp((propSignal.homeAdj - propSignal.awayAdj), -0.01, 0.01);
+  const propAdj = clamp(propSignal.adj, 0, 0.01);
 
   let homeTrueProb =
     homeMarketProb +
@@ -499,19 +590,11 @@ function buildProbabilityModel(currentConsensus, historicalComparisons, propSign
   const trueProbability = pickSide === "home" ? homeTrueProb : awayTrueProb;
   const rawEdge = pickSide === "home" ? homeEdge : awayEdge;
 
-  let verdict = "Avoid";
-  if (rawEdge >= 0.05) {
-    verdict = "Bet now";
-  } else if (rawEdge >= 0.02) {
-    verdict = "Watch";
-  }
-
   return {
     pickSide,
     impliedProbability,
     trueProbability,
     rawEdge,
-    verdict,
     lineMovementAdj,
     propAdj
   };
@@ -553,7 +636,8 @@ app.get("/games", async (req, res) => {
         label: `${event.away_team} @ ${event.home_team}`,
         homeTeam: event.home_team,
         awayTeam: event.away_team,
-        commenceTime: event.commence_time
+        commenceTime: event.commence_time,
+        mode: buildMode(event.commence_time)
       }));
 
     res.json({ games });
@@ -586,23 +670,36 @@ app.get("/odds", async (req, res) => {
       });
     }
 
+    const mode = buildMode(featured.commence_time);
     const historicalComparisons = await buildHistoricalComparisons(
       featured.home_team,
       featured.away_team
     );
 
     const propSummary = extractPropSummary(props);
-    const propSignal = buildPropTeamSignal(
-      propSummary,
-      featured.home_team,
-      featured.away_team
-    );
+    const propSignal = buildPropSignal(propSummary);
 
     const model = buildProbabilityModel(
       currentConsensus,
       historicalComparisons,
+      propSignal,
+      mode
+    );
+
+    const confidence = buildConfidence(
+      currentConsensus,
+      historicalComparisons,
       propSignal
     );
+
+    const verdict = buildVerdict(
+      model.rawEdge,
+      confidence,
+      mode,
+      currentConsensus.disagreementPenalty
+    );
+
+    const stake = buildStakeSuggestion(model.rawEdge, confidence.label);
 
     const pickTeam =
       model.pickSide === "home" ? featured.home_team : featured.away_team;
@@ -613,24 +710,40 @@ app.get("/odds", async (req, res) => {
         : currentConsensus.bestAwayPrice;
 
     const pick = `${pickTeam} to win`;
+    const timestamp = new Date().toISOString();
+    const smoothedEdge = addEdgeHistory(gameId, model.rawEdge, timestamp);
 
-    const smoothedEdge = addEdgeHistory(
-      gameId,
-      model.rawEdge,
-      new Date().toISOString()
-    );
+    const snapshot = {
+      timestamp,
+      mode,
+      impliedProbability: model.impliedProbability,
+      trueProbability: model.trueProbability,
+      edge: smoothedEdge,
+      rawEdge: model.rawEdge,
+      verdict,
+      confidenceScore: confidence.score,
+      confidenceLabel: confidence.label,
+      bestPrice: sportsbookOddsDecimal,
+      pick,
+      stakeTier: stake.tier
+    };
+
+    logSnapshot(gameId, snapshot);
 
     res.json({
       id: featured.id,
       homeTeam: featured.home_team,
       awayTeam: featured.away_team,
       commenceTime: featured.commence_time,
+      gameMode: mode,
       sportsbookOddsDecimal,
       impliedProbability: model.impliedProbability,
       trueProbability: model.trueProbability,
       edge: smoothedEdge,
-      verdict: model.verdict,
+      verdict,
       pick,
+      confidence,
+      stakeSuggestion: stake,
       history: edgeHistoryStore[gameId] || [],
       modelDetails: {
         spreadAdj: currentConsensus.spreadAdj,
@@ -643,16 +756,36 @@ app.get("/odds", async (req, res) => {
         avgAwayPrice: currentConsensus.avgAwayPrice,
         bestHomePrice: currentConsensus.bestHomePrice,
         bestAwayPrice: currentConsensus.bestAwayPrice,
+        avgHomeSpread: currentConsensus.avgHomeSpread,
+        avgTotal: currentConsensus.avgTotal,
+        bookCount: currentConsensus.bookCount,
         historicalComparisons
       },
+      bookmakerTable: currentConsensus.books,
       propsSummary: propSummary,
-      timestamp: new Date().toISOString()
+      injuryStatus: {
+        available: false,
+        note: "No injury/lineup source connected yet"
+      },
+      timestamp
     });
   } catch (error) {
     res.status(500).json({
       error: error.message
     });
   }
+});
+
+app.get("/snapshots", (req, res) => {
+  const gameId = req.query.gameId;
+  if (!gameId) {
+    return res.status(400).json({ error: "Missing gameId query parameter" });
+  }
+
+  res.json({
+    gameId,
+    snapshots: snapshotLogStore[gameId] || []
+  });
 });
 
 app.listen(PORT, () => {
