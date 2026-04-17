@@ -1326,7 +1326,7 @@ app.get("/odds", async (req, res) => {
     logSnapshot(gameId, snapshot);
 
     learning.recordSnapshot({
-      gameld,
+      gameId,
       timestamp,
       commenceTime: featured.commence_time,
       homeTeam: featured.home_team,
