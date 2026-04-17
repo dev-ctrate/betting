@@ -1079,11 +1079,11 @@ app.get("/odds", async (req, res) => {
     const propSignal = buildPropSignal(propSections);
 
     const [injuriesFN, lineupsFN, depthFN, injuriesBDL] = await Promise.all([
-  getFantasyNerdsInjuries(),
-  getFantasyNerdsLineups(),
-  getFantasyNerdsDepthCharts(),
-  getBDLInjuries()
-]);
+      getFantasyNerdsInjuries(),
+      getFantasyNerdsLineups(),
+      getFantasyNerdsDepthCharts(),
+      getBDLInjuries()
+    ]);
 
 let injuriesRows = [];
 let sourceUsed = "none";
