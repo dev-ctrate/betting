@@ -6,10 +6,12 @@ const PORT = process.env.PORT || 3000;
 
 const ODDS_API_KEY = process.env.ODDS_API_KEY || "";
 const FANTASYNERDS_API_KEY = process.env.FANTASYNERDS_API_KEY || "";
+const BALLDONTLIE_API_KEY = process.env.BALLDONTLIE_API_KEY || "";
 
 const SPORT_KEY = "basketball_nba";
 const REGIONS = "us";
 const ODDS_FORMAT = "decimal";
+
 const FEATURED_MARKETS = "h2h,spreads,totals";
 const PLAYER_PROP_MARKETS = [
   "player_points",
@@ -26,6 +28,7 @@ const HISTORICAL_LOOKBACKS = [
 const currentCache = new Map();
 const historicalCache = new Map();
 const sideInfoCache = new Map();
+
 const edgeHistoryStore = {};
 const snapshotLogStore = {};
 
@@ -34,9 +37,47 @@ const HISTORICAL_TTL_MS = 30 * 60 * 1000;
 const SIDEINFO_TTL_MS = 10 * 60 * 1000;
 const SNAPSHOT_RETENTION = 500;
 
+const TEAM_ALIASES = {
+  "Atlanta Hawks": ["hawks", "atl", "atlanta"],
+  "Boston Celtics": ["celtics", "bos", "boston"],
+  "Brooklyn Nets": ["nets", "bkn", "brooklyn"],
+  "Charlotte Hornets": ["hornets", "cha", "charlotte"],
+  "Chicago Bulls": ["bulls", "chi", "chicago"],
+  "Cleveland Cavaliers": ["cavaliers", "cavs", "cle", "cleveland"],
+  "Dallas Mavericks": ["mavericks", "mavs", "dal", "dallas"],
+  "Denver Nuggets": ["nuggets", "den", "denver"],
+  "Detroit Pistons": ["pistons", "det", "detroit"],
+  "Golden State Warriors": ["warriors", "gsw", "golden state"],
+  "Houston Rockets": ["rockets", "hou", "houston"],
+  "Indiana Pacers": ["pacers", "ind", "indiana"],
+  "Los Angeles Clippers": ["clippers", "lac", "la clippers"],
+  "Los Angeles Lakers": ["lakers", "lal", "la lakers"],
+  "Memphis Grizzlies": ["grizzlies", "mem", "memphis"],
+  "Miami Heat": ["heat", "mia", "miami"],
+  "Milwaukee Bucks": ["bucks", "mil", "milwaukee"],
+  "Minnesota Timberwolves": ["timberwolves", "wolves", "min", "minnesota"],
+  "New Orleans Pelicans": ["pelicans", "nop", "no", "new orleans"],
+  "New York Knicks": ["knicks", "nyk", "new york"],
+  "Oklahoma City Thunder": ["thunder", "okc", "oklahoma city"],
+  "Orlando Magic": ["magic", "orl", "orlando"],
+  "Philadelphia 76ers": ["76ers", "sixers", "phi", "philadelphia"],
+  "Phoenix Suns": ["suns", "phx", "phoenix"],
+  "Portland Trail Blazers": ["trail blazers", "blazers", "por", "portland"],
+  "Sacramento Kings": ["kings", "sac", "sacramento"],
+  "San Antonio Spurs": ["spurs", "sas", "san antonio"],
+  "Toronto Raptors": ["raptors", "tor", "toronto"],
+  "Utah Jazz": ["jazz", "uta", "utah"],
+  "Washington Wizards": ["wizards", "was", "washington"]
+};
+
 // ---------- helpers ----------
 function clamp(x, min, max) {
   return Math.max(min, Math.min(max, x));
+}
+
+function roundToTwo(num) {
+  if (typeof num !== "number" || !Number.isFinite(num)) return null;
+  return Math.round(num * 100) / 100;
 }
 
 function average(values) {
@@ -71,6 +112,11 @@ function noVigTwoWayProb(priceA, priceB) {
   };
 }
 
+function decimalToImpliedPercent(decimalOdds) {
+  if (typeof decimalOdds !== "number" || decimalOdds <= 1) return null;
+  return 1 / decimalOdds;
+}
+
 function getBookWeight(bookKey) {
   const sharpBooks = ["pinnacle", "circasports", "matchbook"];
   const strongBooks = ["draftkings", "fanduel", "betmgm", "betrivers"];
@@ -81,6 +127,10 @@ function getBookWeight(bookKey) {
 
 function toIso(ms) {
   return new Date(ms).toISOString();
+}
+
+function todayYmd() {
+  return new Date().toISOString().slice(0, 10);
 }
 
 function cacheGet(map, key) {
@@ -100,8 +150,8 @@ function cacheSet(map, key, value, ttlMs) {
   });
 }
 
-async function fetchJson(url) {
-  const response = await fetch(url);
+async function fetchJson(url, options = {}) {
+  const response = await fetch(url, options);
   if (!response.ok) {
     const text = await response.text();
     throw new Error(`Request failed ${response.status}: ${text}`);
@@ -121,6 +171,10 @@ function requireOddsKey() {
 
 function requireFantasyNerdsKey() {
   return !!FANTASYNERDS_API_KEY;
+}
+
+function requireBallDontLieKey() {
+  return !!BALLDONTLIE_API_KEY;
 }
 
 function findMarket(bookmaker, marketKey) {
@@ -158,7 +212,9 @@ function logSnapshot(gameId, snapshot) {
   if (!snapshotLogStore[gameId]) {
     snapshotLogStore[gameId] = [];
   }
+
   snapshotLogStore[gameId].push(snapshot);
+
   if (snapshotLogStore[gameId].length > SNAPSHOT_RETENTION) {
     snapshotLogStore[gameId] = snapshotLogStore[gameId].slice(-SNAPSHOT_RETENTION);
   }
@@ -198,17 +254,16 @@ function buildOddsFormatsFromDecimal(decimalOdds) {
   }
 
   const implied = 1 / decimalOdds;
-
   return {
-    decimal: decimalOdds,
+    decimal: roundToTwo(decimalOdds),
     american: decimalToAmerican(decimalOdds),
-    impliedPercent: implied
+    impliedPercent: roundToTwo(implied)
   };
 }
 
 function buildProbabilityFormats(probability) {
   return {
-    percent: probability,
+    percent: roundToTwo(probability),
     american: probabilityToAmerican(probability)
   };
 }
@@ -357,14 +412,14 @@ function extractFeaturedConsensus(eventOdds) {
 
     books.push({
       book: bookmaker.key,
-      homePrice: bookHomePrice,
-      awayPrice: bookAwayPrice,
-      homeSpread: bookHomeSpread,
-      awaySpread: bookAwaySpread,
-      total: bookTotal,
-      homeDecimal: bookHomePrice,
+      homePrice: roundToTwo(bookHomePrice),
+      awayPrice: roundToTwo(bookAwayPrice),
+      homeSpread: roundToTwo(bookHomeSpread),
+      awaySpread: roundToTwo(bookAwaySpread),
+      total: roundToTwo(bookTotal),
+      homeDecimal: roundToTwo(bookHomePrice),
       homeAmerican: decimalToAmerican(bookHomePrice),
-      awayDecimal: bookAwayPrice,
+      awayDecimal: roundToTwo(bookAwayPrice),
       awayAmerican: decimalToAmerican(bookAwayPrice)
     });
   }
@@ -375,7 +430,6 @@ function extractFeaturedConsensus(eventOdds) {
 
   const homeMarketProb = weightedAverage(homeProbPairs);
   const awayMarketProb = weightedAverage(awayProbPairs);
-
   const spreadAdj = weightedAverage(spreadSignals) || 0;
   const totalConsensus = weightedAverage(totalSignals) || 0;
 
@@ -407,7 +461,9 @@ function extractFeaturedConsensus(eventOdds) {
     avgAwayPrice: average(awayPrices),
     avgHomeSpread: average(homeSpreads),
     avgTotal: average(totals),
-    bookCount: books.filter(b => typeof b.homePrice === "number" && typeof b.awayPrice === "number").length,
+    bookCount: books.filter(
+      b => typeof b.homePrice === "number" && typeof b.awayPrice === "number"
+    ).length,
     books
   };
 }
@@ -433,6 +489,22 @@ function groupPlayerPropMarkets(propsEventOdds) {
   }
 
   return groupedMarkets;
+}
+
+function decidePropSide(row) {
+  if (typeof row.hitProbability !== "number") return null;
+
+  if (row.hitProbability > 0.5) {
+    return {
+      pick: "over",
+      probability: row.hitProbability
+    };
+  }
+
+  return {
+    pick: "under",
+    probability: 1 - row.hitProbability
+  };
 }
 
 function buildStructuredPropSections(propsEventOdds) {
@@ -486,17 +558,23 @@ function buildStructuredPropSections(propsEventOdds) {
           hitProb = decimalToImpliedPercent(avgOver);
         }
 
+        const decision = decidePropSide({ hitProbability: hitProb });
+
         return {
           player: item.player,
-          line: item.point,
-          overDecimal: avgOver,
+          line: roundToTwo(item.point),
+          overDecimal: roundToTwo(avgOver),
           overAmerican: decimalToAmerican(avgOver),
-          hitProbability: hitProb,
-          coverage: item.overPrices.length + item.underPrices.length
+          hitProbability: roundToTwo(hitProb),
+          coverage: item.overPrices.length + item.underPrices.length,
+          pick: decision?.pick || null,
+          pickProbability: roundToTwo(decision?.probability)
         };
       })
       .filter(row => row.player && typeof row.line === "number")
-      .sort((a, b) => (b.coverage - a.coverage) || ((b.hitProbability || 0) - (a.hitProbability || 0)))
+      .sort((a, b) => {
+        return (b.coverage - a.coverage) || ((b.pickProbability || 0) - (a.pickProbability || 0));
+      })
       .slice(0, 12);
 
     sections[displayKey] = rows;
@@ -541,7 +619,6 @@ async function buildHistoricalComparisons(homeTeam, awayTeam) {
 
   for (const lookback of HISTORICAL_LOOKBACKS) {
     const dateIso = toIso(Date.now() - lookback.ms);
-
     try {
       const snapshot = await getHistoricalSnapshot(dateIso);
       const matched = matchHistoricalEvent(snapshot.data || snapshot, homeTeam, awayTeam);
@@ -551,12 +628,12 @@ async function buildHistoricalComparisons(homeTeam, awayTeam) {
         if (extracted) {
           comparisons[lookback.label] = {
             timestampRequested: dateIso,
-            homeMarketProb: extracted.homeMarketProb,
-            awayMarketProb: extracted.awayMarketProb,
-            spreadAdj: extracted.spreadAdj,
-            totalConsensus: extracted.totalConsensus,
-            avgHomeSpread: extracted.avgHomeSpread,
-            avgTotal: extracted.avgTotal
+            homeMarketProb: roundToTwo(extracted.homeMarketProb),
+            awayMarketProb: roundToTwo(extracted.awayMarketProb),
+            spreadAdj: roundToTwo(extracted.spreadAdj),
+            totalConsensus: roundToTwo(extracted.totalConsensus),
+            avgHomeSpread: roundToTwo(extracted.avgHomeSpread),
+            avgTotal: roundToTwo(extracted.avgTotal)
           };
         }
       }
@@ -568,7 +645,7 @@ async function buildHistoricalComparisons(homeTeam, awayTeam) {
   return comparisons;
 }
 
-// ---------- Fantasy Nerds ----------
+// ---------- Fantasy Nerds + Ball Don't Lie ----------
 function normalizeFantasyNerdsRows(payload) {
   if (Array.isArray(payload)) return payload;
   if (Array.isArray(payload?.Data)) return payload.Data;
@@ -579,78 +656,205 @@ function normalizeFantasyNerdsRows(payload) {
   return [];
 }
 
-function teamNameLooseMatch(sourceText, teamName) {
-  if (!sourceText || !teamName) return false;
-  const a = sourceText.toLowerCase();
-  const b = teamName.toLowerCase();
-  const lastWord = teamName.split(" ").slice(-1)[0].toLowerCase();
-  return a.includes(b) || a.includes(lastWord);
+function normalizeBallDontLieRows(payload) {
+  if (Array.isArray(payload)) return payload;
+  if (Array.isArray(payload?.data)) return payload.data;
+  return [];
+}
+
+function buildBallDontLieHeaders() {
+  return {
+    Authorization: BALLDONTLIE_API_KEY
+  };
+}
+
+async function getBallDontLieInjuries() {
+  if (!requireBallDontLieKey()) return { available: false, rows: [], source: "none" };
+
+  const cacheKey = "bdl:injuries";
+  const hit = cacheGet(sideInfoCache, cacheKey);
+  if (hit) return hit;
+
+  try {
+    const url = "https://api.balldontlie.io/v1/player_injuries?per_page=100";
+    const raw = await fetchJson(url, { headers: buildBallDontLieHeaders() });
+    const value = {
+      available: true,
+      rows: normalizeBallDontLieRows(raw),
+      raw,
+      source: "balldontlie"
+    };
+    cacheSet(sideInfoCache, cacheKey, value, SIDEINFO_TTL_MS);
+    return value;
+  } catch {
+    return { available: false, rows: [], source: "none" };
+  }
+}
+
+async function getBallDontLieLineups(dateStr = "") {
+  if (!requireBallDontLieKey()) return { available: false, rows: [], source: "none" };
+
+  const resolvedDate = dateStr || todayYmd();
+  const cacheKey = `bdl:lineups:${resolvedDate}`;
+  const hit = cacheGet(sideInfoCache, cacheKey);
+  if (hit) return hit;
+
+  try {
+    const url = `https://api.balldontlie.io/v1/lineups?dates[]=${encodeURIComponent(resolvedDate)}&per_page=100`;
+    const raw = await fetchJson(url, { headers: buildBallDontLieHeaders() });
+    const value = {
+      available: true,
+      rows: normalizeBallDontLieRows(raw),
+      raw,
+      source: "balldontlie"
+    };
+    cacheSet(sideInfoCache, cacheKey, value, SIDEINFO_TTL_MS);
+    return value;
+  } catch {
+    return { available: false, rows: [], source: "none" };
+  }
 }
 
 async function getFantasyNerdsInjuries() {
-  if (!requireFantasyNerdsKey()) return { available: false, rows: [] };
+  if (!requireFantasyNerdsKey()) return { available: false, rows: [], source: "none" };
 
   const cacheKey = "fn:injuries";
   const hit = cacheGet(sideInfoCache, cacheKey);
   if (hit) return hit;
 
-  const url = `https://api.fantasynerds.com/v1/nba/injuries?apikey=${encodeURIComponent(FANTASYNERDS_API_KEY)}`;
-  const raw = await fetchJson(url);
-  const value = {
-    available: true,
-    rows: normalizeFantasyNerdsRows(raw),
-    raw
-  };
-  cacheSet(sideInfoCache, cacheKey, value, SIDEINFO_TTL_MS);
-  return value;
+  try {
+    const url = `https://api.fantasynerds.com/v1/nba/injuries?apikey=${encodeURIComponent(FANTASYNERDS_API_KEY)}`;
+    const raw = await fetchJson(url);
+    const value = {
+      available: true,
+      rows: normalizeFantasyNerdsRows(raw),
+      raw,
+      source: "fantasynerds"
+    };
+    cacheSet(sideInfoCache, cacheKey, value, SIDEINFO_TTL_MS);
+    return value;
+  } catch {
+    return { available: false, rows: [], source: "none" };
+  }
 }
 
 async function getFantasyNerdsLineups(dateStr = "") {
-  if (!requireFantasyNerdsKey()) return { available: false, rows: [] };
+  if (!requireFantasyNerdsKey()) return { available: false, rows: [], source: "none" };
 
   const cacheKey = `fn:lineups:${dateStr || "today"}`;
   const hit = cacheGet(sideInfoCache, cacheKey);
   if (hit) return hit;
 
-  const url = `https://api.fantasynerds.com/v1/nba/lineups?apikey=${encodeURIComponent(FANTASYNERDS_API_KEY)}&date=${encodeURIComponent(dateStr)}`;
-  const raw = await fetchJson(url);
-  const value = {
-    available: true,
-    rows: normalizeFantasyNerdsRows(raw),
-    raw
-  };
-  cacheSet(sideInfoCache, cacheKey, value, SIDEINFO_TTL_MS);
-  return value;
+  try {
+    const url = `https://api.fantasynerds.com/v1/nba/lineups?apikey=${encodeURIComponent(FANTASYNERDS_API_KEY)}&date=${encodeURIComponent(dateStr)}`;
+    const raw = await fetchJson(url);
+    const value = {
+      available: true,
+      rows: normalizeFantasyNerdsRows(raw),
+      raw,
+      source: "fantasynerds"
+    };
+    cacheSet(sideInfoCache, cacheKey, value, SIDEINFO_TTL_MS);
+    return value;
+  } catch {
+    return { available: false, rows: [], source: "none" };
+  }
 }
 
 async function getFantasyNerdsDepthCharts() {
-  if (!requireFantasyNerdsKey()) return { available: false, rows: [] };
+  if (!requireFantasyNerdsKey()) return { available: false, rows: [], source: "none" };
 
   const cacheKey = "fn:depthcharts";
   const hit = cacheGet(sideInfoCache, cacheKey);
   if (hit) return hit;
 
-  const url = `https://api.fantasynerds.com/v1/nba/depthcharts?apikey=${encodeURIComponent(FANTASYNERDS_API_KEY)}`;
-  const raw = await fetchJson(url);
-  const value = {
-    available: true,
-    rows: normalizeFantasyNerdsRows(raw),
-    raw
-  };
-  cacheSet(sideInfoCache, cacheKey, value, SIDEINFO_TTL_MS);
-  return value;
+  try {
+    const url = `https://api.fantasynerds.com/v1/nba/depth?apikey=${encodeURIComponent(FANTASYNERDS_API_KEY)}`;
+    const raw = await fetchJson(url);
+    const value = {
+      available: true,
+      rows: normalizeFantasyNerdsRows(raw),
+      raw,
+      source: "fantasynerds"
+    };
+    cacheSet(sideInfoCache, cacheKey, value, SIDEINFO_TTL_MS);
+    return value;
+  } catch {
+    return { available: false, rows: [], source: "none" };
+  }
+}
+
+async function getBestInjuries() {
+  const bdl = await getBallDontLieInjuries();
+  if (bdl.available && bdl.rows.length) return bdl;
+
+  const fn = await getFantasyNerdsInjuries();
+  if (fn.available) return fn;
+
+  return { available: false, rows: [], source: "none" };
+}
+
+async function getBestLineups(dateStr = "") {
+  const bdl = await getBallDontLieLineups(dateStr);
+  if (bdl.available && bdl.rows.length) return bdl;
+
+  const fn = await getFantasyNerdsLineups(dateStr);
+  if (fn.available) return fn;
+
+  return { available: false, rows: [], source: "none" };
+}
+
+async function getBestDepthCharts() {
+  const fn = await getFantasyNerdsDepthCharts();
+  if (fn.available) return fn;
+
+  return { available: false, rows: [], source: "none" };
 }
 
 function extractPlayerName(obj) {
   if (!obj) return "";
-  return (
-    obj.PlayerName ||
-    obj.Name ||
-    obj.player ||
-    obj.full_name ||
-    obj.playername ||
-    ""
-  );
+
+  if (typeof obj.PlayerName === "string") return obj.PlayerName;
+  if (typeof obj.Name === "string") return obj.Name;
+  if (typeof obj.player === "string") return obj.player;
+  if (typeof obj.full_name === "string") return obj.full_name;
+  if (typeof obj.playername === "string") return obj.playername;
+
+  if (obj.player && typeof obj.player === "object") {
+    const fn = obj.player.first_name || "";
+    const ln = obj.player.last_name || "";
+    const full = `${fn} ${ln}`.trim();
+    if (full) return full;
+    if (typeof obj.player.name === "string") return obj.player.name;
+  }
+
+  if (typeof obj.first_name === "string" || typeof obj.last_name === "string") {
+    return `${obj.first_name || ""} ${obj.last_name || ""}`.trim();
+  }
+
+  return "";
+}
+
+function getTeamTokens(teamName) {
+  const aliases = TEAM_ALIASES[teamName] || [];
+  const tokens = new Set([teamName.toLowerCase(), ...aliases.map(x => x.toLowerCase())]);
+
+  const words = teamName.toLowerCase().split(" ").filter(Boolean);
+  for (const word of words) {
+    tokens.add(word);
+  }
+
+  const lastWord = words[words.length - 1];
+  if (lastWord) tokens.add(lastWord);
+
+  return [...tokens].filter(Boolean);
+}
+
+function teamNameLooseMatch(sourceText, teamName) {
+  if (!sourceText || !teamName) return false;
+  const hay = sourceText.toLowerCase();
+  const teamTokens = getTeamTokens(teamName);
+  return teamTokens.some(token => hay.includes(token));
 }
 
 function rowContainsTeam(row, teamName) {
@@ -660,8 +864,10 @@ function rowContainsTeam(row, teamName) {
 function lineupCertaintyValue(row) {
   const text = JSON.stringify(row).toLowerCase();
   if (text.includes("confirmed")) return 1.0;
-  if (text.includes("starting")) return 0.8;
-  if (text.includes("projected")) return 0.5;
+  if (text.includes("starting")) return 0.85;
+  if (text.includes("starter")) return 0.8;
+  if (text.includes("projected")) return 0.55;
+  if (text.includes("expected")) return 0.5;
   return 0.25;
 }
 
@@ -684,7 +890,6 @@ function depthRoleValue(row) {
 
 function buildPlayerValueMap(propSections) {
   const map = {};
-
   const weights = {
     points: 1.0,
     assists: 0.9,
@@ -698,7 +903,8 @@ function buildPlayerValueMap(propSections) {
       if (!player) continue;
 
       const lineComponent = clamp((row.line || 0) * 0.01, 0, 0.6);
-      const probComponent = clamp((row.hitProbability || 0.5) - 0.5, 0, 0.25);
+      const probBase = typeof row.pickProbability === "number" ? row.pickProbability : row.hitProbability || 0.5;
+      const probComponent = clamp(probBase - 0.5, 0, 0.25);
       const coverageComponent = clamp((row.coverage || 0) * 0.015, 0, 0.15);
 
       const score =
@@ -716,18 +922,21 @@ function buildPlayerValueMap(propSections) {
 function findBestPlayerValue(name, playerValueMap) {
   if (!name) return 0;
   const key = name.toLowerCase().trim();
+
   if (playerValueMap[key]) return playerValueMap[key];
 
   const parts = key.split(" ").filter(Boolean);
   if (!parts.length) return 0;
 
   let best = 0;
+
   for (const [candidate, value] of Object.entries(playerValueMap)) {
     const matchCount = parts.filter(part => candidate.includes(part)).length;
     if (matchCount >= Math.min(2, parts.length)) {
       best = Math.max(best, value);
     }
   }
+
   return best;
 }
 
@@ -743,7 +952,7 @@ function summarizeInjuryLineup(homeTeam, awayTeam, injuriesRows, lineupsRows, de
 
   const playerValueMap = buildPlayerValueMap(propSections);
 
-  function computeTeamPenalty(injuries, lineupRows, depthRows) {
+  function computeTeamPenalty(injuries, lineupRowsForTeam, depthRowsForTeam) {
     let totalPenalty = 0;
     let startersOut = 0;
     let projectedStarters = 0;
@@ -752,13 +961,13 @@ function summarizeInjuryLineup(homeTeam, awayTeam, injuriesRows, lineupsRows, de
       const playerName = extractPlayerName(injury);
       const severity = injurySeverityValue(injury);
 
-      const lineupMatch = lineupRows.find(row =>
-        JSON.stringify(row).toLowerCase().includes(playerName.toLowerCase())
-      );
+      const lineupMatch = lineupRowsForTeam.find(row => {
+        return JSON.stringify(row).toLowerCase().includes(playerName.toLowerCase());
+      });
 
-      const depthMatch = depthRows.find(row =>
-        JSON.stringify(row).toLowerCase().includes(playerName.toLowerCase())
-      );
+      const depthMatch = depthRowsForTeam.find(row => {
+        return JSON.stringify(row).toLowerCase().includes(playerName.toLowerCase());
+      });
 
       const lineupWeight = lineupMatch ? lineupCertaintyValue(lineupMatch) : 0;
       const roleWeight = depthMatch ? depthRoleValue(depthMatch) : (lineupMatch ? 0.9 : 0.4);
@@ -778,14 +987,14 @@ function summarizeInjuryLineup(homeTeam, awayTeam, injuriesRows, lineupsRows, de
       }
     }
 
-    for (const lineup of lineupRows) {
+    for (const lineup of lineupRowsForTeam) {
       if (lineupCertaintyValue(lineup) >= 0.8) {
         projectedStarters += 1;
       }
     }
 
     const starterCertainty =
-      lineupRows.length > 0
+      lineupRowsForTeam.length > 0
         ? clamp(projectedStarters / 5, 0, 1)
         : 0;
 
@@ -804,24 +1013,17 @@ function summarizeInjuryLineup(homeTeam, awayTeam, injuriesRows, lineupsRows, de
 
   return {
     available: injuriesRows.length > 0 || lineupsRows.length > 0 || depthRows.length > 0,
-
     homeInjuriesCount: homeInjuries.length,
     awayInjuriesCount: awayInjuries.length,
-
     homePenalty: homeCalc.penalty,
     awayPenalty: awayCalc.penalty,
-
     homeStartersOut: homeCalc.startersOut,
     awayStartersOut: awayCalc.startersOut,
-
     homeStarterCertainty: homeCalc.starterCertainty,
     awayStarterCertainty: awayCalc.starterCertainty,
-
     homeLineupBoost,
     awayLineupBoost,
-
     lineupRowsCount: homeLineups.length + awayLineups.length,
-
     homeInjuries,
     awayInjuries,
     lineups: [...homeLineups, ...awayLineups]
@@ -842,8 +1044,16 @@ function buildConfidence(currentConsensus, historicalComparisons, propSignal, in
 
   if (injurySummary.available) {
     score += 5;
-    score += clamp((injurySummary.homeStarterCertainty + injurySummary.awayStarterCertainty) * 8, 0, 8);
-    score -= clamp((injurySummary.homeStartersOut + injurySummary.awayStartersOut) * 2, 0, 10);
+    score += clamp(
+      (injurySummary.homeStarterCertainty + injurySummary.awayStarterCertainty) * 8,
+      0,
+      8
+    );
+    score -= clamp(
+      (injurySummary.homeStartersOut + injurySummary.awayStartersOut) * 2,
+      0,
+      10
+    );
   }
 
   score = clamp(score, 0, 100);
@@ -892,7 +1102,6 @@ function buildProbabilityModel(currentConsensus, historicalComparisons, propSign
   const awayMarketProb = currentConsensus.awayMarketProb;
 
   let lineMovementAdj = 0;
-
   const h24 = historicalComparisons["24h"];
   const h2 = historicalComparisons["2h"];
 
@@ -971,6 +1180,7 @@ app.get("/health", (req, res) => {
     status: "ok",
     oddsApiKeyAdded: requireOddsKey(),
     fantasyNerdsKeyAdded: requireFantasyNerdsKey(),
+    ballDontLieKeyAdded: requireBallDontLieKey(),
     mode: requireOddsKey() ? "live" : "mock",
     timestamp: new Date().toISOString()
   });
@@ -1042,10 +1252,12 @@ app.get("/odds", async (req, res) => {
     const propSections = buildStructuredPropSections(props);
     const propSignal = buildPropSignal(propSections);
 
+    const lineupDate = featured.commence_time ? featured.commence_time.slice(0, 10) : todayYmd();
+
     const [injuriesInfo, lineupsInfo, depthInfo] = await Promise.all([
-      getFantasyNerdsInjuries(),
-      getFantasyNerdsLineups(),
-      getFantasyNerdsDepthCharts()
+      getBestInjuries(),
+      getBestLineups(lineupDate),
+      getBestDepthCharts()
     ]);
 
     const injurySummary = summarizeInjuryLineup(
@@ -1096,13 +1308,13 @@ app.get("/odds", async (req, res) => {
     const snapshot = {
       timestamp,
       mode,
-      impliedProbability: model.impliedProbability,
-      trueProbability: model.trueProbability,
-      edge: smoothedEdge,
-      rawEdge: model.rawEdge,
+      impliedProbability: roundToTwo(model.impliedProbability),
+      trueProbability: roundToTwo(model.trueProbability),
+      edge: roundToTwo(smoothedEdge),
+      rawEdge: roundToTwo(model.rawEdge),
       verdict,
-      confidencePercent: confidence.percent,
-      bestPrice: chosenDecimal,
+      confidencePercent: roundToTwo(confidence.percent),
+      bestPrice: roundToTwo(chosenDecimal),
       pick,
       stakeTier: stake.tier
     };
@@ -1115,64 +1327,67 @@ app.get("/odds", async (req, res) => {
       awayTeam: featured.away_team,
       commenceTime: featured.commence_time,
       gameMode: mode,
-
       pick,
       verdict,
-      confidence,
-
-      impliedProbability: model.impliedProbability,
-      impliedPercentFromOdds: model.impliedProbability,
-      trueProbability: model.trueProbability,
-
+      confidence: {
+        label: confidence.label,
+        percent: roundToTwo(confidence.percent)
+      },
+      impliedProbability: roundToTwo(model.impliedProbability),
+      impliedPercentFromOdds: roundToTwo(model.impliedProbability),
+      trueProbability: roundToTwo(model.trueProbability),
       impliedProbabilityFormats: buildProbabilityFormats(model.impliedProbability),
       trueProbabilityFormats: buildProbabilityFormats(model.trueProbability),
-
-      edge: smoothedEdge,
-
+      edge: roundToTwo(smoothedEdge),
       oddsFormats: buildOddsFormatsFromDecimal(chosenDecimal),
-      sportsbookOddsDecimal: chosenDecimal,
-
-      stakeSuggestion: stake,
-      history: edgeHistoryStore[gameId] || [],
-
+      sportsbookOddsDecimal: roundToTwo(chosenDecimal),
+      stakeSuggestion: {
+        tier: stake.tier,
+        fraction: roundToTwo(stake.fraction)
+      },
+      history: (edgeHistoryStore[gameId] || []).map(point => ({
+        timestamp: point.timestamp,
+        edge: roundToTwo(point.edge)
+      })),
       modelDetails: {
-        spreadAdj: currentConsensus.spreadAdj,
-        totalConsensus: currentConsensus.totalConsensus,
-        totalAdj: currentConsensus.totalAdj,
-        disagreementPenalty: currentConsensus.disagreementPenalty,
-        lineMovementAdj: model.lineMovementAdj,
-        propAdj: model.propAdj,
-        injuryAdjHome: model.injuryAdjHome,
-        avgHomePrice: currentConsensus.avgHomePrice,
-        avgAwayPrice: currentConsensus.avgAwayPrice,
-        bestHomePrice: currentConsensus.bestHomePrice,
-        bestAwayPrice: currentConsensus.bestAwayPrice,
-        avgHomeSpread: currentConsensus.avgHomeSpread,
-        avgTotal: currentConsensus.avgTotal,
+        spreadAdj: roundToTwo(currentConsensus.spreadAdj),
+        totalConsensus: roundToTwo(currentConsensus.totalConsensus),
+        totalAdj: roundToTwo(currentConsensus.totalAdj),
+        disagreementPenalty: roundToTwo(currentConsensus.disagreementPenalty),
+        lineMovementAdj: roundToTwo(model.lineMovementAdj),
+        propAdj: roundToTwo(model.propAdj),
+        injuryAdjHome: roundToTwo(model.injuryAdjHome),
+        avgHomePrice: roundToTwo(currentConsensus.avgHomePrice),
+        avgAwayPrice: roundToTwo(currentConsensus.avgAwayPrice),
+        bestHomePrice: roundToTwo(currentConsensus.bestHomePrice),
+        bestAwayPrice: roundToTwo(currentConsensus.bestAwayPrice),
+        avgHomeSpread: roundToTwo(currentConsensus.avgHomeSpread),
+        avgTotal: roundToTwo(currentConsensus.avgTotal),
         bookCount: currentConsensus.bookCount,
         historicalComparisons
       },
-
       bookmakerTable: currentConsensus.books,
-
       propSections,
-
       injuryStatus: {
         available: injurySummary.available,
         homeInjuriesCount: injurySummary.homeInjuriesCount,
         awayInjuriesCount: injurySummary.awayInjuriesCount,
         lineupRowsCount: injurySummary.lineupRowsCount,
-        homePenalty: injurySummary.homePenalty,
-        awayPenalty: injurySummary.awayPenalty,
+        homePenalty: roundToTwo(injurySummary.homePenalty),
+        awayPenalty: roundToTwo(injurySummary.awayPenalty),
         homeStartersOut: injurySummary.homeStartersOut,
         awayStartersOut: injurySummary.awayStartersOut,
-        homeStarterCertainty: injurySummary.homeStarterCertainty,
-        awayStarterCertainty: injurySummary.awayStarterCertainty,
+        homeStarterCertainty: roundToTwo(injurySummary.homeStarterCertainty),
+        awayStarterCertainty: roundToTwo(injurySummary.awayStarterCertainty),
+        sourceSelection: {
+          injuries: injuriesInfo.source || "none",
+          lineups: lineupsInfo.source || "none",
+          depth: depthInfo.source || "none"
+        },
         homeInjuries: injurySummary.homeInjuries,
         awayInjuries: injurySummary.awayInjuries,
         lineups: injurySummary.lineups
       },
-
       timestamp
     });
   } catch (error) {
@@ -1184,13 +1399,22 @@ app.get("/odds", async (req, res) => {
 
 app.get("/snapshots", (req, res) => {
   const gameId = req.query.gameId;
+
   if (!gameId) {
     return res.status(400).json({ error: "Missing gameId query parameter" });
   }
 
   res.json({
     gameId,
-    snapshots: snapshotLogStore[gameId] || []
+    snapshots: (snapshotLogStore[gameId] || []).map(s => ({
+      ...s,
+      impliedProbability: roundToTwo(s.impliedProbability),
+      trueProbability: roundToTwo(s.trueProbability),
+      edge: roundToTwo(s.edge),
+      rawEdge: roundToTwo(s.rawEdge),
+      confidencePercent: roundToTwo(s.confidencePercent),
+      bestPrice: roundToTwo(s.bestPrice)
+    }))
   });
 });
 
