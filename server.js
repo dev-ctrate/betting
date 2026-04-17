@@ -5,12 +5,12 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 
 const ODDS_API_KEY = process.env.ODDS_API_KEY || "";
+const FANTASYNERDS_API_KEY = process.env.FANTASYNERDS_API_KEY || "";
 
 const SPORT_KEY = "basketball_nba";
 const REGIONS = "us";
 const ODDS_FORMAT = "decimal";
 const FEATURED_MARKETS = "h2h,spreads,totals";
-
 const PLAYER_PROP_MARKETS = [
   "player_points",
   "player_rebounds",
@@ -26,13 +26,16 @@ const HISTORICAL_LOOKBACKS = [
 
 const currentCache = new Map();
 const historicalCache = new Map();
+const sideInfoCache = new Map();
 const edgeHistoryStore = {};
 const snapshotLogStore = {};
 
 const CURRENT_TTL_MS = 25 * 1000;
 const HISTORICAL_TTL_MS = 30 * 60 * 1000;
+const SIDEINFO_TTL_MS = 10 * 60 * 1000;
 const SNAPSHOT_RETENTION = 500;
 
+// ---------- basic helpers ----------
 function clamp(x, min, max) {
   return Math.max(min, Math.min(max, x));
 }
@@ -107,14 +110,18 @@ async function fetchJson(url) {
   return await response.json();
 }
 
-function buildUrl(pathname, params) {
+function buildOddsUrl(pathname, params) {
   const base = `https://api.the-odds-api.com${pathname}`;
   const sp = new URLSearchParams(params);
   return `${base}?${sp.toString()}`;
 }
 
-function requireApiKey() {
+function requireOddsKey() {
   return !!ODDS_API_KEY;
+}
+
+function requireFantasyNerdsKey() {
+  return !!FANTASYNERDS_API_KEY;
 }
 
 function findMarket(bookmaker, marketKey) {
@@ -158,12 +165,65 @@ function logSnapshot(gameId, snapshot) {
   }
 }
 
+function buildMode(commenceTime) {
+  const startMs = new Date(commenceTime).getTime();
+  return Date.now() >= startMs ? "live" : "pregame";
+}
+
+// ---------- odds format conversions ----------
+function decimalToAmerican(decimalOdds) {
+  if (typeof decimalOdds !== "number" || decimalOdds <= 1) return null;
+  if (decimalOdds >= 2) {
+    return Math.round((decimalOdds - 1) * 100);
+  }
+  return Math.round(-100 / (decimalOdds - 1));
+}
+
+function decimalToFractional(decimalOdds) {
+  if (typeof decimalOdds !== "number" || decimalOdds <= 1) return null;
+
+  const value = decimalOdds - 1;
+  // simple rational approximation
+  const tolerance = 1.0e-6;
+  let h1 = 1, h2 = 0, k1 = 0, k2 = 1;
+  let b = value;
+  do {
+    const a = Math.floor(b);
+    let aux = h1;
+    h1 = a * h1 + h2;
+    h2 = aux;
+    aux = k1;
+    k1 = a * k1 + k2;
+    k2 = aux;
+    const frac = h1 / k1;
+    if (Math.abs(value - frac) < tolerance) break;
+    b = 1 / (b - a);
+  } while (true);
+
+  return `${h1}/${k1}`;
+}
+
+function decimalToImpliedPercent(decimalOdds) {
+  if (typeof decimalOdds !== "number" || decimalOdds <= 1) return null;
+  return 1 / decimalOdds;
+}
+
+function buildOddsFormats(decimalOdds) {
+  return {
+    decimal: decimalOdds,
+    american: decimalToAmerican(decimalOdds),
+    fractional: decimalToFractional(decimalOdds),
+    impliedPercent: decimalToImpliedPercent(decimalOdds)
+  };
+}
+
+// ---------- odds api ----------
 async function getUpcomingEvents() {
   const cacheKey = "events";
   const hit = cacheGet(currentCache, cacheKey);
   if (hit) return hit;
 
-  const url = buildUrl(`/v4/sports/${SPORT_KEY}/events`, {
+  const url = buildOddsUrl(`/v4/sports/${SPORT_KEY}/events`, {
     apiKey: ODDS_API_KEY
   });
 
@@ -177,7 +237,7 @@ async function getEventFeaturedOdds(eventId) {
   const hit = cacheGet(currentCache, cacheKey);
   if (hit) return hit;
 
-  const url = buildUrl(`/v4/sports/${SPORT_KEY}/events/${eventId}/odds`, {
+  const url = buildOddsUrl(`/v4/sports/${SPORT_KEY}/events/${eventId}/odds`, {
     apiKey: ODDS_API_KEY,
     regions: REGIONS,
     markets: FEATURED_MARKETS,
@@ -194,7 +254,7 @@ async function getEventPlayerProps(eventId) {
   const hit = cacheGet(currentCache, cacheKey);
   if (hit) return hit;
 
-  const url = buildUrl(`/v4/sports/${SPORT_KEY}/events/${eventId}/odds`, {
+  const url = buildOddsUrl(`/v4/sports/${SPORT_KEY}/events/${eventId}/odds`, {
     apiKey: ODDS_API_KEY,
     regions: REGIONS,
     markets: PLAYER_PROP_MARKETS,
@@ -215,7 +275,7 @@ async function getHistoricalSnapshot(dateIso) {
   const hit = cacheGet(historicalCache, cacheKey);
   if (hit) return hit;
 
-  const url = buildUrl(`/v4/historical/sports/${SPORT_KEY}/odds`, {
+  const url = buildOddsUrl(`/v4/historical/sports/${SPORT_KEY}/odds`, {
     apiKey: ODDS_API_KEY,
     regions: REGIONS,
     markets: FEATURED_MARKETS,
@@ -230,9 +290,7 @@ async function getHistoricalSnapshot(dateIso) {
 
 function matchHistoricalEvent(snapshotEvents, homeTeam, awayTeam) {
   return (snapshotEvents || []).find(
-    event =>
-      event.home_team === homeTeam &&
-      event.away_team === awayTeam
+    event => event.home_team === homeTeam && event.away_team === awayTeam
   ) || null;
 }
 
@@ -307,7 +365,9 @@ function extractFeaturedConsensus(eventOdds) {
       awayPrice: bookAwayPrice,
       homeSpread: bookHomeSpread,
       awaySpread: bookAwaySpread,
-      total: bookTotal
+      total: bookTotal,
+      homeFormats: buildOddsFormats(bookHomePrice),
+      awayFormats: buildOddsFormats(bookAwayPrice)
     });
   }
 
@@ -410,10 +470,7 @@ function extractPropSummary(propsEventOdds) {
 
 function buildPropSignal(propSummary) {
   if (!propSummary || !propSummary.length) {
-    return {
-      adj: 0,
-      depth: 0
-    };
+    return { adj: 0, depth: 0 };
   }
 
   let strength = 0;
@@ -421,9 +478,7 @@ function buildPropSignal(propSummary) {
 
   for (const market of propSummary) {
     for (const row of market.top || []) {
-      if (typeof row.point !== "number" || typeof row.avgPrice !== "number") {
-        continue;
-      }
+      if (typeof row.point !== "number" || typeof row.avgPrice !== "number") continue;
 
       const booksBoost = clamp((row.booksCount - 1) * 0.0015, 0, 0.01);
       const priceStrength = clamp((2.2 - row.avgPrice) * 0.01, -0.01, 0.02);
@@ -434,10 +489,8 @@ function buildPropSignal(propSummary) {
     }
   }
 
-  const adj = clamp((strength / Math.max(observations, 1)) * 0.4, 0, 0.01);
-
   return {
-    adj,
+    adj: clamp((strength / Math.max(observations, 1)) * 0.4, 0, 0.01),
     depth: observations
   };
 }
@@ -474,12 +527,91 @@ async function buildHistoricalComparisons(homeTeam, awayTeam) {
   return comparisons;
 }
 
-function buildMode(commenceTime) {
-  const startMs = new Date(commenceTime).getTime();
-  return Date.now() >= startMs ? "live" : "pregame";
+// ---------- injury + lineup via Fantasy Nerds ----------
+function normalizeFantasyNerdsRows(payload) {
+  if (Array.isArray(payload)) return payload;
+  if (Array.isArray(payload?.Data)) return payload.Data;
+  if (Array.isArray(payload?.data)) return payload.data;
+  if (Array.isArray(payload?.players)) return payload.players;
+  if (Array.isArray(payload?.lineups)) return payload.lineups;
+  return [];
 }
 
-function buildConfidence(currentConsensus, historicalComparisons, propSignal) {
+function teamNameLooseMatch(sourceText, teamName) {
+  if (!sourceText || !teamName) return false;
+  const a = sourceText.toLowerCase();
+  const b = teamName.toLowerCase();
+  const lastWord = teamName.split(" ").slice(-1)[0].toLowerCase();
+  return a.includes(b) || a.includes(lastWord);
+}
+
+async function getFantasyNerdsInjuries() {
+  if (!requireFantasyNerdsKey()) return { available: false, rows: [] };
+
+  const cacheKey = "fn:injuries";
+  const hit = cacheGet(sideInfoCache, cacheKey);
+  if (hit) return hit;
+
+  const url = `https://api.fantasynerds.com/v1/nba/injuries?apikey=${encodeURIComponent(FANTASYNERDS_API_KEY)}`;
+  const raw = await fetchJson(url);
+  const value = {
+    available: true,
+    rows: normalizeFantasyNerdsRows(raw),
+    raw
+  };
+  cacheSet(sideInfoCache, cacheKey, value, SIDEINFO_TTL_MS);
+  return value;
+}
+
+async function getFantasyNerdsLineups(dateStr = "") {
+  if (!requireFantasyNerdsKey()) return { available: false, rows: [] };
+
+  const cacheKey = `fn:lineups:${dateStr || "today"}`;
+  const hit = cacheGet(sideInfoCache, cacheKey);
+  if (hit) return hit;
+
+  const url = `https://api.fantasynerds.com/v1/nba/lineups?apikey=${encodeURIComponent(FANTASYNERDS_API_KEY)}&date=${encodeURIComponent(dateStr)}`;
+  const raw = await fetchJson(url);
+  const value = {
+    available: true,
+    rows: normalizeFantasyNerdsRows(raw),
+    raw
+  };
+  cacheSet(sideInfoCache, cacheKey, value, SIDEINFO_TTL_MS);
+  return value;
+}
+
+function summarizeInjuryLineup(homeTeam, awayTeam, injuriesRows, lineupsRows) {
+  const homeInjuries = injuriesRows.filter(row =>
+    teamNameLooseMatch(JSON.stringify(row), homeTeam)
+  );
+  const awayInjuries = injuriesRows.filter(row =>
+    teamNameLooseMatch(JSON.stringify(row), awayTeam)
+  );
+
+  const relevantLineups = lineupsRows.filter(row =>
+    teamNameLooseMatch(JSON.stringify(row), homeTeam) ||
+    teamNameLooseMatch(JSON.stringify(row), awayTeam)
+  );
+
+  const homePenalty = clamp(homeInjuries.length * 0.004, 0, 0.03);
+  const awayPenalty = clamp(awayInjuries.length * 0.004, 0, 0.03);
+
+  return {
+    available: injuriesRows.length > 0 || lineupsRows.length > 0,
+    homeInjuriesCount: homeInjuries.length,
+    awayInjuriesCount: awayInjuries.length,
+    lineupRowsCount: relevantLineups.length,
+    homePenalty,
+    awayPenalty,
+    homeInjuries,
+    awayInjuries,
+    lineups: relevantLineups
+  };
+}
+
+// ---------- model ----------
+function buildConfidence(currentConsensus, historicalComparisons, propSignal, injurySummary) {
   let score = 50;
 
   score += clamp((currentConsensus.bookCount - 3) * 6, 0, 25);
@@ -490,19 +622,22 @@ function buildConfidence(currentConsensus, historicalComparisons, propSignal) {
 
   score += clamp(propSignal.depth * 0.7, 0, 12);
 
+  if (injurySummary.available) {
+    score += 6;
+    score -= clamp((injurySummary.homeInjuriesCount + injurySummary.awayInjuriesCount) * 1.2, 0, 10);
+  }
+
   score = clamp(score, 0, 100);
 
   let label = "Low";
   if (score >= 75) label = "High";
   else if (score >= 55) label = "Medium";
 
-  return { score, label };
+  return { score, label, percent: score / 100 };
 }
 
 function buildStakeSuggestion(edge, confidenceLabel) {
-  if (edge < 0.02) {
-    return { tier: "No bet", fraction: 0 };
-  }
+  if (edge < 0.02) return { tier: "No bet", fraction: 0 };
   if (edge < 0.04) {
     return confidenceLabel === "High"
       ? { tier: "Small", fraction: 0.25 }
@@ -519,13 +654,8 @@ function buildStakeSuggestion(edge, confidenceLabel) {
 }
 
 function buildVerdict(rawEdge, confidence, mode, disagreementPenalty) {
-  if (rawEdge < 0.015) {
-    return "No edge";
-  }
-
-  if (confidence.label === "Low" || disagreementPenalty > 0.025) {
-    return "Low confidence";
-  }
+  if (rawEdge < 0.015) return "No edge";
+  if (confidence.label === "Low" || disagreementPenalty > 0.025) return "Low confidence";
 
   if (mode === "live") {
     if (rawEdge >= 0.05 && confidence.score >= 75) return "Bet now";
@@ -538,7 +668,7 @@ function buildVerdict(rawEdge, confidence, mode, disagreementPenalty) {
   return "Avoid";
 }
 
-function buildProbabilityModel(currentConsensus, historicalComparisons, propSignal, mode) {
+function buildProbabilityModel(currentConsensus, historicalComparisons, propSignal, mode, injurySummary) {
   const homeMarketProb = currentConsensus.homeMarketProb;
   const awayMarketProb = currentConsensus.awayMarketProb;
 
@@ -559,12 +689,17 @@ function buildProbabilityModel(currentConsensus, historicalComparisons, propSign
 
   const propAdj = clamp(propSignal.adj, 0, 0.01);
 
+  const injuryAdjHome = injurySummary.available
+    ? clamp(injurySummary.awayPenalty - injurySummary.homePenalty, -0.03, 0.03)
+    : 0;
+
   let homeTrueProb =
     homeMarketProb +
     currentConsensus.spreadAdj +
     currentConsensus.totalAdj +
     lineMovementAdj +
-    propAdj -
+    propAdj +
+    injuryAdjHome -
     currentConsensus.disagreementPenalty;
 
   let awayTrueProb =
@@ -573,6 +708,7 @@ function buildProbabilityModel(currentConsensus, historicalComparisons, propSign
     currentConsensus.totalAdj -
     lineMovementAdj -
     propAdj -
+    injuryAdjHome -
     currentConsensus.disagreementPenalty;
 
   homeTrueProb = clamp(homeTrueProb, 0.01, 0.99);
@@ -596,10 +732,12 @@ function buildProbabilityModel(currentConsensus, historicalComparisons, propSign
     trueProbability,
     rawEdge,
     lineMovementAdj,
-    propAdj
+    propAdj,
+    injuryAdjHome
   };
 }
 
+// ---------- routes ----------
 app.get("/", (req, res) => {
   res.sendFile(path.join(__dirname, "index.html"));
 });
@@ -607,15 +745,16 @@ app.get("/", (req, res) => {
 app.get("/health", (req, res) => {
   res.json({
     status: "ok",
-    apiKeyAdded: requireApiKey(),
-    mode: requireApiKey() ? "live" : "mock",
+    oddsApiKeyAdded: requireOddsKey(),
+    fantasyNerdsKeyAdded: requireFantasyNerdsKey(),
+    mode: requireOddsKey() ? "live" : "mock",
     timestamp: new Date().toISOString()
   });
 });
 
 app.get("/games", async (req, res) => {
   try {
-    if (!requireApiKey()) {
+    if (!requireOddsKey()) {
       return res.status(400).json({
         error: "Missing ODDS_API_KEY",
         games: []
@@ -651,7 +790,7 @@ app.get("/games", async (req, res) => {
 
 app.get("/odds", async (req, res) => {
   try {
-    if (!requireApiKey()) {
+    if (!requireOddsKey()) {
       return res.status(400).json({ error: "Missing ODDS_API_KEY" });
     }
 
@@ -679,17 +818,31 @@ app.get("/odds", async (req, res) => {
     const propSummary = extractPropSummary(props);
     const propSignal = buildPropSignal(propSummary);
 
+    const [injuriesInfo, lineupsInfo] = await Promise.all([
+      getFantasyNerdsInjuries(),
+      getFantasyNerdsLineups()
+    ]);
+
+    const injurySummary = summarizeInjuryLineup(
+      featured.home_team,
+      featured.away_team,
+      injuriesInfo.rows || [],
+      lineupsInfo.rows || []
+    );
+
     const model = buildProbabilityModel(
       currentConsensus,
       historicalComparisons,
       propSignal,
-      mode
+      mode,
+      injurySummary
     );
 
     const confidence = buildConfidence(
       currentConsensus,
       historicalComparisons,
-      propSignal
+      propSignal,
+      injurySummary
     );
 
     const verdict = buildVerdict(
@@ -704,7 +857,7 @@ app.get("/odds", async (req, res) => {
     const pickTeam =
       model.pickSide === "home" ? featured.home_team : featured.away_team;
 
-    const sportsbookOddsDecimal =
+    const chosenDecimal =
       model.pickSide === "home"
         ? currentConsensus.bestHomePrice
         : currentConsensus.bestAwayPrice;
@@ -722,8 +875,8 @@ app.get("/odds", async (req, res) => {
       rawEdge: model.rawEdge,
       verdict,
       confidenceScore: confidence.score,
-      confidenceLabel: confidence.label,
-      bestPrice: sportsbookOddsDecimal,
+      confidencePercent: confidence.percent,
+      bestPrice: chosenDecimal,
       pick,
       stakeTier: stake.tier
     };
@@ -736,15 +889,21 @@ app.get("/odds", async (req, res) => {
       awayTeam: featured.away_team,
       commenceTime: featured.commence_time,
       gameMode: mode,
-      sportsbookOddsDecimal,
+
+      pick,
+      verdict,
+      confidence,
+
       impliedProbability: model.impliedProbability,
       trueProbability: model.trueProbability,
       edge: smoothedEdge,
-      verdict,
-      pick,
-      confidence,
+
+      oddsFormats: buildOddsFormats(chosenDecimal),
+      sportsbookOddsDecimal: chosenDecimal,
+
       stakeSuggestion: stake,
       history: edgeHistoryStore[gameId] || [],
+
       modelDetails: {
         spreadAdj: currentConsensus.spreadAdj,
         totalConsensus: currentConsensus.totalConsensus,
@@ -752,6 +911,7 @@ app.get("/odds", async (req, res) => {
         disagreementPenalty: currentConsensus.disagreementPenalty,
         lineMovementAdj: model.lineMovementAdj,
         propAdj: model.propAdj,
+        injuryAdjHome: model.injuryAdjHome,
         avgHomePrice: currentConsensus.avgHomePrice,
         avgAwayPrice: currentConsensus.avgAwayPrice,
         bestHomePrice: currentConsensus.bestHomePrice,
@@ -761,12 +921,23 @@ app.get("/odds", async (req, res) => {
         bookCount: currentConsensus.bookCount,
         historicalComparisons
       },
+
       bookmakerTable: currentConsensus.books,
+
       propsSummary: propSummary,
+
       injuryStatus: {
-        available: false,
-        note: "No injury/lineup source connected yet"
+        available: injurySummary.available,
+        homeInjuriesCount: injurySummary.homeInjuriesCount,
+        awayInjuriesCount: injurySummary.awayInjuriesCount,
+        lineupRowsCount: injurySummary.lineupRowsCount,
+        homePenalty: injurySummary.homePenalty,
+        awayPenalty: injurySummary.awayPenalty,
+        homeInjuries: injurySummary.homeInjuries,
+        awayInjuries: injurySummary.awayInjuries,
+        lineups: injurySummary.lineups
       },
+
       timestamp
     });
   } catch (error) {
