@@ -15,7 +15,7 @@
     }
 
     .container {
-      max-width: 1150px;
+      max-width: 1180px;
       margin: 0 auto;
     }
 
@@ -71,6 +71,11 @@
       color: #ddd;
     }
 
+    .subtle {
+      color: #bbb;
+      font-size: 14px;
+    }
+
     canvas {
       background: #fff;
       border-radius: 10px;
@@ -98,11 +103,6 @@
     .medium { color: #facc15; }
     .high { color: #4ade80; }
 
-    .small {
-      color: #bbb;
-      font-size: 14px;
-    }
-
     .pill {
       display: inline-block;
       padding: 4px 10px;
@@ -117,17 +117,38 @@
       background: #2a2a2a;
       padding: 10px;
       border-radius: 10px;
-      margin-bottom: 10px;
+      min-height: 70px;
     }
 
-    .lineup-grid {
+    .two-col {
       display: grid;
       grid-template-columns: 1fr 1fr;
       gap: 12px;
     }
 
+    .props-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 12px;
+    }
+
+    .prop-section {
+      background: #2a2a2a;
+      padding: 12px;
+      border-radius: 10px;
+    }
+
+    .prop-row {
+      padding: 8px 0;
+      border-bottom: 1px solid #333;
+    }
+
+    .prop-row:last-child {
+      border-bottom: none;
+    }
+
     @media (max-width: 900px) {
-      .stats, .row-3, .row-4, .lineup-grid {
+      .stats, .row-3, .row-4, .two-col, .props-grid {
         grid-template-columns: 1fr;
       }
     }
@@ -137,7 +158,7 @@
   <div class="container">
     <div class="card">
       <h1>NBA Edge Tracker</h1>
-      <p class="small">Live dashboard · smarter refresh by game state · last 15 minutes graph</p>
+      <p class="subtle">Live dashboard · smarter refresh by game state · last 15 minutes graph</p>
     </div>
 
     <div class="card">
@@ -160,43 +181,38 @@
           <p id="verdict">-</p>
         </div>
         <div class="stat">
-          <strong>Implied Probability</strong>
-          <p id="implied">-</p>
-        </div>
-        <div class="stat">
-          <strong>True Probability</strong>
-          <p id="trueProb">-</p>
+          <strong>Game Mode</strong>
+          <p id="gameMode">-</p>
         </div>
         <div class="stat">
           <strong>Last Update</strong>
           <p id="updatedAt">-</p>
         </div>
-        <div class="stat">
-          <strong>Game Mode</strong>
-          <p id="gameMode">-</p>
-        </div>
       </div>
     </div>
 
     <div class="card">
-      <h2>Selected Odds Format</h2>
+      <h2>Odds / Probability</h2>
       <div class="row-4">
         <div class="stat">
-          <strong>Decimal</strong>
+          <strong>Sportsbook Odds</strong>
           <p id="oddsDecimal">-</p>
+          <p id="oddsAmerican" class="subtle">-</p>
         </div>
         <div class="stat">
-          <strong>American</strong>
-          <p id="oddsAmerican">-</p>
+          <strong>Implied Probability</strong>
+          <p id="impliedPercent">-</p>
+          <p id="impliedAmerican" class="subtle">-</p>
         </div>
         <div class="stat">
-          <strong>Implied % from Odds</strong>
-          <p id="oddsImpliedPercent">-</p>
+          <strong>True Probability</strong>
+          <p id="truePercent">-</p>
+          <p id="trueAmerican" class="subtle">-</p>
         </div>
         <div class="stat">
           <strong>Stake Suggestion</strong>
           <p id="stakeTier">-</p>
-          <p id="stakeFraction" class="small">-</p>
+          <p id="stakeFraction" class="subtle">-</p>
         </div>
       </div>
     </div>
@@ -213,8 +229,8 @@
           <p id="confidencePercent">-</p>
         </div>
         <div class="stat">
-          <strong>Confidence Score</strong>
-          <p id="confidenceScore">-</p>
+          <strong>Book Count</strong>
+          <p id="bookCount">-</p>
         </div>
       </div>
     </div>
@@ -243,8 +259,8 @@
           <p id="disagreementPenalty">-</p>
         </div>
         <div class="stat">
-          <strong>Book Count</strong>
-          <p id="bookCount">-</p>
+          <strong>Model Adjustments</strong>
+          <p id="modelAdjustments">-</p>
         </div>
       </div>
     </div>
@@ -254,27 +270,19 @@
       <div class="stats">
         <div class="stat">
           <strong>Best Home</strong>
-          <p id="bestHomeDecimal">-</p>
-          <p id="bestHomeAmerican" class="small">-</p>
-          <p id="bestHomePercent" class="small">-</p>
+          <p id="bestHome">-</p>
         </div>
         <div class="stat">
           <strong>Best Away</strong>
-          <p id="bestAwayDecimal">-</p>
-          <p id="bestAwayAmerican" class="small">-</p>
-          <p id="bestAwayPercent" class="small">-</p>
+          <p id="bestAway">-</p>
         </div>
         <div class="stat">
           <strong>Average Home</strong>
-          <p id="avgHomeDecimal">-</p>
-          <p id="avgHomeAmerican" class="small">-</p>
-          <p id="avgHomePercent" class="small">-</p>
+          <p id="avgHome">-</p>
         </div>
         <div class="stat">
           <strong>Average Away</strong>
-          <p id="avgAwayDecimal">-</p>
-          <p id="avgAwayAmerican" class="small">-</p>
-          <p id="avgAwayPercent" class="small">-</p>
+          <p id="avgAway">-</p>
         </div>
       </div>
     </div>
@@ -301,27 +309,68 @@
     </div>
 
     <div class="card">
-      <h2>Top Props Snapshot</h2>
-      <div id="propsContainer" class="small">No props loaded.</div>
+      <h2>Player Props</h2>
+      <div class="props-grid">
+        <div class="prop-section">
+          <h3>Points</h3>
+          <div id="propsPoints">No data</div>
+        </div>
+        <div class="prop-section">
+          <h3>Assists</h3>
+          <div id="propsAssists">No data</div>
+        </div>
+        <div class="prop-section">
+          <h3>Rebounds</h3>
+          <div id="propsRebounds">No data</div>
+        </div>
+        <div class="prop-section">
+          <h3>PRA</h3>
+          <div id="propsPra">No data</div>
+        </div>
+      </div>
     </div>
 
     <div class="card">
-      <h2>Injuries</h2>
-      <div class="row-3">
+      <h2>Injuries / Starters</h2>
+      <div class="row-4">
         <div class="stat">
-          <strong>Home Injury Count</strong>
+          <strong>Home Injuries</strong>
           <p id="homeInjuryCount">-</p>
         </div>
         <div class="stat">
-          <strong>Away Injury Count</strong>
+          <strong>Away Injuries</strong>
           <p id="awayInjuryCount">-</p>
         </div>
         <div class="stat">
-          <strong>Lineup Rows</strong>
-          <p id="lineupRowsCount">-</p>
+          <strong>Home Starters Out</strong>
+          <p id="homeStartersOut">-</p>
+        </div>
+        <div class="stat">
+          <strong>Away Starters Out</strong>
+          <p id="awayStartersOut">-</p>
         </div>
       </div>
-      <div class="lineup-grid" style="margin-top: 14px;">
+
+      <div class="row-4" style="margin-top:12px;">
+        <div class="stat">
+          <strong>Home Starter Certainty</strong>
+          <p id="homeStarterCertainty">-</p>
+        </div>
+        <div class="stat">
+          <strong>Away Starter Certainty</strong>
+          <p id="awayStarterCertainty">-</p>
+        </div>
+        <div class="stat">
+          <strong>Home Penalty</strong>
+          <p id="homePenalty">-</p>
+        </div>
+        <div class="stat">
+          <strong>Away Penalty</strong>
+          <p id="awayPenalty">-</p>
+        </div>
+      </div>
+
+      <div class="two-col" style="margin-top:12px;">
         <div>
           <h3>Home Injuries</h3>
           <div id="homeInjuriesBox" class="injury-box">No data</div>
@@ -347,7 +396,6 @@
     let refreshTimer = null;
 
     const ctx = document.getElementById("edgeChart").getContext("2d");
-
     const edgeChart = new Chart(ctx, {
       type: "line",
       data: {
@@ -412,18 +460,19 @@
       document.getElementById("pick").textContent = "Pick: -";
       document.getElementById("edgeValue").textContent = "-";
       document.getElementById("verdict").textContent = "-";
-      document.getElementById("implied").textContent = "-";
-      document.getElementById("trueProb").textContent = "-";
-      document.getElementById("updatedAt").textContent = "-";
       document.getElementById("gameMode").textContent = "-";
+      document.getElementById("updatedAt").textContent = "-";
 
       document.getElementById("oddsDecimal").textContent = "-";
       document.getElementById("oddsAmerican").textContent = "-";
-      document.getElementById("oddsImpliedPercent").textContent = "-";
+      document.getElementById("impliedPercent").textContent = "-";
+      document.getElementById("impliedAmerican").textContent = "-";
+      document.getElementById("truePercent").textContent = "-";
+      document.getElementById("trueAmerican").textContent = "-";
 
       document.getElementById("confidenceLabel").textContent = "-";
       document.getElementById("confidencePercent").textContent = "-";
-      document.getElementById("confidenceScore").textContent = "-";
+      document.getElementById("bookCount").textContent = "-";
 
       document.getElementById("stakeTier").textContent = "-";
       document.getElementById("stakeFraction").textContent = "-";
@@ -433,30 +482,31 @@
       document.getElementById("avgSpread").textContent = "-";
       document.getElementById("avgTotal").textContent = "-";
       document.getElementById("disagreementPenalty").textContent = "-";
-      document.getElementById("bookCount").textContent = "-";
+      document.getElementById("modelAdjustments").textContent = "-";
 
-      document.getElementById("bestHomeDecimal").textContent = "-";
-      document.getElementById("bestHomeAmerican").textContent = "-";
-      document.getElementById("bestHomePercent").textContent = "-";
-      document.getElementById("bestAwayDecimal").textContent = "-";
-      document.getElementById("bestAwayAmerican").textContent = "-";
-      document.getElementById("bestAwayPercent").textContent = "-";
-      document.getElementById("avgHomeDecimal").textContent = "-";
-      document.getElementById("avgHomeAmerican").textContent = "-";
-      document.getElementById("avgHomePercent").textContent = "-";
-      document.getElementById("avgAwayDecimal").textContent = "-";
-      document.getElementById("avgAwayAmerican").textContent = "-";
-      document.getElementById("avgAwayPercent").textContent = "-";
+      document.getElementById("bestHome").textContent = "-";
+      document.getElementById("bestAway").textContent = "-";
+      document.getElementById("avgHome").textContent = "-";
+      document.getElementById("avgAway").textContent = "-";
 
       document.getElementById("homeInjuryCount").textContent = "-";
       document.getElementById("awayInjuryCount").textContent = "-";
-      document.getElementById("lineupRowsCount").textContent = "-";
+      document.getElementById("homeStartersOut").textContent = "-";
+      document.getElementById("awayStartersOut").textContent = "-";
+      document.getElementById("homeStarterCertainty").textContent = "-";
+      document.getElementById("awayStarterCertainty").textContent = "-";
+      document.getElementById("homePenalty").textContent = "-";
+      document.getElementById("awayPenalty").textContent = "-";
+
       document.getElementById("homeInjuriesBox").textContent = "No data";
       document.getElementById("awayInjuriesBox").textContent = "No data";
       document.getElementById("lineupsBox").textContent = "No lineup source connected yet.";
 
       document.getElementById("bookmakerTableBody").innerHTML = "";
-      document.getElementById("propsContainer").innerHTML = "No props loaded.";
+      document.getElementById("propsPoints").innerHTML = "No data";
+      document.getElementById("propsAssists").innerHTML = "No data";
+      document.getElementById("propsRebounds").innerHTML = "No data";
+      document.getElementById("propsPra").innerHTML = "No data";
 
       edgeChart.data.labels = [];
       edgeChart.data.datasets[0].data = [];
@@ -467,6 +517,12 @@
       if (typeof current !== "number" || typeof past !== "number") return "-";
       const delta = current - past;
       return `${delta >= 0 ? "+" : ""}${(delta * 100).toFixed(2)}%`;
+    }
+
+    function formatOddsPair(decimal, american) {
+      const dec = typeof decimal === "number" ? decimal : "-";
+      const am = typeof american === "number" ? formatAmerican(american) : "-";
+      return `${dec} / ${am}`;
     }
 
     function renderBookmakerTable(rows) {
@@ -482,16 +538,8 @@
         const tr = document.createElement("tr");
         tr.innerHTML = `
           <td>${row.book || "-"}</td>
-          <td>
-            Dec: ${row.homeFormats?.decimal ?? "-"}<br>
-            Am: ${typeof row.homeFormats?.american === "number" ? formatAmerican(row.homeFormats.american) : "-"}<br>
-            %: ${formatPercent(row.homeFormats?.impliedPercent)}
-          </td>
-          <td>
-            Dec: ${row.awayFormats?.decimal ?? "-"}<br>
-            Am: ${typeof row.awayFormats?.american === "number" ? formatAmerican(row.awayFormats.american) : "-"}<br>
-            %: ${formatPercent(row.awayFormats?.impliedPercent)}
-          </td>
+          <td>${formatOddsPair(row.homeDecimal, row.homeAmerican)}</td>
+          <td>${formatOddsPair(row.awayDecimal, row.awayAmerican)}</td>
           <td>${row.homeSpread ?? "-"}</td>
           <td>${row.total ?? "-"}</td>
         `;
@@ -499,28 +547,22 @@
       }
     }
 
-    function renderProps(propsSummary) {
-      const container = document.getElementById("propsContainer");
+    function renderPropRows(rows, targetId) {
+      const target = document.getElementById(targetId);
 
-      if (!Array.isArray(propsSummary) || !propsSummary.length) {
-        container.innerHTML = "No props loaded.";
+      if (!Array.isArray(rows) || !rows.length) {
+        target.innerHTML = "No data";
         return;
       }
 
-      const html = propsSummary.slice(0, 3).map(section => {
-        const rows = (section.top || []).slice(0, 4).map(row => {
-          return `<div>${row.player} · ${row.side} ${row.point ?? ""} · avg ${formatNum(row.avgPrice)} · books ${row.booksCount}</div>`;
-        }).join("");
-
-        return `
-          <div style="margin-bottom:12px;">
-            <strong>${section.market}</strong>
-            <div>${rows}</div>
-          </div>
-        `;
-      }).join("");
-
-      container.innerHTML = html;
+      target.innerHTML = rows.slice(0, 8).map(row => `
+        <div class="prop-row">
+          <div><strong>${row.player}</strong></div>
+          <div>Line: ${row.line}</div>
+          <div>Over: ${typeof row.overDecimal === "number" ? row.overDecimal : "-"} / ${typeof row.overAmerican === "number" ? formatAmerican(row.overAmerican) : "-"}</div>
+          <div>Hit chance: ${formatPercent(row.hitProbability)}</div>
+        </div>
+      `).join("");
     }
 
     function renderInjuries(items, targetId) {
@@ -545,7 +587,7 @@
         return;
       }
 
-      box.innerHTML = items.slice(0, 8).map(item => {
+      box.innerHTML = items.slice(0, 10).map(item => {
         const text = Object.values(item).slice(0, 8).join(" · ");
         return `<div style="margin-bottom:8px;">${text}</div>`;
       }).join("");
@@ -621,24 +663,37 @@
       document.getElementById("pick").textContent = `Pick: ${data.pick}`;
       document.getElementById("edgeValue").textContent = formatPercent(data.edge);
       document.getElementById("verdict").textContent = data.verdict || "-";
-      document.getElementById("implied").textContent = formatPercent(data.impliedProbability);
-      document.getElementById("trueProb").textContent = formatPercent(data.trueProbability);
-      document.getElementById("updatedAt").textContent = new Date(data.timestamp).toLocaleTimeString();
       document.getElementById("gameMode").textContent = data.gameMode || "-";
+      document.getElementById("updatedAt").textContent =
+        new Date(data.timestamp).toLocaleTimeString();
 
       document.getElementById("oddsDecimal").textContent = data.oddsFormats?.decimal ?? "-";
       document.getElementById("oddsAmerican").textContent =
         typeof data.oddsFormats?.american === "number" ? formatAmerican(data.oddsFormats.american) : "-";
-      document.getElementById("oddsImpliedPercent").textContent =
-        formatPercent(data.oddsFormats?.impliedPercent);
 
-      document.getElementById("confidenceLabel").textContent = data.confidence?.label || "-";
+      document.getElementById("impliedPercent").textContent =
+        formatPercent(data.impliedProbability);
+      document.getElementById("impliedAmerican").textContent =
+        typeof data.impliedProbabilityFormats?.american === "number"
+          ? formatAmerican(data.impliedProbabilityFormats.american)
+          : "-";
+
+      document.getElementById("truePercent").textContent =
+        formatPercent(data.trueProbability);
+      document.getElementById("trueAmerican").textContent =
+        typeof data.trueProbabilityFormats?.american === "number"
+          ? formatAmerican(data.trueProbabilityFormats.american)
+          : "-";
+
+      document.getElementById("confidenceLabel").textContent =
+        data.confidence?.label || "-";
       document.getElementById("confidencePercent").textContent =
         formatPercent(data.confidence?.percent);
-      document.getElementById("confidenceScore").textContent =
-        typeof data.confidence?.score === "number" ? `${data.confidence.score}/100` : "-";
+      document.getElementById("bookCount").textContent =
+        data.modelDetails?.bookCount ?? "-";
 
-      document.getElementById("stakeTier").textContent = data.stakeSuggestion?.tier || "-";
+      document.getElementById("stakeTier").textContent =
+        data.stakeSuggestion?.tier || "-";
       document.getElementById("stakeFraction").textContent =
         typeof data.stakeSuggestion?.fraction === "number"
           ? `${(data.stakeSuggestion.fraction * 100).toFixed(0)}% unit`
@@ -650,47 +705,59 @@
       document.getElementById("move24h").textContent =
         getProbMoveText(data.impliedProbability, hist["24h"]?.homeMarketProb);
 
-      document.getElementById("avgSpread").textContent = formatNum(data.modelDetails?.avgHomeSpread);
-      document.getElementById("avgTotal").textContent = formatNum(data.modelDetails?.avgTotal);
+      document.getElementById("avgSpread").textContent =
+        formatNum(data.modelDetails?.avgHomeSpread);
+      document.getElementById("avgTotal").textContent =
+        formatNum(data.modelDetails?.avgTotal);
       document.getElementById("disagreementPenalty").textContent =
         formatPercent(data.modelDetails?.disagreementPenalty);
-      document.getElementById("bookCount").textContent = data.modelDetails?.bookCount ?? "-";
 
-      document.getElementById("bestHomeDecimal").textContent = data.modelDetails?.bestHomePrice ?? "-";
-      document.getElementById("bestHomeAmerican").textContent =
-        typeof data.modelDetails?.bestHomePrice === "number"
-          ? formatAmerican(decimalToAmericanClient(data.modelDetails.bestHomePrice))
-          : "-";
-      document.getElementById("bestHomePercent").textContent =
-        formatPercent(decimalToImpliedPercentClient(data.modelDetails?.bestHomePrice));
+      const modelAdjustmentsText = [
+        `Spread ${formatPercent(data.modelDetails?.spreadAdj)}`,
+        `Total ${formatPercent(data.modelDetails?.totalAdj)}`,
+        `Move ${formatPercent(data.modelDetails?.lineMovementAdj)}`,
+        `Props ${formatPercent(data.modelDetails?.propAdj)}`,
+        `Injury ${formatPercent(data.modelDetails?.injuryAdjHome)}`
+      ].join(" · ");
+      document.getElementById("modelAdjustments").textContent = modelAdjustmentsText;
 
-      document.getElementById("bestAwayDecimal").textContent = data.modelDetails?.bestAwayPrice ?? "-";
-      document.getElementById("bestAwayAmerican").textContent =
-        typeof data.modelDetails?.bestAwayPrice === "number"
-          ? formatAmerican(decimalToAmericanClient(data.modelDetails.bestAwayPrice))
-          : "-";
-      document.getElementById("bestAwayPercent").textContent =
-        formatPercent(decimalToImpliedPercentClient(data.modelDetails?.bestAwayPrice));
+      document.getElementById("bestHome").textContent =
+        formatOddsPair(
+          data.modelDetails?.bestHomePrice,
+          decimalToAmericanClient(data.modelDetails?.bestHomePrice)
+        );
+      document.getElementById("bestAway").textContent =
+        formatOddsPair(
+          data.modelDetails?.bestAwayPrice,
+          decimalToAmericanClient(data.modelDetails?.bestAwayPrice)
+        );
+      document.getElementById("avgHome").textContent =
+        formatOddsPair(
+          data.modelDetails?.avgHomePrice,
+          decimalToAmericanClient(data.modelDetails?.avgHomePrice)
+        );
+      document.getElementById("avgAway").textContent =
+        formatOddsPair(
+          data.modelDetails?.avgAwayPrice,
+          decimalToAmericanClient(data.modelDetails?.avgAwayPrice)
+        );
 
-      document.getElementById("avgHomeDecimal").textContent = formatNum(data.modelDetails?.avgHomePrice);
-      document.getElementById("avgHomeAmerican").textContent =
-        typeof data.modelDetails?.avgHomePrice === "number"
-          ? formatAmerican(decimalToAmericanClient(data.modelDetails.avgHomePrice))
-          : "-";
-      document.getElementById("avgHomePercent").textContent =
-        formatPercent(decimalToImpliedPercentClient(data.modelDetails?.avgHomePrice));
-
-      document.getElementById("avgAwayDecimal").textContent = formatNum(data.modelDetails?.avgAwayPrice);
-      document.getElementById("avgAwayAmerican").textContent =
-        typeof data.modelDetails?.avgAwayPrice === "number"
-          ? formatAmerican(decimalToAmericanClient(data.modelDetails.avgAwayPrice))
-          : "-";
-      document.getElementById("avgAwayPercent").textContent =
-        formatPercent(decimalToImpliedPercentClient(data.modelDetails?.avgAwayPrice));
-
-      document.getElementById("homeInjuryCount").textContent = data.injuryStatus?.homeInjuriesCount ?? "-";
-      document.getElementById("awayInjuryCount").textContent = data.injuryStatus?.awayInjuriesCount ?? "-";
-      document.getElementById("lineupRowsCount").textContent = data.injuryStatus?.lineupRowsCount ?? "-";
+      document.getElementById("homeInjuryCount").textContent =
+        data.injuryStatus?.homeInjuriesCount ?? "-";
+      document.getElementById("awayInjuryCount").textContent =
+        data.injuryStatus?.awayInjuriesCount ?? "-";
+      document.getElementById("homeStartersOut").textContent =
+        data.injuryStatus?.homeStartersOut ?? "-";
+      document.getElementById("awayStartersOut").textContent =
+        data.injuryStatus?.awayStartersOut ?? "-";
+      document.getElementById("homeStarterCertainty").textContent =
+        formatPercent(data.injuryStatus?.homeStarterCertainty);
+      document.getElementById("awayStarterCertainty").textContent =
+        formatPercent(data.injuryStatus?.awayStarterCertainty);
+      document.getElementById("homePenalty").textContent =
+        formatPercent(data.injuryStatus?.homePenalty);
+      document.getElementById("awayPenalty").textContent =
+        formatPercent(data.injuryStatus?.awayPenalty);
 
       renderInjuries(data.injuryStatus?.homeInjuries || [], "homeInjuriesBox");
       renderInjuries(data.injuryStatus?.awayInjuries || [], "awayInjuriesBox");
@@ -707,18 +774,17 @@
       edgeChart.update();
 
       renderBookmakerTable(data.bookmakerTable);
-      renderProps(data.propsSummary);
+
+      renderPropRows(data.propSections?.points || [], "propsPoints");
+      renderPropRows(data.propSections?.assists || [], "propsAssists");
+      renderPropRows(data.propSections?.rebounds || [], "propsRebounds");
+      renderPropRows(data.propSections?.pra || [], "propsPra");
     }
 
     function decimalToAmericanClient(decimalOdds) {
       if (typeof decimalOdds !== "number" || decimalOdds <= 1) return null;
       if (decimalOdds >= 2) return Math.round((decimalOdds - 1) * 100);
       return Math.round(-100 / (decimalOdds - 1));
-    }
-
-    function decimalToImpliedPercentClient(decimalOdds) {
-      if (typeof decimalOdds !== "number" || decimalOdds <= 1) return null;
-      return 1 / decimalOdds;
     }
 
     gameSelect.addEventListener("change", async (event) => {
