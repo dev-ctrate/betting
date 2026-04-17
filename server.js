@@ -4,8 +4,9 @@ const path = require("path");
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-const ODDS_API_KEY = process.env.ODDS_API_KEY || "";
-const FANTASYNERDS_API_KEY = process.env.FANTASYNERDS_API_KEY || "";
+7 const ODDS_API_KEY = process.env.ODDS_API_KEY || "";
+8 const FANTASYNERDS_API_KEY = process.env.FANTASYNERDS_API_KEY || "";
+9 const BDL_API_KEY = process.env.BDL_API_KEY || "";
 
 const SPORT_KEY = "basketball_nba";
 const REGIONS = "us";
@@ -109,6 +110,35 @@ async function fetchJson(url) {
   return await response.json();
 }
 
+async function fetchJson(url) {
+  const response = await fetch(url);
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(`Request failed ${response.status}: ${text}`);
+  }
+  return await response.json();
+}
+
+// 👇 ADD THIS EXACTLY HERE
+async function fetchBDL(url) {
+  if (!BDL_API_KEY) return null;
+
+  try {
+    const res = await fetch(url, {
+      headers: {
+        Authorization: BDL_API_KEY
+      }
+    });
+
+    if (!res.ok) return null;
+
+    const data = await res.json();
+    return data?.data || [];
+
+  } catch {
+    return null;
+  }
+}
 function buildOddsUrl(pathname, params) {
   const base = `https://api.the-odds-api.com${pathname}`;
   const sp = new URLSearchParams(params);
@@ -602,7 +632,13 @@ async function getFantasyNerdsInjuries() {
     raw
   };
   cacheSet(sideInfoCache, cacheKey, value, SIDEINFO_TTL_MS);
-  return value;
+return value;
+}
+
+// 👇 ADD THIS EXACTLY HERE
+async function getBDLInjuries() {
+  const data = await fetchBDL("https://api.balldontlie.io/v1/player_injuries");
+  return data || [];
 }
 
 async function getFantasyNerdsLineups(dateStr = "") {
