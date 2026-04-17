@@ -4,7 +4,8 @@ const app = express();
 
 const PORT = process.env.PORT || 3000;
 
-// PASTE YOUR REAL API KEY HERE TOMORROW
+// API disabled for now.
+// Tomorrow, switch this back to: const API_KEY = process.env.API_KEY;
 const API_KEY = null;
 
 // Store last 15 minutes of edge history per game
@@ -18,7 +19,7 @@ function makeGameId(game) {
     .replace(/^-|-$/g, "");
 }
 
-// Keep only last 15 minutes of data
+// Keep only last 15 minutes of history
 function trimHistory(gameId) {
   const cutoff = Date.now() - 15 * 60 * 1000;
   historyStore[gameId] = (historyStore[gameId] || []).filter(point => {
@@ -42,7 +43,7 @@ async function fetchNbaOdds() {
   return await response.json();
 }
 
-// Extract useful game data
+// Convert real API game into dashboard data
 function getGameData(rawGame) {
   if (!rawGame.bookmakers || rawGame.bookmakers.length === 0) {
     return null;
@@ -75,7 +76,7 @@ function getGameData(rawGame) {
   const homeImpliedProbability = 1 / homeOdds;
   const awayImpliedProbability = 1 / awayOdds;
 
-  // Temporary placeholder model for now
+  // Temporary edge model placeholder
   const homeTrueProbability = Math.min(homeImpliedProbability + 0.03, 0.95);
   const awayTrueProbability = Math.min(awayImpliedProbability + 0.03, 0.95);
 
@@ -127,18 +128,34 @@ app.get("/", (req, res) => {
 app.get("/health", (req, res) => {
   res.json({
     status: "ok",
-    apiKeyAdded: API_KEY !== "PASTE_YOUR_API_KEY_HERE",
+    apiKeyAdded: !!API_KEY,
+    mode: API_KEY ? "live" : "mock",
     timestamp: new Date().toISOString()
   });
 });
 
-// List NBA games now to next 24 hours
+// Games list
 app.get("/games", async (req, res) => {
   try {
-    if (API_KEY === "PASTE_YOUR_API_KEY_HERE") {
+    if (!API_KEY) {
       return res.json({
-        mode: "setup",
-        games: []
+        mode: "mock",
+        games: [
+          {
+            id: "warriors-at-suns",
+            label: "Golden State Warriors @ Phoenix Suns",
+            homeTeam: "Phoenix Suns",
+            awayTeam: "Golden State Warriors",
+            commenceTime: new Date(Date.now() + 2 * 60 * 60 * 1000).toISOString()
+          },
+          {
+            id: "hornets-at-magic",
+            label: "Charlotte Hornets @ Orlando Magic",
+            homeTeam: "Orlando Magic",
+            awayTeam: "Charlotte Hornets",
+            commenceTime: new Date(Date.now() + 4 * 60 * 60 * 1000).toISOString()
+          }
+        ]
       });
     }
 
@@ -172,20 +189,80 @@ app.get("/games", async (req, res) => {
   }
 });
 
-// Return selected game data + history
+// Selected game dashboard data
 app.get("/odds", async (req, res) => {
   try {
-    if (API_KEY === "PASTE_YOUR_API_KEY_HERE") {
-      return res.status(400).json({
-        error: "API key not added yet"
-      });
-    }
-
     const gameId = req.query.gameId;
 
     if (!gameId) {
       return res.status(400).json({
         error: "Missing gameId query parameter"
+      });
+    }
+
+    if (!API_KEY) {
+      const mockGames = {
+        "warriors-at-suns": {
+          id: "warriors-at-suns",
+          homeTeam: "Phoenix Suns",
+          awayTeam: "Golden State Warriors",
+          pick: "Phoenix Suns to win",
+          sportsbookOddsDecimal: 2.15
+        },
+        "hornets-at-magic": {
+          id: "hornets-at-magic",
+          homeTeam: "Orlando Magic",
+          awayTeam: "Charlotte Hornets",
+          pick: "Orlando Magic to win",
+          sportsbookOddsDecimal: 1.80
+        }
+      };
+
+      const game = mockGames[gameId];
+
+      if (!game) {
+        return res.status(404).json({
+          error: "Mock game not found"
+        });
+      }
+
+      const impliedProbability = 1 / game.sportsbookOddsDecimal;
+      const trueProbability = Math.min(
+        impliedProbability + 0.01 + Math.random() * 0.05,
+        0.95
+      );
+      const edge = trueProbability - impliedProbability;
+
+      let verdict = "Bad value";
+      if (edge >= 0.05) {
+        verdict = "Good value";
+      } else if (edge > 0) {
+        verdict = "Small edge";
+      }
+
+      const current = {
+        ...game,
+        impliedProbability,
+        trueProbability,
+        edge,
+        verdict,
+        timestamp: new Date().toISOString()
+      };
+
+      if (!historyStore[gameId]) {
+        historyStore[gameId] = [];
+      }
+
+      historyStore[gameId].push({
+        timestamp: current.timestamp,
+        edge: current.edge
+      });
+
+      trimHistory(gameId);
+
+      return res.json({
+        ...current,
+        history: historyStore[gameId]
       });
     }
 
