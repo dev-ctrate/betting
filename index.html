@@ -15,7 +15,7 @@
     }
 
     .container {
-      max-width: 1100px;
+      max-width: 1150px;
       margin: 0 auto;
     }
 
@@ -45,6 +45,18 @@
       margin-top: 15px;
     }
 
+    .row-3 {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 12px;
+    }
+
+    .row-4 {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 12px;
+    }
+
     .stat {
       background: #2a2a2a;
       padding: 12px;
@@ -57,12 +69,6 @@
       border-radius: 10px;
       margin-top: 12px;
       color: #ddd;
-    }
-
-    .row-3 {
-      display: grid;
-      grid-template-columns: repeat(3, minmax(0, 1fr));
-      gap: 12px;
     }
 
     canvas {
@@ -81,21 +87,47 @@
       border-bottom: 1px solid #333;
       padding: 8px;
       text-align: left;
+      vertical-align: top;
     }
 
     .bet { color: #4ade80; font-weight: 700; }
     .watch { color: #facc15; font-weight: 700; }
     .avoid { color: #f87171; font-weight: 700; }
+
     .low { color: #f87171; }
     .medium { color: #facc15; }
     .high { color: #4ade80; }
+
     .small {
       color: #bbb;
       font-size: 14px;
     }
 
-    @media (max-width: 800px) {
-      .stats, .row-3 {
+    .pill {
+      display: inline-block;
+      padding: 4px 10px;
+      border-radius: 999px;
+      background: #333;
+      font-size: 12px;
+      margin-right: 6px;
+      margin-bottom: 6px;
+    }
+
+    .injury-box {
+      background: #2a2a2a;
+      padding: 10px;
+      border-radius: 10px;
+      margin-bottom: 10px;
+    }
+
+    .lineup-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 12px;
+    }
+
+    @media (max-width: 900px) {
+      .stats, .row-3, .row-4, .lineup-grid {
         grid-template-columns: 1fr;
       }
     }
@@ -105,7 +137,7 @@
   <div class="container">
     <div class="card">
       <h1>NBA Edge Tracker</h1>
-      <p class="small">Updates every 30 seconds · shows last 15 minutes</p>
+      <p class="small">Live dashboard · smarter refresh by game state · last 15 minutes graph</p>
     </div>
 
     <div class="card">
@@ -128,10 +160,6 @@
           <p id="verdict">-</p>
         </div>
         <div class="stat">
-          <strong>Sportsbook Odds</strong>
-          <p id="odds">-</p>
-        </div>
-        <div class="stat">
           <strong>Implied Probability</strong>
           <p id="implied">-</p>
         </div>
@@ -143,21 +171,6 @@
           <strong>Last Update</strong>
           <p id="updatedAt">-</p>
         </div>
-      </div>
-    </div>
-
-    <div class="card">
-      <div class="row-3">
-        <div class="stat">
-          <strong>Confidence</strong>
-          <p id="confidenceLabel">-</p>
-          <p id="confidenceScore" class="small">-</p>
-        </div>
-        <div class="stat">
-          <strong>Stake Suggestion</strong>
-          <p id="stakeTier">-</p>
-          <p id="stakeFraction" class="small">-</p>
-        </div>
         <div class="stat">
           <strong>Game Mode</strong>
           <p id="gameMode">-</p>
@@ -166,22 +179,63 @@
     </div>
 
     <div class="card">
+      <h2>Selected Odds Format</h2>
+      <div class="row-4">
+        <div class="stat">
+          <strong>Decimal</strong>
+          <p id="oddsDecimal">-</p>
+        </div>
+        <div class="stat">
+          <strong>American</strong>
+          <p id="oddsAmerican">-</p>
+        </div>
+        <div class="stat">
+          <strong>Implied % from Odds</strong>
+          <p id="oddsImpliedPercent">-</p>
+        </div>
+        <div class="stat">
+          <strong>Stake Suggestion</strong>
+          <p id="stakeTier">-</p>
+          <p id="stakeFraction" class="small">-</p>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Confidence</h2>
+      <div class="row-3">
+        <div class="stat">
+          <strong>Confidence Label</strong>
+          <p id="confidenceLabel">-</p>
+        </div>
+        <div class="stat">
+          <strong>Confidence %</strong>
+          <p id="confidencePercent">-</p>
+        </div>
+        <div class="stat">
+          <strong>Confidence Score</strong>
+          <p id="confidenceScore">-</p>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
       <h2>Line Movement</h2>
       <div class="stats">
         <div class="stat">
-          <strong>2h move</strong>
+          <strong>2h Probability Move</strong>
           <p id="move2h">-</p>
         </div>
         <div class="stat">
-          <strong>24h move</strong>
+          <strong>24h Probability Move</strong>
           <p id="move24h">-</p>
         </div>
         <div class="stat">
-          <strong>Avg Home Spread</strong>
+          <strong>Average Home Spread</strong>
           <p id="avgSpread">-</p>
         </div>
         <div class="stat">
-          <strong>Avg Total</strong>
+          <strong>Average Total</strong>
           <p id="avgTotal">-</p>
         </div>
         <div class="stat">
@@ -199,20 +253,28 @@
       <h2>Best Price vs Market Average</h2>
       <div class="stats">
         <div class="stat">
-          <strong>Best Home Price</strong>
-          <p id="bestHomePrice">-</p>
+          <strong>Best Home</strong>
+          <p id="bestHomeDecimal">-</p>
+          <p id="bestHomeAmerican" class="small">-</p>
+          <p id="bestHomePercent" class="small">-</p>
         </div>
         <div class="stat">
-          <strong>Best Away Price</strong>
-          <p id="bestAwayPrice">-</p>
+          <strong>Best Away</strong>
+          <p id="bestAwayDecimal">-</p>
+          <p id="bestAwayAmerican" class="small">-</p>
+          <p id="bestAwayPercent" class="small">-</p>
         </div>
         <div class="stat">
-          <strong>Avg Home Price</strong>
-          <p id="avgHomePrice">-</p>
+          <strong>Average Home</strong>
+          <p id="avgHomeDecimal">-</p>
+          <p id="avgHomeAmerican" class="small">-</p>
+          <p id="avgHomePercent" class="small">-</p>
         </div>
         <div class="stat">
-          <strong>Avg Away Price</strong>
-          <p id="avgAwayPrice">-</p>
+          <strong>Average Away</strong>
+          <p id="avgAwayDecimal">-</p>
+          <p id="avgAwayAmerican" class="small">-</p>
+          <p id="avgAwayPercent" class="small">-</p>
         </div>
       </div>
     </div>
@@ -228,8 +290,8 @@
         <thead>
           <tr>
             <th>Book</th>
-            <th>Home ML</th>
-            <th>Away ML</th>
+            <th>Home Odds</th>
+            <th>Away Odds</th>
             <th>Home Spread</th>
             <th>Total</th>
           </tr>
@@ -244,8 +306,36 @@
     </div>
 
     <div class="card">
-      <h2>Injury / Lineup Status</h2>
-      <div id="injuryStatus" class="message">No injury source connected yet.</div>
+      <h2>Injuries</h2>
+      <div class="row-3">
+        <div class="stat">
+          <strong>Home Injury Count</strong>
+          <p id="homeInjuryCount">-</p>
+        </div>
+        <div class="stat">
+          <strong>Away Injury Count</strong>
+          <p id="awayInjuryCount">-</p>
+        </div>
+        <div class="stat">
+          <strong>Lineup Rows</strong>
+          <p id="lineupRowsCount">-</p>
+        </div>
+      </div>
+      <div class="lineup-grid" style="margin-top: 14px;">
+        <div>
+          <h3>Home Injuries</h3>
+          <div id="homeInjuriesBox" class="injury-box">No data</div>
+        </div>
+        <div>
+          <h3>Away Injuries</h3>
+          <div id="awayInjuriesBox" class="injury-box">No data</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Lineups</h2>
+      <div id="lineupsBox" class="message">No lineup source connected yet.</div>
     </div>
   </div>
 
@@ -254,6 +344,7 @@
     const statusMessage = document.getElementById("statusMessage");
     let selectedGameId = null;
     let selectedGameMode = "pregame";
+    let refreshTimer = null;
 
     const ctx = document.getElementById("edgeChart").getContext("2d");
 
@@ -285,8 +376,6 @@
       }
     });
 
-    let refreshTimer = null;
-
     function formatPercent(value) {
       if (typeof value !== "number") return "-";
       return (value * 100).toFixed(2) + "%";
@@ -295,6 +384,11 @@
     function formatNum(value) {
       if (typeof value !== "number") return "-";
       return value.toFixed(2);
+    }
+
+    function formatAmerican(value) {
+      if (typeof value !== "number") return "-";
+      return value > 0 ? `+${value}` : `${value}`;
     }
 
     function setVerdictClass(text) {
@@ -318,26 +412,49 @@
       document.getElementById("pick").textContent = "Pick: -";
       document.getElementById("edgeValue").textContent = "-";
       document.getElementById("verdict").textContent = "-";
-      document.getElementById("odds").textContent = "-";
       document.getElementById("implied").textContent = "-";
       document.getElementById("trueProb").textContent = "-";
       document.getElementById("updatedAt").textContent = "-";
+      document.getElementById("gameMode").textContent = "-";
+
+      document.getElementById("oddsDecimal").textContent = "-";
+      document.getElementById("oddsAmerican").textContent = "-";
+      document.getElementById("oddsImpliedPercent").textContent = "-";
+
       document.getElementById("confidenceLabel").textContent = "-";
+      document.getElementById("confidencePercent").textContent = "-";
       document.getElementById("confidenceScore").textContent = "-";
+
       document.getElementById("stakeTier").textContent = "-";
       document.getElementById("stakeFraction").textContent = "-";
-      document.getElementById("gameMode").textContent = "-";
+
       document.getElementById("move2h").textContent = "-";
       document.getElementById("move24h").textContent = "-";
       document.getElementById("avgSpread").textContent = "-";
       document.getElementById("avgTotal").textContent = "-";
       document.getElementById("disagreementPenalty").textContent = "-";
       document.getElementById("bookCount").textContent = "-";
-      document.getElementById("bestHomePrice").textContent = "-";
-      document.getElementById("bestAwayPrice").textContent = "-";
-      document.getElementById("avgHomePrice").textContent = "-";
-      document.getElementById("avgAwayPrice").textContent = "-";
-      document.getElementById("injuryStatus").textContent = "No injury source connected yet.";
+
+      document.getElementById("bestHomeDecimal").textContent = "-";
+      document.getElementById("bestHomeAmerican").textContent = "-";
+      document.getElementById("bestHomePercent").textContent = "-";
+      document.getElementById("bestAwayDecimal").textContent = "-";
+      document.getElementById("bestAwayAmerican").textContent = "-";
+      document.getElementById("bestAwayPercent").textContent = "-";
+      document.getElementById("avgHomeDecimal").textContent = "-";
+      document.getElementById("avgHomeAmerican").textContent = "-";
+      document.getElementById("avgHomePercent").textContent = "-";
+      document.getElementById("avgAwayDecimal").textContent = "-";
+      document.getElementById("avgAwayAmerican").textContent = "-";
+      document.getElementById("avgAwayPercent").textContent = "-";
+
+      document.getElementById("homeInjuryCount").textContent = "-";
+      document.getElementById("awayInjuryCount").textContent = "-";
+      document.getElementById("lineupRowsCount").textContent = "-";
+      document.getElementById("homeInjuriesBox").textContent = "No data";
+      document.getElementById("awayInjuriesBox").textContent = "No data";
+      document.getElementById("lineupsBox").textContent = "No lineup source connected yet.";
+
       document.getElementById("bookmakerTableBody").innerHTML = "";
       document.getElementById("propsContainer").innerHTML = "No props loaded.";
 
@@ -349,7 +466,7 @@
     function getProbMoveText(current, past) {
       if (typeof current !== "number" || typeof past !== "number") return "-";
       const delta = current - past;
-      return `${(delta * 100).toFixed(2)}%`;
+      return `${delta >= 0 ? "+" : ""}${(delta * 100).toFixed(2)}%`;
     }
 
     function renderBookmakerTable(rows) {
@@ -365,8 +482,16 @@
         const tr = document.createElement("tr");
         tr.innerHTML = `
           <td>${row.book || "-"}</td>
-          <td>${row.homePrice ?? "-"}</td>
-          <td>${row.awayPrice ?? "-"}</td>
+          <td>
+            Dec: ${row.homeFormats?.decimal ?? "-"}<br>
+            Am: ${typeof row.homeFormats?.american === "number" ? formatAmerican(row.homeFormats.american) : "-"}<br>
+            %: ${formatPercent(row.homeFormats?.impliedPercent)}
+          </td>
+          <td>
+            Dec: ${row.awayFormats?.decimal ?? "-"}<br>
+            Am: ${typeof row.awayFormats?.american === "number" ? formatAmerican(row.awayFormats.american) : "-"}<br>
+            %: ${formatPercent(row.awayFormats?.impliedPercent)}
+          </td>
           <td>${row.homeSpread ?? "-"}</td>
           <td>${row.total ?? "-"}</td>
         `;
@@ -396,6 +521,34 @@
       }).join("");
 
       container.innerHTML = html;
+    }
+
+    function renderInjuries(items, targetId) {
+      const box = document.getElementById(targetId);
+
+      if (!Array.isArray(items) || !items.length) {
+        box.textContent = "No listed injuries found.";
+        return;
+      }
+
+      box.innerHTML = items.slice(0, 8).map(item => {
+        const text = Object.values(item).slice(0, 6).join(" · ");
+        return `<div class="pill">${text}</div>`;
+      }).join("");
+    }
+
+    function renderLineups(items) {
+      const box = document.getElementById("lineupsBox");
+
+      if (!Array.isArray(items) || !items.length) {
+        box.textContent = "No lineups found.";
+        return;
+      }
+
+      box.innerHTML = items.slice(0, 8).map(item => {
+        const text = Object.values(item).slice(0, 8).join(" · ");
+        return `<div style="margin-bottom:8px;">${text}</div>`;
+      }).join("");
     }
 
     function setRefreshTimer() {
@@ -468,12 +621,20 @@
       document.getElementById("pick").textContent = `Pick: ${data.pick}`;
       document.getElementById("edgeValue").textContent = formatPercent(data.edge);
       document.getElementById("verdict").textContent = data.verdict || "-";
-      document.getElementById("odds").textContent = data.sportsbookOddsDecimal ?? "-";
       document.getElementById("implied").textContent = formatPercent(data.impliedProbability);
       document.getElementById("trueProb").textContent = formatPercent(data.trueProbability);
       document.getElementById("updatedAt").textContent = new Date(data.timestamp).toLocaleTimeString();
+      document.getElementById("gameMode").textContent = data.gameMode || "-";
+
+      document.getElementById("oddsDecimal").textContent = data.oddsFormats?.decimal ?? "-";
+      document.getElementById("oddsAmerican").textContent =
+        typeof data.oddsFormats?.american === "number" ? formatAmerican(data.oddsFormats.american) : "-";
+      document.getElementById("oddsImpliedPercent").textContent =
+        formatPercent(data.oddsFormats?.impliedPercent);
 
       document.getElementById("confidenceLabel").textContent = data.confidence?.label || "-";
+      document.getElementById("confidencePercent").textContent =
+        formatPercent(data.confidence?.percent);
       document.getElementById("confidenceScore").textContent =
         typeof data.confidence?.score === "number" ? `${data.confidence.score}/100` : "-";
 
@@ -482,8 +643,6 @@
         typeof data.stakeSuggestion?.fraction === "number"
           ? `${(data.stakeSuggestion.fraction * 100).toFixed(0)}% unit`
           : "-";
-
-      document.getElementById("gameMode").textContent = data.gameMode || "-";
 
       const hist = data.modelDetails?.historicalComparisons || {};
       document.getElementById("move2h").textContent =
@@ -497,13 +656,45 @@
         formatPercent(data.modelDetails?.disagreementPenalty);
       document.getElementById("bookCount").textContent = data.modelDetails?.bookCount ?? "-";
 
-      document.getElementById("bestHomePrice").textContent = data.modelDetails?.bestHomePrice ?? "-";
-      document.getElementById("bestAwayPrice").textContent = data.modelDetails?.bestAwayPrice ?? "-";
-      document.getElementById("avgHomePrice").textContent = formatNum(data.modelDetails?.avgHomePrice);
-      document.getElementById("avgAwayPrice").textContent = formatNum(data.modelDetails?.avgAwayPrice);
+      document.getElementById("bestHomeDecimal").textContent = data.modelDetails?.bestHomePrice ?? "-";
+      document.getElementById("bestHomeAmerican").textContent =
+        typeof data.modelDetails?.bestHomePrice === "number"
+          ? formatAmerican(decimalToAmericanClient(data.modelDetails.bestHomePrice))
+          : "-";
+      document.getElementById("bestHomePercent").textContent =
+        formatPercent(decimalToImpliedPercentClient(data.modelDetails?.bestHomePrice));
 
-      document.getElementById("injuryStatus").textContent =
-        data.injuryStatus?.note || "No injury source connected yet.";
+      document.getElementById("bestAwayDecimal").textContent = data.modelDetails?.bestAwayPrice ?? "-";
+      document.getElementById("bestAwayAmerican").textContent =
+        typeof data.modelDetails?.bestAwayPrice === "number"
+          ? formatAmerican(decimalToAmericanClient(data.modelDetails.bestAwayPrice))
+          : "-";
+      document.getElementById("bestAwayPercent").textContent =
+        formatPercent(decimalToImpliedPercentClient(data.modelDetails?.bestAwayPrice));
+
+      document.getElementById("avgHomeDecimal").textContent = formatNum(data.modelDetails?.avgHomePrice);
+      document.getElementById("avgHomeAmerican").textContent =
+        typeof data.modelDetails?.avgHomePrice === "number"
+          ? formatAmerican(decimalToAmericanClient(data.modelDetails.avgHomePrice))
+          : "-";
+      document.getElementById("avgHomePercent").textContent =
+        formatPercent(decimalToImpliedPercentClient(data.modelDetails?.avgHomePrice));
+
+      document.getElementById("avgAwayDecimal").textContent = formatNum(data.modelDetails?.avgAwayPrice);
+      document.getElementById("avgAwayAmerican").textContent =
+        typeof data.modelDetails?.avgAwayPrice === "number"
+          ? formatAmerican(decimalToAmericanClient(data.modelDetails.avgAwayPrice))
+          : "-";
+      document.getElementById("avgAwayPercent").textContent =
+        formatPercent(decimalToImpliedPercentClient(data.modelDetails?.avgAwayPrice));
+
+      document.getElementById("homeInjuryCount").textContent = data.injuryStatus?.homeInjuriesCount ?? "-";
+      document.getElementById("awayInjuryCount").textContent = data.injuryStatus?.awayInjuriesCount ?? "-";
+      document.getElementById("lineupRowsCount").textContent = data.injuryStatus?.lineupRowsCount ?? "-";
+
+      renderInjuries(data.injuryStatus?.homeInjuries || [], "homeInjuriesBox");
+      renderInjuries(data.injuryStatus?.awayInjuries || [], "awayInjuriesBox");
+      renderLineups(data.injuryStatus?.lineups || []);
 
       setVerdictClass(data.verdict || "");
       setConfidenceClass(data.confidence?.label || "");
@@ -517,6 +708,17 @@
 
       renderBookmakerTable(data.bookmakerTable);
       renderProps(data.propsSummary);
+    }
+
+    function decimalToAmericanClient(decimalOdds) {
+      if (typeof decimalOdds !== "number" || decimalOdds <= 1) return null;
+      if (decimalOdds >= 2) return Math.round((decimalOdds - 1) * 100);
+      return Math.round(-100 / (decimalOdds - 1));
+    }
+
+    function decimalToImpliedPercentClient(decimalOdds) {
+      if (typeof decimalOdds !== "number" || decimalOdds <= 1) return null;
+      return 1 / decimalOdds;
     }
 
     gameSelect.addEventListener("change", async (event) => {
