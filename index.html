@@ -7,6 +7,14 @@
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
   <style>
     :root {
+      --radius-xl: 26px;
+      --radius-lg: 20px;
+      --radius-md: 16px;
+      --transition-fast: 180ms ease;
+      --transition-med: 320ms ease;
+    }
+
+    body[data-theme="light"] {
       --bg: #f5f2eb;
       --bg-2: #efe9df;
       --card: rgba(255, 255, 255, 0.62);
@@ -22,9 +30,54 @@
       --yellow: #a78c57;
       --red: #9a6761;
       --shadow: 0 10px 30px rgba(31, 26, 22, 0.06);
-      --radius-xl: 26px;
-      --radius-lg: 20px;
-      --radius-md: 16px;
+      --hero-top: rgba(255,255,255,0.68);
+      --hero-bottom: rgba(255,255,255,0.54);
+      --input-bg: rgba(255,255,255,0.72);
+      --message-bg: rgba(255,255,255,0.5);
+      --stat-bg: rgba(255,255,255,0.46);
+      --table-head: rgba(255,255,255,0.42);
+      --table-row: rgba(255,255,255,0.26);
+      --table-row-alt: rgba(255,255,255,0.18);
+      --chart-line: #8e7858;
+      --chart-fill: rgba(142, 120, 88, 0.08);
+      --chart-tooltip: rgba(36, 31, 27, 0.92);
+      --chart-grid: rgba(58, 47, 34, 0.08);
+      --chart-ticks: #8a7f73;
+      --bg-grad-1: rgba(142, 120, 88, 0.04);
+      --bg-grad-2: rgba(255, 255, 255, 0.5);
+    }
+
+    body[data-theme="dark"] {
+      --bg: #12110f;
+      --bg-2: #181715;
+      --card: rgba(28, 26, 23, 0.72);
+      --card-strong: rgba(36, 33, 29, 0.88);
+      --border: rgba(255,255,255,0.06);
+      --border-2: rgba(255,255,255,0.10);
+      --text: #e8e3dc;
+      --text-soft: #b7aea2;
+      --muted: #8c8378;
+      --accent: #b59a6a;
+      --accent-soft: rgba(181,154,106,0.12);
+      --green: #7fa886;
+      --yellow: #bfa46a;
+      --red: #b27a73;
+      --shadow: 0 14px 40px rgba(0, 0, 0, 0.28);
+      --hero-top: rgba(36, 33, 29, 0.88);
+      --hero-bottom: rgba(28, 26, 23, 0.82);
+      --input-bg: rgba(36, 33, 29, 0.88);
+      --message-bg: rgba(36, 33, 29, 0.72);
+      --stat-bg: rgba(36, 33, 29, 0.76);
+      --table-head: rgba(36, 33, 29, 0.82);
+      --table-row: rgba(255,255,255,0.03);
+      --table-row-alt: rgba(255,255,255,0.015);
+      --chart-line: #b59a6a;
+      --chart-fill: rgba(181,154,106,0.08);
+      --chart-tooltip: rgba(20, 18, 16, 0.94);
+      --chart-grid: rgba(255,255,255,0.06);
+      --chart-ticks: #8c8378;
+      --bg-grad-1: rgba(181,154,106,0.05);
+      --bg-grad-2: rgba(255,255,255,0.02);
     }
 
     * {
@@ -41,15 +94,90 @@
       padding: 24px;
       color: var(--text);
       background:
-        radial-gradient(circle at top left, rgba(142, 120, 88, 0.04), transparent 26%),
-        radial-gradient(circle at bottom right, rgba(255, 255, 255, 0.5), transparent 20%),
+        radial-gradient(circle at top left, var(--bg-grad-1), transparent 26%),
+        radial-gradient(circle at bottom right, var(--bg-grad-2), transparent 20%),
         linear-gradient(180deg, var(--bg), var(--bg-2));
       min-height: 100vh;
+      transition:
+        background var(--transition-med),
+        color var(--transition-med);
     }
 
     .container {
       max-width: 1180px;
       margin: 0 auto;
+    }
+
+    .topbar {
+      display: flex;
+      justify-content: flex-end;
+      align-items: center;
+      margin-bottom: 14px;
+    }
+
+    .theme-toggle {
+      position: relative;
+      width: 62px;
+      height: 34px;
+      border-radius: 999px;
+      border: 1px solid var(--border-2);
+      background: var(--card-strong);
+      cursor: pointer;
+      transition:
+        background var(--transition-med),
+        border-color var(--transition-med),
+        transform var(--transition-fast);
+      box-shadow: var(--shadow);
+      padding: 0;
+    }
+
+    .theme-toggle:hover {
+      transform: translateY(-1px);
+    }
+
+    .theme-toggle-track {
+      position: absolute;
+      inset: 0;
+      border-radius: inherit;
+      overflow: hidden;
+    }
+
+    .theme-toggle-icon {
+      position: absolute;
+      top: 50%;
+      transform: translateY(-50%);
+      font-size: 12px;
+      line-height: 1;
+      opacity: 0.85;
+      transition: opacity var(--transition-fast);
+      pointer-events: none;
+      color: var(--text-soft);
+    }
+
+    .theme-toggle-icon.sun {
+      left: 10px;
+    }
+
+    .theme-toggle-icon.moon {
+      right: 10px;
+    }
+
+    .theme-toggle-thumb {
+      position: absolute;
+      top: 4px;
+      left: 4px;
+      width: 24px;
+      height: 24px;
+      border-radius: 50%;
+      background: var(--accent);
+      transition:
+        transform var(--transition-med),
+        background var(--transition-med);
+      box-shadow: 0 4px 14px rgba(0,0,0,0.16);
+    }
+
+    body[data-theme="dark"] .theme-toggle-thumb {
+      transform: translateX(28px);
     }
 
     .card {
@@ -61,12 +189,17 @@
       padding: 24px;
       margin-bottom: 18px;
       box-shadow: var(--shadow);
+      transition:
+        background var(--transition-med),
+        border-color var(--transition-med),
+        box-shadow var(--transition-med);
+      text-align: center;
     }
 
     .hero-card {
       background:
-        linear-gradient(180deg, rgba(255,255,255,0.68), rgba(255,255,255,0.54)),
-        rgba(255,255,255,0.55);
+        linear-gradient(180deg, var(--hero-top), var(--hero-bottom)),
+        var(--card-strong);
     }
 
     h1, h2, h3, p {
@@ -91,6 +224,7 @@
       font-size: 15px;
       font-weight: 600;
       color: var(--text-soft);
+      text-align: left;
     }
 
     .subtle {
@@ -105,6 +239,7 @@
       color: var(--text-soft);
       font-size: 14px;
       font-weight: 600;
+      text-align: center;
     }
 
     select {
@@ -112,25 +247,34 @@
       padding: 14px 16px;
       border-radius: 16px;
       border: 1px solid var(--border-2);
-      background: rgba(255,255,255,0.72);
+      background: var(--input-bg);
       color: var(--text);
       font-size: 15px;
       outline: none;
-      transition: border-color 0.2s ease, background 0.2s ease;
+      transition:
+        border-color var(--transition-fast),
+        background var(--transition-med),
+        color var(--transition-med);
+      text-align: center;
+      text-align-last: center;
     }
 
     select:focus {
-      border-color: rgba(142, 120, 88, 0.28);
-      background: rgba(255,255,255,0.86);
+      border-color: color-mix(in srgb, var(--accent) 28%, transparent);
     }
 
     .message {
-      background: rgba(255,255,255,0.5);
+      background: var(--message-bg);
       border: 1px solid var(--border);
       padding: 14px 16px;
       border-radius: 18px;
       margin-top: 14px;
       color: var(--text-soft);
+      transition:
+        background var(--transition-med),
+        border-color var(--transition-med),
+        color var(--transition-med);
+      text-align: center;
     }
 
     .stats {
@@ -153,11 +297,15 @@
     }
 
     .stat {
-      background: rgba(255,255,255,0.46);
+      background: var(--stat-bg);
       border: 1px solid var(--border);
       border-radius: var(--radius-lg);
       padding: 16px;
       min-height: 92px;
+      transition:
+        background var(--transition-med),
+        border-color var(--transition-med);
+      text-align: center;
     }
 
     .stat strong {
@@ -168,6 +316,7 @@
       letter-spacing: 0.06em;
       text-transform: uppercase;
       margin-bottom: 10px;
+      text-align: center;
     }
 
     .stat p {
@@ -177,6 +326,7 @@
       color: var(--text);
       margin: 0;
       word-break: break-word;
+      text-align: center;
     }
 
     .bet { color: var(--green); font-weight: 700; }
@@ -191,12 +341,17 @@
       display: inline-block;
       padding: 6px 12px;
       border-radius: 999px;
-      background: rgba(255,255,255,0.55);
+      background: var(--card-strong);
       border: 1px solid var(--border);
       color: var(--text-soft);
       font-size: 12px;
       margin-right: 6px;
       margin-bottom: 6px;
+      transition:
+        background var(--transition-med),
+        border-color var(--transition-med),
+        color var(--transition-med);
+      text-align: center;
     }
 
     .two-col {
@@ -212,15 +367,25 @@
     }
 
     .prop-section {
-      background: rgba(255,255,255,0.42);
+      background: var(--stat-bg);
       border: 1px solid var(--border);
       padding: 16px;
       border-radius: var(--radius-lg);
+      transition:
+        background var(--transition-med),
+        border-color var(--transition-med);
+      text-align: left;
+    }
+
+    .prop-section h3 {
+      text-align: left;
+      margin-bottom: 8px;
     }
 
     .prop-row {
       padding: 12px 0;
-      border-bottom: 1px solid rgba(58, 47, 34, 0.08);
+      border-bottom: 1px solid var(--border);
+      text-align: left;
     }
 
     .prop-row:last-child {
@@ -231,6 +396,7 @@
       margin-bottom: 4px;
       color: var(--text-soft);
       font-size: 14px;
+      text-align: left;
     }
 
     .prop-row strong {
@@ -240,11 +406,15 @@
     }
 
     .injury-box {
-      background: rgba(255,255,255,0.42);
+      background: var(--stat-bg);
       border: 1px solid var(--border);
       padding: 14px;
       border-radius: var(--radius-lg);
       min-height: 78px;
+      transition:
+        background var(--transition-med),
+        border-color var(--transition-med);
+      text-align: center;
     }
 
     table {
@@ -255,15 +425,19 @@
     }
 
     thead th {
-      text-align: left;
+      text-align: center;
       padding: 14px 12px;
       color: var(--muted);
       font-size: 12px;
       font-weight: 600;
       letter-spacing: 0.06em;
       text-transform: uppercase;
-      background: rgba(255,255,255,0.42);
+      background: var(--table-head);
       border-bottom: 1px solid var(--border);
+      transition:
+        background var(--transition-med),
+        border-color var(--transition-med),
+        color var(--transition-med);
     }
 
     thead th:first-child {
@@ -276,24 +450,19 @@
 
     tbody td {
       padding: 12px;
-      text-align: left;
+      text-align: center;
       vertical-align: top;
-      border-bottom: 1px solid rgba(58, 47, 34, 0.06);
+      border-bottom: 1px solid var(--border);
       color: var(--text-soft);
-      background: rgba(255,255,255,0.26);
+      background: var(--table-row);
+      transition:
+        background var(--transition-med),
+        border-color var(--transition-med),
+        color var(--transition-med);
     }
 
     tbody tr:nth-child(even) td {
-      background: rgba(255,255,255,0.18);
-    }
-
-    canvas {
-      display: block;
-      width: 100%;
-      background: transparent !important;
-      border-radius: 0;
-      padding: 0;
-      box-shadow: none;
+      background: var(--table-row-alt);
     }
 
     .chart-shell {
@@ -301,6 +470,18 @@
       border: none;
       padding: 0;
       margin-top: 10px;
+      position: relative;
+      height: 280px;
+    }
+
+    canvas {
+      display: block;
+      width: 100%;
+      height: 100%;
+      background: transparent !important;
+      border-radius: 0;
+      padding: 0;
+      box-shadow: none;
     }
 
     @media (max-width: 900px) {
@@ -319,11 +500,25 @@
       .stat p {
         font-size: 20px;
       }
+
+      .chart-shell {
+        height: 240px;
+      }
     }
   </style>
 </head>
-<body>
+<body data-theme="light">
   <div class="container">
+    <div class="topbar">
+      <button class="theme-toggle" id="themeToggle" aria-label="Toggle theme" title="Toggle theme">
+        <span class="theme-toggle-track">
+          <span class="theme-toggle-icon sun">☀</span>
+          <span class="theme-toggle-icon moon">☾</span>
+          <span class="theme-toggle-thumb"></span>
+        </span>
+      </button>
+    </div>
+
     <div class="card hero-card">
       <h1>NBA Edge Tracker</h1>
       <p class="subtle">Live dashboard · calibrated model · quiet luxury interface</p>
@@ -542,11 +737,11 @@
 
       <div class="two-col" style="margin-top:14px;">
         <div>
-          <h3>Home Injuries</h3>
+          <h3 style="text-align:center;">Home Injuries</h3>
           <div id="homeInjuriesBox" class="injury-box">No data</div>
         </div>
         <div>
-          <h3>Away Injuries</h3>
+          <h3 style="text-align:center;">Away Injuries</h3>
           <div id="awayInjuriesBox" class="injury-box">No data</div>
         </div>
       </div>
@@ -561,89 +756,137 @@
   <script>
     const gameSelect = document.getElementById("gameSelect");
     const statusMessage = document.getElementById("statusMessage");
+    const themeToggle = document.getElementById("themeToggle");
 
     let selectedGameId = null;
     let selectedGameMode = "pregame";
     let refreshTimer = null;
+    let edgeChart = null;
 
-    const ctx = document.getElementById("edgeChart").getContext("2d");
-    const edgeChart = new Chart(ctx, {
-      type: "line",
-      data: {
-        labels: [],
-        datasets: [{
-          label: "Edge",
-          data: [],
-          borderColor: "#8e7858",
-          backgroundColor: "rgba(142, 120, 88, 0.08)",
-          fill: true,
-          tension: 0.34,
-          pointRadius: 0,
-          pointHoverRadius: 4,
-          borderWidth: 2
-        }]
-      },
-      options: {
-        responsive: true,
-        maintainAspectRatio: true,
-        plugins: {
-          legend: {
-            display: false
-          },
-          tooltip: {
-            backgroundColor: "rgba(36, 31, 27, 0.92)",
-            titleColor: "#f5efe6",
-            bodyColor: "#f5efe6",
-            borderColor: "rgba(255,255,255,0.08)",
-            borderWidth: 1,
-            displayColors: false,
-            callbacks: {
-              label: function(context) {
-                return `Edge: ${(context.parsed.y * 100).toFixed(2)}%`;
-              }
-            }
-          }
+    function getSavedTheme() {
+      const saved = localStorage.getItem("edge_theme");
+      if (saved === "light" || saved === "dark") return saved;
+      return "light";
+    }
+
+    function setTheme(theme) {
+      document.body.setAttribute("data-theme", theme);
+      localStorage.setItem("edge_theme", theme);
+      if (edgeChart) updateChartTheme();
+    }
+
+    function toggleTheme() {
+      const current = document.body.getAttribute("data-theme") || "light";
+      setTheme(current === "light" ? "dark" : "light");
+    }
+
+    themeToggle.addEventListener("click", toggleTheme);
+    setTheme(getSavedTheme());
+
+    function cssVar(name) {
+      return getComputedStyle(document.body).getPropertyValue(name).trim();
+    }
+
+    function buildChart() {
+      const ctx = document.getElementById("edgeChart").getContext("2d");
+
+      edgeChart = new Chart(ctx, {
+        type: "line",
+        data: {
+          labels: [],
+          datasets: [{
+            label: "Edge",
+            data: [],
+            borderColor: cssVar("--chart-line"),
+            backgroundColor: cssVar("--chart-fill"),
+            fill: true,
+            tension: 0.34,
+            pointRadius: 0,
+            pointHoverRadius: 4,
+            borderWidth: 2
+          }]
         },
-        scales: {
-          x: {
-            grid: {
-              display: false,
-              drawBorder: false
-            },
-            border: {
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          animation: {
+            duration: 320,
+            easing: "easeOutCubic"
+          },
+          plugins: {
+            legend: {
               display: false
             },
-            ticks: {
-              color: "#8a7f73",
-              maxRotation: 0,
-              autoSkip: true,
-              maxTicksLimit: 8,
-              font: {
-                size: 11
+            tooltip: {
+              backgroundColor: cssVar("--chart-tooltip"),
+              titleColor: "#f5efe6",
+              bodyColor: "#f5efe6",
+              borderColor: cssVar("--border"),
+              borderWidth: 1,
+              displayColors: false,
+              callbacks: {
+                label: function(context) {
+                  return `Edge: ${(context.parsed.y * 100).toFixed(2)}%`;
+                }
               }
             }
           },
-          y: {
-            grid: {
-              color: "rgba(58, 47, 34, 0.08)",
-              drawBorder: false
-            },
-            border: {
-              display: false
-            },
-            ticks: {
-              color: "#8a7f73",
-              callback: function(value) {
-                return (value * 100).toFixed(1) + "%";
+          scales: {
+            x: {
+              grid: {
+                display: false,
+                drawBorder: false
               },
-              font: {
-                size: 11
+              border: {
+                display: false
+              },
+              ticks: {
+                color: cssVar("--chart-ticks"),
+                maxRotation: 0,
+                autoSkip: true,
+                maxTicksLimit: 8,
+                font: {
+                  size: 11
+                }
+              }
+            },
+            y: {
+              grid: {
+                color: cssVar("--chart-grid"),
+                drawBorder: false
+              },
+              border: {
+                display: false
+              },
+              ticks: {
+                color: cssVar("--chart-ticks"),
+                callback: function(value) {
+                  return (value * 100).toFixed(1) + "%";
+                },
+                font: {
+                  size: 11
+                }
               }
             }
           }
         }
-      }
-    });
+      });
+    }
+
+    function updateChartTheme() {
+      if (!edgeChart) return;
+
+      edgeChart.data.datasets[0].borderColor = cssVar("--chart-line");
+      edgeChart.data.datasets[0].backgroundColor = cssVar("--chart-fill");
+      edgeChart.options.plugins.tooltip.backgroundColor = cssVar("--chart-tooltip");
+      edgeChart.options.plugins.tooltip.borderColor = cssVar("--border");
+      edgeChart.options.scales.x.ticks.color = cssVar("--chart-ticks");
+      edgeChart.options.scales.y.ticks.color = cssVar("--chart-ticks");
+      edgeChart.options.scales.y.grid.color = cssVar("--chart-grid");
+      edgeChart.update();
+    }
+
+    buildChart();
 
     function formatPercent(value) {
       if (typeof value !== "number") return "-";
@@ -728,10 +971,8 @@
           <div><strong>${row.player || "-"}</strong></div>
           <div>Line: ${row.line ?? "-"}</div>
           <div>Pick: ${row.pick || "-"}</div>
-          <div>Pick chance: ${formatPercent(row.pickProbability)}</div>
-          <div>Over: ${typeof row.overDecimal === "number" ? row.overDecimal.toFixed(2) : "-"} / ${typeof row.overAmerican === "number" ? formatAmerican(row.overAmerican) : "-"}</div>
-          <div>Over hit chance: ${formatPercent(row.hitProbability)}</div>
-          <div>Coverage: ${row.coverage ?? "-"}</div>
+          <div>Chance: ${formatPercent(row.pickProbability)}</div>
+          <div>Odds: ${typeof row.overDecimal === "number" ? row.overDecimal.toFixed(2) : "-"} / ${typeof row.overAmerican === "number" ? formatAmerican(row.overAmerican) : "-"}</div>
         </div>
       `).join("");
     }
