@@ -1,5 +1,6 @@
 const express = require("express");
 const path = require("path");
+const learning = require("./learning");
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -1277,6 +1278,9 @@ app.get("/odds", async (req, res) => {
       injurySummary
     );
 
+    const calibratedTrueProbability = learning.applyCalibration(model.trueProbability);
+    const calibratedEdge = calibratedTrueProbability - model.impliedProbability;
+
     const confidence = buildConfidence(
       currentConsensus,
       historicalComparisons,
@@ -1285,13 +1289,13 @@ app.get("/odds", async (req, res) => {
     );
 
     const verdict = buildVerdict(
-      model.rawEdge,
+      calibratedEdge,
       confidence,
       mode,
       currentConsensus.disagreementPenalty
     );
 
-    const stake = buildStakeSuggestion(model.rawEdge, confidence.label);
+    const stake = buildStakeSuggestion(calibratedEdge, confidence.label);
 
     const pickTeam =
       model.pickSide === "home" ? featured.home_team : featured.away_team;
