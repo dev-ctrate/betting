@@ -1,6 +1,5 @@
 const express = require("express");
 const path = require("path");
-const learning = require("./learning");
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -70,16 +69,6 @@ const TEAM_ALIASES = {
   "Utah Jazz": ["jazz", "uta", "utah"],
   "Washington Wizards": ["wizards", "was", "washington"]
 };
-
-app.use(express.json());
-
-process.on("unhandledRejection", (reason) => {
-  console.error("UNHANDLED REJECTION:", reason);
-});
-
-process.on("uncaughtException", (err) => {
-  console.error("UNCAUGHT EXCEPTION:", err);
-});
 
 // ---------- helpers ----------
 function clamp(x, min, max) {
@@ -162,31 +151,12 @@ function cacheSet(map, key, value, ttlMs) {
 }
 
 async function fetchJson(url, options = {}) {
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 12000);
-
-  try {
-    const response = await fetch(url, {
-      ...options,
-      signal: controller.signal
-    });
-
+  const response = await fetch(url, options);
+  if (!response.ok) {
     const text = await response.text();
-
-    if (!response.ok) {
-      throw new Error(`Request failed ${response.status}: ${text}`);
-    }
-
-    try {
-      return JSON.parse(text);
-    } catch {
-      throw new Error(`Invalid JSON response from ${url}: ${text.slice(0, 300)}`);
-    }
-  } catch (err) {
-    throw new Error(`fetchJson failed for ${url}: ${err.message}`);
-  } finally {
-    clearTimeout(timeout);
+    throw new Error(`Request failed ${response.status}: ${text}`);
   }
+  return await response.json();
 }
 
 function buildOddsUrl(pathname, params) {
@@ -346,8 +316,7 @@ async function getEventPlayerProps(eventId) {
     const data = await fetchJson(url);
     cacheSet(currentCache, cacheKey, data, CURRENT_TTL_MS);
     return data;
-  } catch (err) {
-    console.error("getEventPlayerProps failed:", err.message);
+  } catch {
     return { bookmakers: [] };
   }
 }
@@ -717,8 +686,7 @@ async function getBallDontLieInjuries() {
     };
     cacheSet(sideInfoCache, cacheKey, value, SIDEINFO_TTL_MS);
     return value;
-  } catch (err) {
-    console.error("getBallDontLieInjuries failed:", err.message);
+  } catch {
     return { available: false, rows: [], source: "none" };
   }
 }
@@ -742,8 +710,7 @@ async function getBallDontLieLineups(dateStr = "") {
     };
     cacheSet(sideInfoCache, cacheKey, value, SIDEINFO_TTL_MS);
     return value;
-  } catch (err) {
-    console.error("getBallDontLieLineups failed:", err.message);
+  } catch {
     return { available: false, rows: [], source: "none" };
   }
 }
@@ -766,8 +733,7 @@ async function getFantasyNerdsInjuries() {
     };
     cacheSet(sideInfoCache, cacheKey, value, SIDEINFO_TTL_MS);
     return value;
-  } catch (err) {
-    console.error("getFantasyNerdsInjuries failed:", err.message);
+  } catch {
     return { available: false, rows: [], source: "none" };
   }
 }
@@ -790,8 +756,7 @@ async function getFantasyNerdsLineups(dateStr = "") {
     };
     cacheSet(sideInfoCache, cacheKey, value, SIDEINFO_TTL_MS);
     return value;
-  } catch (err) {
-    console.error("getFantasyNerdsLineups failed:", err.message);
+  } catch {
     return { available: false, rows: [], source: "none" };
   }
 }
@@ -814,55 +779,34 @@ async function getFantasyNerdsDepthCharts() {
     };
     cacheSet(sideInfoCache, cacheKey, value, SIDEINFO_TTL_MS);
     return value;
-  } catch (err) {
-    console.error("getFantasyNerdsDepthCharts failed:", err.message);
+  } catch {
     return { available: false, rows: [], source: "none" };
   }
 }
 
 async function getBestInjuries() {
-  try {
-    const bdl = await getBallDontLieInjuries();
-    if (bdl && bdl.available && Array.isArray(bdl.rows) && bdl.rows.length) return bdl;
-  } catch (err) {
-    console.error("Ball Don't Lie injuries failed:", err.message);
-  }
+  const bdl = await getBallDontLieInjuries();
+  if (bdl.available && bdl.rows.length) return bdl;
 
-  try {
-    const fn = await getFantasyNerdsInjuries();
-    if (fn && fn.available) return fn;
-  } catch (err) {
-    console.error("Fantasy Nerds injuries failed:", err.message);
-  }
+  const fn = await getFantasyNerdsInjuries();
+  if (fn.available) return fn;
 
   return { available: false, rows: [], source: "none" };
 }
 
 async function getBestLineups(dateStr = "") {
-  try {
-    const bdl = await getBallDontLieLineups(dateStr);
-    if (bdl && bdl.available && Array.isArray(bdl.rows) && bdl.rows.length) return bdl;
-  } catch (err) {
-    console.error("Ball Don't Lie lineups failed:", err.message);
-  }
+  const bdl = await getBallDontLieLineups(dateStr);
+  if (bdl.available && bdl.rows.length) return bdl;
 
-  try {
-    const fn = await getFantasyNerdsLineups(dateStr);
-    if (fn && fn.available) return fn;
-  } catch (err) {
-    console.error("Fantasy Nerds lineups failed:", err.message);
-  }
+  const fn = await getFantasyNerdsLineups(dateStr);
+  if (fn.available) return fn;
 
   return { available: false, rows: [], source: "none" };
 }
 
 async function getBestDepthCharts() {
-  try {
-    const fn = await getFantasyNerdsDepthCharts();
-    if (fn && fn.available) return fn;
-  } catch (err) {
-    console.error("Fantasy Nerds depth failed:", err.message);
-  }
+  const fn = await getFantasyNerdsDepthCharts();
+  if (fn.available) return fn;
 
   return { available: false, rows: [], source: "none" };
 }
@@ -871,8 +815,6 @@ function extractPlayerName(obj) {
   if (!obj) return "";
 
   if (typeof obj.PlayerName === "string") return obj.PlayerName;
-  if (typeof obj.playerName === "string") return obj.playerName;
-  if (typeof obj.name === "string") return obj.name;
   if (typeof obj.Name === "string") return obj.Name;
   if (typeof obj.player === "string") return obj.player;
   if (typeof obj.full_name === "string") return obj.full_name;
@@ -1312,26 +1254,11 @@ app.get("/odds", async (req, res) => {
 
     const lineupDate = featured.commence_time ? featured.commence_time.slice(0, 10) : todayYmd();
 
-    const settledSideInfo = await Promise.allSettled([
+    const [injuriesInfo, lineupsInfo, depthInfo] = await Promise.all([
       getBestInjuries(),
       getBestLineups(lineupDate),
       getBestDepthCharts()
     ]);
-
-    const injuriesInfo =
-      settledSideInfo[0].status === "fulfilled"
-        ? settledSideInfo[0].value
-        : { available: false, rows: [], source: "none" };
-
-    const lineupsInfo =
-      settledSideInfo[1].status === "fulfilled"
-        ? settledSideInfo[1].value
-        : { available: false, rows: [], source: "none" };
-
-    const depthInfo =
-      settledSideInfo[2].status === "fulfilled"
-        ? settledSideInfo[2].value
-        : { available: false, rows: [], source: "none" };
 
     const injurySummary = summarizeInjuryLineup(
       featured.home_team,
@@ -1350,9 +1277,6 @@ app.get("/odds", async (req, res) => {
       injurySummary
     );
 
-    const calibratedTrueProbability = learning.applyCalibration(model.trueProbability);
-    const calibratedEdge = calibratedTrueProbability - model.impliedProbability;
-
     const confidence = buildConfidence(
       currentConsensus,
       historicalComparisons,
@@ -1361,13 +1285,13 @@ app.get("/odds", async (req, res) => {
     );
 
     const verdict = buildVerdict(
-      calibratedEdge,
+      model.rawEdge,
       confidence,
       mode,
       currentConsensus.disagreementPenalty
     );
 
-    const stake = buildStakeSuggestion(calibratedEdge, confidence.label);
+    const stake = buildStakeSuggestion(model.rawEdge, confidence.label);
 
     const pickTeam =
       model.pickSide === "home" ? featured.home_team : featured.away_team;
@@ -1379,17 +1303,15 @@ app.get("/odds", async (req, res) => {
 
     const pick = `${pickTeam} to win`;
     const timestamp = new Date().toISOString();
-    const smoothedEdge = addEdgeHistory(gameId, calibratedEdge, timestamp);
+    const smoothedEdge = addEdgeHistory(gameId, model.rawEdge, timestamp);
 
     const snapshot = {
       timestamp,
       mode,
       impliedProbability: roundToTwo(model.impliedProbability),
       trueProbability: roundToTwo(model.trueProbability),
-      calibratedTrueProbability: roundToTwo(calibratedTrueProbability),
       edge: roundToTwo(smoothedEdge),
       rawEdge: roundToTwo(model.rawEdge),
-      calibratedEdge: roundToTwo(calibratedEdge),
       verdict,
       confidencePercent: roundToTwo(confidence.percent),
       bestPrice: roundToTwo(chosenDecimal),
@@ -1398,35 +1320,6 @@ app.get("/odds", async (req, res) => {
     };
 
     logSnapshot(gameId, snapshot);
-
-    learning.recordSnapshot({
-      gameId,
-      timestamp,
-      commenceTime: featured.commence_time,
-      homeTeam: featured.home_team,
-      awayTeam: featured.away_team,
-      pickSide: model.pickSide,
-      pickTeam,
-      impliedProbability: model.impliedProbability,
-      trueProbability: model.trueProbability,
-      calibratedProbability: calibratedTrueProbability,
-      rawEdge: model.rawEdge,
-      calibratedEdge,
-      sportsbookDecimal: chosenDecimal,
-      verdict,
-      confidenceLabel: confidence.label,
-      confidencePercent: confidence.percent,
-      spreadAdj: currentConsensus.spreadAdj,
-      totalAdj: currentConsensus.totalAdj,
-      lineMovementAdj: model.lineMovementAdj,
-      propAdj: model.propAdj,
-      injuryAdjHome: model.injuryAdjHome,
-      disagreementPenalty: currentConsensus.disagreementPenalty,
-      avgHomeSpread: currentConsensus.avgHomeSpread,
-      avgTotal: currentConsensus.avgTotal,
-      bookCount: currentConsensus.bookCount,
-      source: "live"
-    });
 
     res.json({
       id: featured.id,
@@ -1443,19 +1336,15 @@ app.get("/odds", async (req, res) => {
       impliedProbability: roundToTwo(model.impliedProbability),
       impliedPercentFromOdds: roundToTwo(model.impliedProbability),
       trueProbability: roundToTwo(model.trueProbability),
-      calibratedTrueProbability: roundToTwo(calibratedTrueProbability),
       impliedProbabilityFormats: buildProbabilityFormats(model.impliedProbability),
       trueProbabilityFormats: buildProbabilityFormats(model.trueProbability),
       edge: roundToTwo(smoothedEdge),
-      rawEdge: roundToTwo(model.rawEdge),
-      calibratedEdge: roundToTwo(calibratedEdge),
       oddsFormats: buildOddsFormatsFromDecimal(chosenDecimal),
       sportsbookOddsDecimal: roundToTwo(chosenDecimal),
       stakeSuggestion: {
         tier: stake.tier,
         fraction: roundToTwo(stake.fraction)
       },
-      learningSummary: learning.getLearningSummary(),
       history: (edgeHistoryStore[gameId] || []).map(point => ({
         timestamp: point.timestamp,
         edge: roundToTwo(point.edge)
@@ -1502,7 +1391,6 @@ app.get("/odds", async (req, res) => {
       timestamp
     });
   } catch (error) {
-    console.error("/odds failed:", error);
     res.status(500).json({
       error: error.message
     });
@@ -1522,67 +1410,12 @@ app.get("/snapshots", (req, res) => {
       ...s,
       impliedProbability: roundToTwo(s.impliedProbability),
       trueProbability: roundToTwo(s.trueProbability),
-      calibratedTrueProbability: roundToTwo(s.calibratedTrueProbability),
       edge: roundToTwo(s.edge),
       rawEdge: roundToTwo(s.rawEdge),
-      calibratedEdge: roundToTwo(s.calibratedEdge),
       confidencePercent: roundToTwo(s.confidencePercent),
       bestPrice: roundToTwo(s.bestPrice)
     }))
   });
-});
-
-app.get("/learning/summary", (req, res) => {
-  try {
-    res.json(learning.getLearningSummary());
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-app.get("/learning/calibration", (req, res) => {
-  try {
-    res.json({
-      calibration: learning.getCalibrationTable()
-    });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-app.post("/learning/grade", (req, res) => {
-  try {
-    const { gameId, finalWinner, finalHomeScore, finalAwayScore } = req.body || {};
-
-    if (!gameId || !finalWinner) {
-      return res.status(400).json({
-        error: "Missing gameId or finalWinner"
-      });
-    }
-
-    if (!["home", "away"].includes(finalWinner)) {
-      return res.status(400).json({
-        error: 'finalWinner must be "home" or "away"'
-      });
-    }
-
-    const updated = learning.updateGameResult({
-      gameId,
-      finalWinner,
-      finalHomeScore,
-      finalAwayScore
-    });
-
-    const calibration = learning.buildCalibrationTable();
-
-    res.json({
-      updatedSnapshots: updated,
-      calibrationBuckets: Object.keys(calibration).length,
-      learningSummary: learning.getLearningSummary()
-    });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
 });
 
 app.listen(PORT, () => {
