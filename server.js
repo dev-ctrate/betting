@@ -1324,7 +1324,35 @@ app.get("/odds", async (req, res) => {
     };
 
     logSnapshot(gameId, snapshot);
-  
+
+    learning.recordSnapshot({
+      gameld,
+      timestamp,
+      commenceTime: featured.commence_time,
+      homeTeam: featured.home_team,
+      awayTeam: featured.away_team,
+      pickSide: model.pickSide,
+      pickTeam,
+      impliedProbability: model.impliedProbability,
+      trueProbability: model.trueProbability,
+      calibratedProbability: calibratedTrueProbability,
+      rawEdge: model.rawEdge,
+      calibratedEdge,
+      sportsbookDecimal: chosenDecimal,
+      verdict,
+      confidenceLabel: confidence.label,
+      confidencePercent: confidence.percent,
+      spreadAdj: currentConsensus.spreadAdj,
+      totalAdj: currentConsensus.totalAdj,
+      lineMovementAdj: model.lineMovementAdj,
+      propAdj: model.propAdj,
+      injuryAdjHome: model.injuryAdjHome,
+      disagreementPenalty:currentConsensus.disagreementPenalty,
+      avgHomeSpread:currentConsensus.avgHomeSpread,
+      avgTotal: currentConsensus.avgTotal,
+      bookCount: currentConsensus.bookCount,
+      source: "live"
+    });
 
     res.json({
       id: featured.id,
