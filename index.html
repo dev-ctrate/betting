@@ -3,164 +3,434 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Chaudhry Saab</title>
+  <title>NBA Edge Tracker</title>
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
   <style>
+    :root {
+      --bg-1: #06070b;
+      --bg-2: #0b1020;
+      --bg-3: #0f172a;
+      --panel: rgba(17, 24, 39, 0.72);
+      --panel-2: rgba(20, 28, 45, 0.88);
+      --panel-3: rgba(255, 255, 255, 0.035);
+      --border: rgba(255, 255, 255, 0.08);
+      --border-strong: rgba(255, 255, 255, 0.14);
+      --text: #f8fafc;
+      --muted: #9ca3af;
+      --muted-2: #cbd5e1;
+      --blue: #60a5fa;
+      --blue-2: #2563eb;
+      --cyan: #22d3ee;
+      --gold: #fbbf24;
+      --green: #4ade80;
+      --red: #f87171;
+      --yellow: #facc15;
+      --shadow-lg: 0 24px 80px rgba(0, 0, 0, 0.45);
+      --shadow-md: 0 10px 30px rgba(0, 0, 0, 0.35);
+      --radius-xl: 22px;
+      --radius-lg: 18px;
+      --radius-md: 14px;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    html {
+      scroll-behavior: smooth;
+    }
+
     body {
-      font-family: Arial, sans-serif;
-      background: #111;
-      color: #fff;
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background:
+        radial-gradient(circle at top left, rgba(37, 99, 235, 0.18), transparent 28%),
+        radial-gradient(circle at top right, rgba(251, 191, 36, 0.12), transparent 24%),
+        radial-gradient(circle at 20% 85%, rgba(34, 211, 238, 0.08), transparent 24%),
+        linear-gradient(180deg, var(--bg-1), var(--bg-2) 45%, var(--bg-3));
+      color: var(--text);
       margin: 0;
-      padding: 20px;
+      min-height: 100vh;
+      padding: 24px;
     }
 
     .container {
-      max-width: 1180px;
+      max-width: 1240px;
       margin: 0 auto;
+      position: relative;
+      z-index: 1;
     }
 
     .card {
-      background: #1c1c1c;
-      border-radius: 12px;
-      padding: 20px;
+      position: relative;
+      overflow: hidden;
+      background: linear-gradient(180deg, rgba(255,255,255,0.035), rgba(255,255,255,0.02));
+      backdrop-filter: blur(16px);
+      -webkit-backdrop-filter: blur(16px);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-xl);
+      padding: 22px;
       margin-bottom: 20px;
+      box-shadow: var(--shadow-md);
+    }
+
+    .card::before {
+      content: "";
+      position: absolute;
+      inset: 0;
+      background: linear-gradient(
+        135deg,
+        rgba(96,165,250,0.08),
+        transparent 25%,
+        transparent 60%,
+        rgba(251,191,36,0.05)
+      );
+      pointer-events: none;
+    }
+
+    .card:hover {
+      border-color: var(--border-strong);
+      transform: translateY(-1px);
+      transition: 0.22s ease;
     }
 
     h1, h2, h3, p {
       margin: 0 0 10px 0;
     }
 
+    h1 {
+      font-size: clamp(30px, 4vw, 42px);
+      font-weight: 800;
+      letter-spacing: -0.03em;
+      background: linear-gradient(90deg, #ffffff, #dbeafe 40%, #fde68a 100%);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+
+    h2 {
+      font-size: 22px;
+      font-weight: 700;
+      letter-spacing: -0.02em;
+    }
+
+    h3 {
+      font-size: 16px;
+      font-weight: 700;
+      color: var(--muted-2);
+    }
+
+    .subtle {
+      color: var(--muted);
+      font-size: 14px;
+    }
+
+    label {
+      display: block;
+      margin-bottom: 10px;
+      color: var(--muted-2);
+      font-weight: 600;
+      font-size: 14px;
+    }
+
     select {
       width: 100%;
-      padding: 10px;
-      border-radius: 8px;
-      border: none;
-      font-size: 16px;
-      background: #fff;
-      color: #111;
+      padding: 14px 16px;
+      border-radius: 14px;
+      border: 1px solid var(--border);
+      font-size: 15px;
+      background:
+        linear-gradient(180deg, rgba(255,255,255,0.06), rgba(255,255,255,0.02)),
+        rgba(15, 23, 42, 0.92);
+      color: var(--text);
+      outline: none;
+      box-shadow: inset 0 1px 0 rgba(255,255,255,0.04);
+    }
+
+    select:focus {
+      border-color: rgba(96,165,250,0.55);
+      box-shadow: 0 0 0 4px rgba(37,99,235,0.16);
+    }
+
+    .message {
+      margin-top: 14px;
+      padding: 14px 16px;
+      border-radius: 16px;
+      background:
+        linear-gradient(180deg, rgba(37,99,235,0.12), rgba(255,255,255,0.02)),
+        rgba(17,24,39,0.72);
+      border: 1px solid rgba(96,165,250,0.15);
+      color: #dbeafe;
+      box-shadow: inset 0 1px 0 rgba(255,255,255,0.04);
     }
 
     .stats {
       display: grid;
       grid-template-columns: repeat(2, minmax(0, 1fr));
-      gap: 12px;
-      margin-top: 15px;
+      gap: 14px;
+      margin-top: 16px;
     }
 
     .row-3 {
       display: grid;
       grid-template-columns: repeat(3, minmax(0, 1fr));
-      gap: 12px;
+      gap: 14px;
     }
 
     .row-4 {
       display: grid;
       grid-template-columns: repeat(4, minmax(0, 1fr));
-      gap: 12px;
+      gap: 14px;
     }
 
     .stat {
-      background: #2a2a2a;
-      padding: 12px;
-      border-radius: 10px;
+      position: relative;
+      overflow: hidden;
+      background:
+        linear-gradient(180deg, rgba(255,255,255,0.05), rgba(255,255,255,0.02)),
+        rgba(15, 23, 42, 0.92);
+      padding: 16px;
+      border-radius: var(--radius-lg);
+      border: 1px solid rgba(255,255,255,0.06);
+      box-shadow: inset 0 1px 0 rgba(255,255,255,0.035);
+      min-height: 92px;
     }
 
-    .message {
-      background: #2a2a2a;
-      padding: 12px;
-      border-radius: 10px;
-      margin-top: 12px;
-      color: #ddd;
+    .stat::after {
+      content: "";
+      position: absolute;
+      top: -40%;
+      right: -20%;
+      width: 120px;
+      height: 120px;
+      background: radial-gradient(circle, rgba(96,165,250,0.12), transparent 60%);
+      pointer-events: none;
     }
 
-    .subtle {
-      color: #bbb;
-      font-size: 14px;
+    .stat strong {
+      display: block;
+      color: var(--muted);
+      font-size: 12px;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      margin-bottom: 10px;
+      font-weight: 700;
     }
 
-    canvas {
-      background: #fff;
-      border-radius: 10px;
-      padding: 10px;
+    .stat p {
+      font-size: 22px;
+      font-weight: 800;
+      letter-spacing: -0.02em;
+      color: var(--text);
+      margin: 0;
+      word-break: break-word;
     }
 
-    table {
-      width: 100%;
-      border-collapse: collapse;
-      font-size: 14px;
+    .bet {
+      color: var(--green);
+      font-weight: 800;
+      text-shadow: 0 0 18px rgba(74, 222, 128, 0.18);
     }
 
-    th, td {
-      border-bottom: 1px solid #333;
-      padding: 8px;
-      text-align: left;
-      vertical-align: top;
+    .watch {
+      color: var(--yellow);
+      font-weight: 800;
+      text-shadow: 0 0 18px rgba(250, 204, 21, 0.14);
     }
 
-    .bet { color: #4ade80; font-weight: 700; }
-    .watch { color: #facc15; font-weight: 700; }
-    .avoid { color: #f87171; font-weight: 700; }
+    .avoid {
+      color: var(--red);
+      font-weight: 800;
+      text-shadow: 0 0 18px rgba(248, 113, 113, 0.14);
+    }
 
-    .low { color: #f87171; }
-    .medium { color: #facc15; }
-    .high { color: #4ade80; }
+    .low { color: var(--red); }
+    .medium { color: var(--yellow); }
+    .high { color: var(--green); }
 
     .pill {
-      display: inline-block;
-      padding: 4px 10px;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 7px 12px;
       border-radius: 999px;
-      background: #333;
+      background:
+        linear-gradient(180deg, rgba(255,255,255,0.06), rgba(255,255,255,0.02)),
+        rgba(17,24,39,0.92);
+      border: 1px solid rgba(255,255,255,0.08);
       font-size: 12px;
-      margin-right: 6px;
-      margin-bottom: 6px;
-    }
-
-    .injury-box {
-      background: #2a2a2a;
-      padding: 10px;
-      border-radius: 10px;
-      min-height: 70px;
+      color: var(--muted-2);
+      margin-right: 8px;
+      margin-bottom: 8px;
+      box-shadow: inset 0 1px 0 rgba(255,255,255,0.04);
     }
 
     .two-col {
       display: grid;
       grid-template-columns: 1fr 1fr;
-      gap: 12px;
+      gap: 14px;
     }
 
     .props-grid {
       display: grid;
       grid-template-columns: 1fr 1fr;
-      gap: 12px;
+      gap: 14px;
     }
 
     .prop-section {
-      background: #2a2a2a;
-      padding: 12px;
-      border-radius: 10px;
+      background:
+        linear-gradient(180deg, rgba(255,255,255,0.05), rgba(255,255,255,0.02)),
+        rgba(15, 23, 42, 0.94);
+      padding: 16px;
+      border-radius: var(--radius-lg);
+      border: 1px solid rgba(255,255,255,0.06);
+      box-shadow: inset 0 1px 0 rgba(255,255,255,0.03);
     }
 
     .prop-row {
-      padding: 8px 0;
-      border-bottom: 1px solid #333;
+      padding: 12px 0;
+      border-bottom: 1px solid rgba(255,255,255,0.06);
     }
 
     .prop-row:last-child {
       border-bottom: none;
     }
 
+    .prop-row div {
+      margin-bottom: 4px;
+      color: var(--muted-2);
+      font-size: 14px;
+    }
+
+    .prop-row strong {
+      color: #fff;
+      font-size: 15px;
+    }
+
+    .injury-box {
+      background:
+        linear-gradient(180deg, rgba(255,255,255,0.04), rgba(255,255,255,0.02)),
+        rgba(15, 23, 42, 0.92);
+      padding: 14px;
+      border-radius: var(--radius-lg);
+      min-height: 78px;
+      border: 1px solid rgba(255,255,255,0.06);
+    }
+
+    table {
+      width: 100%;
+      border-collapse: separate;
+      border-spacing: 0;
+      font-size: 14px;
+      overflow: hidden;
+    }
+
+    thead th {
+      text-align: left;
+      padding: 14px 12px;
+      color: #e2e8f0;
+      font-size: 12px;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      background:
+        linear-gradient(180deg, rgba(255,255,255,0.07), rgba(255,255,255,0.03)),
+        rgba(15, 23, 42, 0.96);
+      border-bottom: 1px solid rgba(255,255,255,0.08);
+    }
+
+    thead th:first-child {
+      border-top-left-radius: 14px;
+    }
+
+    thead th:last-child {
+      border-top-right-radius: 14px;
+    }
+
+    tbody td {
+      padding: 12px;
+      text-align: left;
+      vertical-align: top;
+      border-bottom: 1px solid rgba(255,255,255,0.06);
+      color: var(--muted-2);
+      background: rgba(255,255,255,0.015);
+    }
+
+    tbody tr:nth-child(even) td {
+      background: rgba(255,255,255,0.025);
+    }
+
+    tbody tr:hover td {
+      background: rgba(96,165,250,0.06);
+    }
+
+    canvas {
+      background:
+        linear-gradient(180deg, rgba(255,255,255,0.97), rgba(244,247,252,0.98));
+      border-radius: 18px;
+      padding: 10px;
+      box-shadow:
+        inset 0 1px 0 rgba(255,255,255,0.65),
+        0 16px 30px rgba(0,0,0,0.25);
+    }
+
+    .header-card {
+      padding: 28px 24px;
+      background:
+        radial-gradient(circle at top right, rgba(251,191,36,0.14), transparent 26%),
+        radial-gradient(circle at left center, rgba(37,99,235,0.18), transparent 32%),
+        linear-gradient(180deg, rgba(255,255,255,0.05), rgba(255,255,255,0.02)),
+        rgba(17,24,39,0.78);
+      border: 1px solid rgba(255,255,255,0.09);
+    }
+
+    .header-card::after {
+      content: "";
+      position: absolute;
+      inset: auto -10% -65% auto;
+      width: 340px;
+      height: 340px;
+      background: radial-gradient(circle, rgba(96,165,250,0.12), transparent 58%);
+      pointer-events: none;
+    }
+
+    .section-title-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 8px;
+    }
+
+    .premium-divider {
+      height: 1px;
+      background: linear-gradient(90deg, transparent, rgba(255,255,255,0.12), transparent);
+      margin: 12px 0 0;
+    }
+
     @media (max-width: 900px) {
+      body {
+        padding: 14px;
+      }
+
       .stats, .row-3, .row-4, .two-col, .props-grid {
         grid-template-columns: 1fr;
+      }
+
+      .card {
+        padding: 18px;
+        border-radius: 18px;
+      }
+
+      .stat p {
+        font-size: 20px;
       }
     }
   </style>
 </head>
 <body>
   <div class="container">
-    <div class="card">
-      <h1>Wasting Money</h1>
-      <p class="subtle">stats funded by shamas</p>
+    <div class="card header-card">
+      <h1>NBA Edge Tracker</h1>
+      <p class="subtle">Live dashboard · smarter refresh by game state · calibrated model · premium edge view</p>
+      <div class="premium-divider"></div>
     </div>
 
     <div class="card">
@@ -170,7 +440,10 @@
     </div>
 
     <div class="card">
-      <h2 id="matchup">Waiting for game selection</h2>
+      <div class="section-title-row">
+        <h2 id="matchup">Waiting for game selection</h2>
+        <span class="pill">Live Model</span>
+      </div>
       <p id="pick">Pick: -</p>
 
       <div class="stats">
@@ -353,7 +626,7 @@
         </div>
       </div>
 
-      <div class="row-4" style="margin-top:12px;">
+      <div class="row-4" style="margin-top:14px;">
         <div class="stat">
           <strong>Home Starter Certainty</strong>
           <p id="homeStarterCertainty">-</p>
@@ -372,7 +645,7 @@
         </div>
       </div>
 
-      <div class="two-col" style="margin-top:12px;">
+      <div class="two-col" style="margin-top:14px;">
         <div>
           <h3>Home Injuries</h3>
           <div id="homeInjuriesBox" class="injury-box">No data</div>
@@ -498,74 +771,13 @@
       else el.classList.add("low");
     }
 
-    function clearDashboard(message) {
-      document.getElementById("matchup").textContent = message;
-      document.getElementById("pick").textContent = "Pick: -";
-      document.getElementById("edgeValue").textContent = "-";
-      document.getElementById("verdict").textContent = "-";
-      document.getElementById("gameMode").textContent = "-";
-      document.getElementById("updatedAt").textContent = "-";
-
-      document.getElementById("oddsDecimal").textContent = "-";
-      document.getElementById("oddsAmerican").textContent = "-";
-      document.getElementById("impliedPercent").textContent = "-";
-      document.getElementById("impliedAmerican").textContent = "-";
-      document.getElementById("truePercent").textContent = "-";
-      document.getElementById("trueAmerican").textContent = "-";
-
-      document.getElementById("confidenceLabel").textContent = "-";
-      document.getElementById("confidencePercent").textContent = "-";
-      document.getElementById("bookCount").textContent = "-";
-
-      document.getElementById("stakeTier").textContent = "-";
-      document.getElementById("stakeFraction").textContent = "-";
-
-      document.getElementById("move2h").textContent = "-";
-      document.getElementById("move24h").textContent = "-";
-      document.getElementById("avgSpread").textContent = "-";
-      document.getElementById("avgTotal").textContent = "-";
-      document.getElementById("disagreementPenalty").textContent = "-";
-      document.getElementById("modelAdjustments").textContent = "-";
-
-      document.getElementById("bestHome").textContent = "-";
-      document.getElementById("bestAway").textContent = "-";
-      document.getElementById("avgHome").textContent = "-";
-      document.getElementById("avgAway").textContent = "-";
-
-      document.getElementById("homeInjuryCount").textContent = "-";
-      document.getElementById("awayInjuryCount").textContent = "-";
-      document.getElementById("homeStartersOut").textContent = "-";
-      document.getElementById("awayStartersOut").textContent = "-";
-      document.getElementById("homeStarterCertainty").textContent = "-";
-      document.getElementById("awayStarterCertainty").textContent = "-";
-      document.getElementById("homePenalty").textContent = "-";
-      document.getElementById("awayPenalty").textContent = "-";
-
-      document.getElementById("homeInjuriesBox").textContent = "No data";
-      document.getElementById("awayInjuriesBox").textContent = "No data";
-      document.getElementById("lineupsBox").textContent = "No lineup source connected yet.";
-
-      document.getElementById("bookmakerTableBody").innerHTML = "";
-      document.getElementById("propsPoints").innerHTML = "No data";
-      document.getElementById("propsAssists").innerHTML = "No data";
-      document.getElementById("propsRebounds").innerHTML = "No data";
-      document.getElementById("propsPra").innerHTML = "No data";
-
-      edgeChart.data.labels = [];
-      edgeChart.data.datasets[0].data = [];
-      edgeChart.update();
-    }
-
-    function getProbMoveText(current, past) {
-      if (typeof current !== "number" || typeof past !== "number") return "-";
-      const delta = current - past;
-      return `${delta >= 0 ? "+" : ""}${(delta * 100).toFixed(2)}%`;
-    }
-
-    function formatOddsPair(decimal, american) {
-      const dec = typeof decimal === "number" ? decimal.toFixed(2) : "-";
-      const am = typeof american === "number" ? formatAmerican(american) : "-";
-      return `${dec} / ${am}`;
+    async function fetchJson(url) {
+      const res = await fetch(url);
+      const data = await res.json();
+      if (!res.ok || data.error) {
+        throw new Error(data.error || `Request failed: ${res.status}`);
+      }
+      return data;
     }
 
     function renderBookmakerTable(rows) {
@@ -581,8 +793,8 @@
         const tr = document.createElement("tr");
         tr.innerHTML = `
           <td>${row.book || "-"}</td>
-          <td>${formatOddsPair(row.homeDecimal, row.homeAmerican)}</td>
-          <td>${formatOddsPair(row.awayDecimal, row.awayAmerican)}</td>
+          <td>${row.homeDecimal ?? "-"} / ${typeof row.homeAmerican === "number" ? formatAmerican(row.homeAmerican) : "-"}</td>
+          <td>${row.awayDecimal ?? "-"} / ${typeof row.awayAmerican === "number" ? formatAmerican(row.awayAmerican) : "-"}</td>
           <td>${row.homeSpread ?? "-"}</td>
           <td>${row.total ?? "-"}</td>
         `;
@@ -620,7 +832,20 @@
       }
 
       box.innerHTML = items.slice(0, 8).map(item => {
-        const text = Object.values(item).slice(0, 6).join(" · ");
+        const name =
+          item.playerName ||
+          item.PlayerName ||
+          item.name ||
+          item.full_name ||
+          (item.player && typeof item.player === "object"
+            ? `${item.player.first_name || ""} ${item.player.last_name || ""}`.trim()
+            : "") ||
+          "";
+
+        const text = name
+          ? `${name} · ${Object.values(item).slice(0, 4).join(" · ")}`
+          : Object.values(item).slice(0, 6).join(" · ");
+
         return `<div class="pill">${text}</div>`;
       }).join("");
     }
@@ -652,9 +877,7 @@
 
     async function loadGames() {
       try {
-        const res = await fetch("/games");
-        const payload = await res.json();
-
+        const payload = await fetchJson("/games");
         gameSelect.innerHTML = "";
 
         if (!payload.games || payload.games.length === 0) {
@@ -664,7 +887,6 @@
           gameSelect.appendChild(option);
           selectedGameId = null;
           statusMessage.textContent = payload.error || "No games available right now.";
-          clearDashboard("No games available");
           return;
         }
 
@@ -688,25 +910,14 @@
         setRefreshTimer();
       } catch (err) {
         statusMessage.textContent = `Failed to load games: ${err.message}`;
-        clearDashboard("Failed to load games");
       }
     }
 
     async function loadSelectedGame() {
-      if (!selectedGameId) {
-        clearDashboard("Waiting for game selection");
-        return;
-      }
+      if (!selectedGameId) return;
 
       try {
-        const res = await fetch(`/odds?gameId=${encodeURIComponent(selectedGameId)}`);
-        const data = await res.json();
-
-        if (data.error) {
-          statusMessage.textContent = data.error;
-          clearDashboard(data.error);
-          return;
-        }
+        const data = await fetchJson(`/odds?gameId=${encodeURIComponent(selectedGameId)}`);
 
         selectedGameMode = data.gameMode || "pregame";
         setRefreshTimer();
@@ -754,6 +965,12 @@
             : "-";
 
         const hist = data.modelDetails?.historicalComparisons || {};
+        const getProbMoveText = (current, past) => {
+          if (typeof current !== "number" || typeof past !== "number") return "-";
+          const delta = current - past;
+          return `${delta >= 0 ? "+" : ""}${(delta * 100).toFixed(2)}%`;
+        };
+
         document.getElementById("move2h").textContent =
           getProbMoveText(data.impliedProbability, hist["2h"]?.homeMarketProb);
         document.getElementById("move24h").textContent =
@@ -766,52 +983,31 @@
         document.getElementById("disagreementPenalty").textContent =
           formatPercent(data.modelDetails?.disagreementPenalty);
 
-        const modelAdjustmentsText = [
+        document.getElementById("modelAdjustments").textContent = [
           `Spread ${formatPercent(data.modelDetails?.spreadAdj)}`,
           `Total ${formatPercent(data.modelDetails?.totalAdj)}`,
           `Move ${formatPercent(data.modelDetails?.lineMovementAdj)}`,
           `Props ${formatPercent(data.modelDetails?.propAdj)}`,
           `Injury ${formatPercent(data.modelDetails?.injuryAdjHome)}`
         ].join(" · ");
-        document.getElementById("modelAdjustments").textContent = modelAdjustmentsText;
 
         document.getElementById("bestHome").textContent =
-          formatOddsPair(
-            data.modelDetails?.bestHomePrice,
-            decimalToAmericanClient(data.modelDetails?.bestHomePrice)
-          );
+          `${data.modelDetails?.bestHomePrice ?? "-"} / ${formatAmerican(decimalToAmericanClient(data.modelDetails?.bestHomePrice))}`;
         document.getElementById("bestAway").textContent =
-          formatOddsPair(
-            data.modelDetails?.bestAwayPrice,
-            decimalToAmericanClient(data.modelDetails?.bestAwayPrice)
-          );
+          `${data.modelDetails?.bestAwayPrice ?? "-"} / ${formatAmerican(decimalToAmericanClient(data.modelDetails?.bestAwayPrice))}`;
         document.getElementById("avgHome").textContent =
-          formatOddsPair(
-            data.modelDetails?.avgHomePrice,
-            decimalToAmericanClient(data.modelDetails?.avgHomePrice)
-          );
+          `${data.modelDetails?.avgHomePrice ?? "-"} / ${formatAmerican(decimalToAmericanClient(data.modelDetails?.avgHomePrice))}`;
         document.getElementById("avgAway").textContent =
-          formatOddsPair(
-            data.modelDetails?.avgAwayPrice,
-            decimalToAmericanClient(data.modelDetails?.avgAwayPrice)
-          );
+          `${data.modelDetails?.avgAwayPrice ?? "-"} / ${formatAmerican(decimalToAmericanClient(data.modelDetails?.avgAwayPrice))}`;
 
-        document.getElementById("homeInjuryCount").textContent =
-          data.injuryStatus?.homeInjuriesCount ?? "-";
-        document.getElementById("awayInjuryCount").textContent =
-          data.injuryStatus?.awayInjuriesCount ?? "-";
-        document.getElementById("homeStartersOut").textContent =
-          data.injuryStatus?.homeStartersOut ?? "-";
-        document.getElementById("awayStartersOut").textContent =
-          data.injuryStatus?.awayStartersOut ?? "-";
-        document.getElementById("homeStarterCertainty").textContent =
-          formatPercent(data.injuryStatus?.homeStarterCertainty);
-        document.getElementById("awayStarterCertainty").textContent =
-          formatPercent(data.injuryStatus?.awayStarterCertainty);
-        document.getElementById("homePenalty").textContent =
-          formatPercent(data.injuryStatus?.homePenalty);
-        document.getElementById("awayPenalty").textContent =
-          formatPercent(data.injuryStatus?.awayPenalty);
+        document.getElementById("homeInjuryCount").textContent = data.injuryStatus?.homeInjuriesCount ?? "-";
+        document.getElementById("awayInjuryCount").textContent = data.injuryStatus?.awayInjuriesCount ?? "-";
+        document.getElementById("homeStartersOut").textContent = data.injuryStatus?.homeStartersOut ?? "-";
+        document.getElementById("awayStartersOut").textContent = data.injuryStatus?.awayStartersOut ?? "-";
+        document.getElementById("homeStarterCertainty").textContent = formatPercent(data.injuryStatus?.homeStarterCertainty);
+        document.getElementById("awayStarterCertainty").textContent = formatPercent(data.injuryStatus?.awayStarterCertainty);
+        document.getElementById("homePenalty").textContent = formatPercent(data.injuryStatus?.homePenalty);
+        document.getElementById("awayPenalty").textContent = formatPercent(data.injuryStatus?.awayPenalty);
 
         renderInjuries(data.injuryStatus?.homeInjuries || [], "homeInjuriesBox");
         renderInjuries(data.injuryStatus?.awayInjuries || [], "awayInjuriesBox");
@@ -828,7 +1024,6 @@
         edgeChart.update();
 
         renderBookmakerTable(data.bookmakerTable);
-
         renderPropRows(data.propSections?.points || [], "propsPoints");
         renderPropRows(data.propSections?.assists || [], "propsAssists");
         renderPropRows(data.propSections?.rebounds || [], "propsRebounds");
@@ -837,7 +1032,6 @@
         statusMessage.textContent = `Loaded ${data.awayTeam} @ ${data.homeTeam} · ${data.gameMode} · updated ${new Date(data.timestamp).toLocaleTimeString()}`;
       } catch (err) {
         statusMessage.textContent = `Failed to load game: ${err.message}`;
-        clearDashboard("Failed to load selected game");
       }
     }
 
