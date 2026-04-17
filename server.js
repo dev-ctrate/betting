@@ -1,6 +1,5 @@
 const express = require("express");
 const path = require("path");
-const fs = require("fs");
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -12,156 +11,93 @@ const SPORT_KEY = "basketball_nba";
 const REGIONS = "us";
 const ODDS_FORMAT = "decimal";
 const FEATURED_MARKETS = "h2h,spreads,totals";
-const PROP_MARKETS = [
+const PLAYER_PROP_MARKETS = [
   "player_points",
-  "player_assists",
   "player_rebounds",
+  "player_assists",
   "player_points_rebounds_assists"
 ].join(",");
 
-const CURRENT_TTL_MS = 20 * 1000;
-const HISTORICAL_TTL_MS = 10 * 60 * 1000;
-const SIDEINFO_TTL_MS = 10 * 60 * 1000;
-const SNAPSHOT_FILE = path.join(__dirname, "model_snapshots.jsonl");
+const HISTORICAL_LOOKBACKS = [
+  { label: "2h", ms: 2 * 60 * 60 * 1000 },
+  { label: "24h", ms: 24 * 60 * 60 * 1000 }
+];
 
 const currentCache = new Map();
 const historicalCache = new Map();
 const sideInfoCache = new Map();
-const priceHistoryStore = {};
+const edgeHistoryStore = {};
+const snapshotLogStore = {};
 
-function round2(value) {
-  return typeof value === "number" && Number.isFinite(value)
-    ? Math.round(value * 100) / 100
-    : null;
-}
+const CURRENT_TTL_MS = 25 * 1000;
+const HISTORICAL_TTL_MS = 30 * 60 * 1000;
+const SIDEINFO_TTL_MS = 10 * 60 * 1000;
+const SNAPSHOT_RETENTION = 500;
 
-function clamp(value, min, max) {
-  return Math.max(min, Math.min(max, value));
+// ---------- helpers ----------
+function clamp(x, min, max) {
+  return Math.max(min, Math.min(max, x));
 }
 
 function average(values) {
-  if (!Array.isArray(values) || values.length === 0) return null;
+  if (!values.length) return null;
   return values.reduce((sum, v) => sum + v, 0) / values.length;
 }
 
 function variance(values) {
-  if (!Array.isArray(values) || values.length === 0) return null;
+  if (!values.length) return 0;
   const avg = average(values);
   return average(values.map(v => (v - avg) ** 2));
 }
 
-function decimalToAmerican(decimalOdds) {
-  if (typeof decimalOdds !== "number" || !Number.isFinite(decimalOdds) || decimalOdds <= 1) {
-    return null;
+function weightedAverage(pairs) {
+  if (!pairs.length) return null;
+  let num = 0;
+  let den = 0;
+  for (const pair of pairs) {
+    num += pair.value * pair.weight;
+    den += pair.weight;
   }
-  if (decimalOdds >= 2) {
-    return Math.round((decimalOdds - 1) * 100);
-  }
-  return Math.round(-100 / (decimalOdds - 1));
+  return den === 0 ? null : num / den;
 }
 
-function probabilityToAmerican(probPercent) {
-  if (typeof probPercent !== "number" || !Number.isFinite(probPercent)) return null;
-  const probability = probPercent / 100;
-  if (probability <= 0 || probability >= 1) return null;
-  const decimalOdds = 1 / probability;
-  return decimalToAmerican(decimalOdds);
-}
-
-function decimalToImpliedPercent(decimalOdds) {
-  if (typeof decimalOdds !== "number" || !Number.isFinite(decimalOdds) || decimalOdds <= 1) {
-    return null;
-  }
-  return 100 / decimalOdds;
-}
-
-function toAmericanString(numberValue) {
-  if (typeof numberValue !== "number" || !Number.isFinite(numberValue)) return null;
-  return numberValue > 0 ? `+${numberValue}` : `${numberValue}`;
-}
-
-function noVigTwoWayProbPercent(priceA, priceB) {
-  if (
-    typeof priceA !== "number" ||
-    typeof priceB !== "number" ||
-    !Number.isFinite(priceA) ||
-    !Number.isFinite(priceB) ||
-    priceA <= 1 ||
-    priceB <= 1
-  ) {
-    return { a: null, b: null };
-  }
-
+function noVigTwoWayProb(priceA, priceB) {
   const rawA = 1 / priceA;
   const rawB = 1 / priceB;
   const total = rawA + rawB;
-
   return {
-    a: (rawA / total) * 100,
-    b: (rawB / total) * 100
+    a: rawA / total,
+    b: rawB / total
   };
 }
 
 function getBookWeight(bookKey) {
   const sharpBooks = ["pinnacle", "circasports", "matchbook"];
-  const solidBooks = ["draftkings", "fanduel", "betmgm", "betrivers"];
+  const strongBooks = ["draftkings", "fanduel", "betmgm", "betrivers"];
   if (sharpBooks.includes(bookKey)) return 1.4;
-  if (solidBooks.includes(bookKey)) return 1.15;
+  if (strongBooks.includes(bookKey)) return 1.15;
   return 1.0;
-}
-
-function weightedAverage(pairs) {
-  if (!Array.isArray(pairs) || pairs.length === 0) return null;
-  let numerator = 0;
-  let denominator = 0;
-
-  for (const pair of pairs) {
-    if (
-      typeof pair?.value === "number" &&
-      Number.isFinite(pair.value) &&
-      typeof pair?.weight === "number" &&
-      Number.isFinite(pair.weight)
-    ) {
-      numerator += pair.value * pair.weight;
-      denominator += pair.weight;
-    }
-  }
-
-  return denominator > 0 ? numerator / denominator : null;
-}
-
-function buildOddsFormatsFromDecimal(decimalOdds) {
-  const impliedPercent = decimalToImpliedPercent(decimalOdds);
-  const american = decimalToAmerican(decimalOdds);
-
-  return {
-    american,
-    americanText: toAmericanString(american),
-    decimal: round2(decimalOdds),
-    impliedPercent: round2(impliedPercent)
-  };
-}
-
-function buildProbabilityFormats(probPercent) {
-  const american = probabilityToAmerican(probPercent);
-
-  return {
-    percent: round2(probPercent),
-    american,
-    americanText: toAmericanString(american)
-  };
 }
 
 function toIso(ms) {
   return new Date(ms).toISOString();
 }
 
-function buildOddsUrl(pathname, params) {
-  const url = new URL(`https://api.the-odds-api.com${pathname}`);
-  Object.entries(params).forEach(([key, value]) => {
-    url.searchParams.set(key, value);
+function cacheGet(map, key) {
+  const hit = map.get(key);
+  if (!hit) return null;
+  if (Date.now() > hit.expiresAt) {
+    map.delete(key);
+    return null;
+  }
+  return hit.value;
+}
+
+function cacheSet(map, key, value, ttlMs) {
+  map.set(key, {
+    value,
+    expiresAt: Date.now() + ttlMs
   });
-  return url.toString();
 }
 
 async function fetchJson(url) {
@@ -173,21 +109,10 @@ async function fetchJson(url) {
   return await response.json();
 }
 
-function cacheGet(map, key) {
-  const item = map.get(key);
-  if (!item) return null;
-  if (Date.now() > item.expiresAt) {
-    map.delete(key);
-    return null;
-  }
-  return item.value;
-}
-
-function cacheSet(map, key, value, ttlMs) {
-  map.set(key, {
-    value,
-    expiresAt: Date.now() + ttlMs
-  });
+function buildOddsUrl(pathname, params) {
+  const base = `https://api.the-odds-api.com${pathname}`;
+  const sp = new URLSearchParams(params);
+  return `${base}?${sp.toString()}`;
 }
 
 function requireOddsKey() {
@@ -199,42 +124,100 @@ function requireFantasyNerdsKey() {
 }
 
 function findMarket(bookmaker, marketKey) {
-  return bookmaker?.markets?.find(m => m?.key === marketKey) || null;
+  return bookmaker.markets?.find(m => m.key === marketKey) || null;
 }
 
-function gameMode(commenceTime) {
-  const start = new Date(commenceTime).getTime();
-  return Date.now() >= start ? "live" : "pregame";
-}
-
-function logSnapshot(payload) {
-  try {
-    fs.appendFileSync(SNAPSHOT_FILE, JSON.stringify(payload) + "\n", "utf8");
-  } catch (_) {}
-}
-
-function updatePriceHistory(gameId, value) {
-  if (!priceHistoryStore[gameId]) {
-    priceHistoryStore[gameId] = [];
-  }
-
-  priceHistoryStore[gameId].push({
-    timestamp: new Date().toISOString(),
-    value
-  });
-
+function trimEdgeHistory(gameId) {
   const cutoff = Date.now() - 15 * 60 * 1000;
-  priceHistoryStore[gameId] = priceHistoryStore[gameId].filter(point => {
+  edgeHistoryStore[gameId] = (edgeHistoryStore[gameId] || []).filter(point => {
     return new Date(point.timestamp).getTime() >= cutoff;
   });
-
-  return priceHistoryStore[gameId];
 }
 
+function addEdgeHistory(gameId, edge, timestamp) {
+  if (!edgeHistoryStore[gameId]) {
+    edgeHistoryStore[gameId] = [];
+  }
+
+  let smoothedEdge = edge;
+  if (edgeHistoryStore[gameId].length > 0) {
+    const prev = edgeHistoryStore[gameId][edgeHistoryStore[gameId].length - 1].edge;
+    smoothedEdge = prev * 0.55 + edge * 0.45;
+  }
+
+  edgeHistoryStore[gameId].push({
+    timestamp,
+    edge: smoothedEdge
+  });
+
+  trimEdgeHistory(gameId);
+  return smoothedEdge;
+}
+
+function logSnapshot(gameId, snapshot) {
+  if (!snapshotLogStore[gameId]) {
+    snapshotLogStore[gameId] = [];
+  }
+  snapshotLogStore[gameId].push(snapshot);
+  if (snapshotLogStore[gameId].length > SNAPSHOT_RETENTION) {
+    snapshotLogStore[gameId] = snapshotLogStore[gameId].slice(-SNAPSHOT_RETENTION);
+  }
+}
+
+function buildMode(commenceTime) {
+  const startMs = new Date(commenceTime).getTime();
+  return Date.now() >= startMs ? "live" : "pregame";
+}
+
+// ---------- odds conversions ----------
+function decimalToAmerican(decimalOdds) {
+  if (typeof decimalOdds !== "number" || decimalOdds <= 1) return null;
+  if (decimalOdds >= 2) return Math.round((decimalOdds - 1) * 100);
+  return Math.round(-100 / (decimalOdds - 1));
+}
+
+function probabilityToDecimal(probability) {
+  if (typeof probability !== "number" || probability <= 0 || probability >= 1) {
+    return null;
+  }
+  return 1 / probability;
+}
+
+function probabilityToAmerican(probability) {
+  const decimal = probabilityToDecimal(probability);
+  return decimalToAmerican(decimal);
+}
+
+function buildOddsFormatsFromDecimal(decimalOdds) {
+  if (typeof decimalOdds !== "number" || decimalOdds <= 1) {
+    return {
+      decimal: null,
+      american: null,
+      impliedPercent: null
+    };
+  }
+
+  const implied = 1 / decimalOdds;
+
+  return {
+    decimal: decimalOdds,
+    american: decimalToAmerican(decimalOdds),
+    impliedPercent: implied
+  };
+}
+
+function buildProbabilityFormats(probability) {
+  return {
+    percent: probability,
+    american: probabilityToAmerican(probability)
+  };
+}
+
+// ---------- odds api ----------
 async function getUpcomingEvents() {
   const cacheKey = "events";
-  const cached = cacheGet(currentCache, cacheKey);
-  if (cached) return cached;
+  const hit = cacheGet(currentCache, cacheKey);
+  if (hit) return hit;
 
   const url = buildOddsUrl(`/v4/sports/${SPORT_KEY}/events`, {
     apiKey: ODDS_API_KEY
@@ -247,8 +230,8 @@ async function getUpcomingEvents() {
 
 async function getEventFeaturedOdds(eventId) {
   const cacheKey = `featured:${eventId}`;
-  const cached = cacheGet(currentCache, cacheKey);
-  if (cached) return cached;
+  const hit = cacheGet(currentCache, cacheKey);
+  if (hit) return hit;
 
   const url = buildOddsUrl(`/v4/sports/${SPORT_KEY}/events/${eventId}/odds`, {
     apiKey: ODDS_API_KEY,
@@ -264,13 +247,13 @@ async function getEventFeaturedOdds(eventId) {
 
 async function getEventPlayerProps(eventId) {
   const cacheKey = `props:${eventId}`;
-  const cached = cacheGet(currentCache, cacheKey);
-  if (cached) return cached;
+  const hit = cacheGet(currentCache, cacheKey);
+  if (hit) return hit;
 
   const url = buildOddsUrl(`/v4/sports/${SPORT_KEY}/events/${eventId}/odds`, {
     apiKey: ODDS_API_KEY,
     regions: REGIONS,
-    markets: PROP_MARKETS,
+    markets: PLAYER_PROP_MARKETS,
     oddsFormat: ODDS_FORMAT
   });
 
@@ -284,9 +267,9 @@ async function getEventPlayerProps(eventId) {
 }
 
 async function getHistoricalSnapshot(dateIso) {
-  const cacheKey = `history:${dateIso}`;
-  const cached = cacheGet(historicalCache, cacheKey);
-  if (cached) return cached;
+  const cacheKey = `hist:${dateIso}`;
+  const hit = cacheGet(historicalCache, cacheKey);
+  if (hit) return hit;
 
   const url = buildOddsUrl(`/v4/historical/sports/${SPORT_KEY}/odds`, {
     apiKey: ODDS_API_KEY,
@@ -301,285 +284,292 @@ async function getHistoricalSnapshot(dateIso) {
   return data;
 }
 
-function matchHistoricalEvent(events, homeTeam, awayTeam) {
-  return (events || []).find(event =>
-    event?.home_team === homeTeam && event?.away_team === awayTeam
+function matchHistoricalEvent(snapshotEvents, homeTeam, awayTeam) {
+  return (snapshotEvents || []).find(
+    event => event.home_team === homeTeam && event.away_team === awayTeam
   ) || null;
 }
 
-function extractMarketSnapshot(eventOdds) {
+function extractFeaturedConsensus(eventOdds) {
   const homeProbPairs = [];
   const awayProbPairs = [];
   const homeProbRaw = [];
   const awayProbRaw = [];
   const spreadSignals = [];
   const totalSignals = [];
-  const rows = [];
+  const books = [];
 
-  for (const bookmaker of eventOdds?.bookmakers || []) {
-    const weight = getBookWeight(bookmaker?.key || "");
+  for (const bookmaker of eventOdds.bookmakers || []) {
+    const weight = getBookWeight(bookmaker.key || "");
     const h2h = findMarket(bookmaker, "h2h");
     const spreads = findMarket(bookmaker, "spreads");
     const totals = findMarket(bookmaker, "totals");
 
-    let homePrice = null;
-    let awayPrice = null;
-    let homeSpread = null;
-    let awaySpread = null;
-    let total = null;
+    let bookHomePrice = null;
+    let bookAwayPrice = null;
+    let bookHomeSpread = null;
+    let bookAwaySpread = null;
+    let bookTotal = null;
 
     if (h2h?.outcomes?.length >= 2) {
-      const homeOutcome = h2h.outcomes.find(o => o?.name === eventOdds?.home_team);
-      const awayOutcome = h2h.outcomes.find(o => o?.name === eventOdds?.away_team);
+      const homeOutcome = h2h.outcomes.find(o => o.name === eventOdds.home_team);
+      const awayOutcome = h2h.outcomes.find(o => o.name === eventOdds.away_team);
 
       if (homeOutcome && awayOutcome) {
-        homePrice = homeOutcome.price;
-        awayPrice = awayOutcome.price;
+        bookHomePrice = homeOutcome.price;
+        bookAwayPrice = awayOutcome.price;
 
-        const nv = noVigTwoWayProbPercent(homePrice, awayPrice);
-        if (typeof nv.a === "number") {
-          homeProbPairs.push({ value: nv.a, weight });
-          homeProbRaw.push(nv.a);
-        }
-        if (typeof nv.b === "number") {
-          awayProbPairs.push({ value: nv.b, weight });
-          awayProbRaw.push(nv.b);
-        }
+        const nv = noVigTwoWayProb(homeOutcome.price, awayOutcome.price);
+        homeProbPairs.push({ value: nv.a, weight });
+        awayProbPairs.push({ value: nv.b, weight });
+        homeProbRaw.push(nv.a);
+        awayProbRaw.push(nv.b);
       }
     }
 
     if (spreads?.outcomes?.length >= 2) {
-      const homeSpreadOutcome = spreads.outcomes.find(o => o?.name === eventOdds?.home_team);
-      const awaySpreadOutcome = spreads.outcomes.find(o => o?.name === eventOdds?.away_team);
+      const homeSpread = spreads.outcomes.find(o => o.name === eventOdds.home_team);
+      const awaySpread = spreads.outcomes.find(o => o.name === eventOdds.away_team);
 
-      if (typeof homeSpreadOutcome?.point === "number") {
-        homeSpread = homeSpreadOutcome.point;
+      if (homeSpread && typeof homeSpread.point === "number") {
+        bookHomeSpread = homeSpread.point;
         spreadSignals.push({
-          value: homeSpread,
+          value: clamp((-homeSpread.point) * 0.0105, -0.10, 0.10),
           weight
         });
       }
 
-      if (typeof awaySpreadOutcome?.point === "number") {
-        awaySpread = awaySpreadOutcome.point;
+      if (awaySpread && typeof awaySpread.point === "number") {
+        bookAwaySpread = awaySpread.point;
       }
     }
 
     if (totals?.outcomes?.length >= 2) {
-      const overOutcome = totals.outcomes.find(o => o?.name === "Over");
-      if (typeof overOutcome?.point === "number") {
-        total = overOutcome.point;
+      const over = totals.outcomes.find(o => o.name === "Over");
+      if (over && typeof over.point === "number") {
+        bookTotal = over.point;
         totalSignals.push({
-          value: total,
+          value: over.point,
           weight
         });
       }
     }
 
-    rows.push({
-      book: bookmaker?.key || "n/a",
-      homeDecimal: round2(homePrice),
-      homeAmerican: decimalToAmerican(homePrice),
-      awayDecimal: round2(awayPrice),
-      awayAmerican: decimalToAmerican(awayPrice),
-      homeSpread: round2(homeSpread),
-      awaySpread: round2(awaySpread),
-      total: round2(total)
+    books.push({
+      book: bookmaker.key,
+      homePrice: bookHomePrice,
+      awayPrice: bookAwayPrice,
+      homeSpread: bookHomeSpread,
+      awaySpread: bookAwaySpread,
+      total: bookTotal,
+      homeDecimal: bookHomePrice,
+      homeAmerican: decimalToAmerican(bookHomePrice),
+      awayDecimal: bookAwayPrice,
+      awayAmerican: decimalToAmerican(bookAwayPrice)
     });
   }
 
-  const bestHome = Math.max(...rows.map(r => r.homeDecimal).filter(v => typeof v === "number"), -Infinity);
-  const bestAway = Math.max(...rows.map(r => r.awayDecimal).filter(v => typeof v === "number"), -Infinity);
-  const avgHome = average(rows.map(r => r.homeDecimal).filter(v => typeof v === "number"));
-  const avgAway = average(rows.map(r => r.awayDecimal).filter(v => typeof v === "number"));
-  const avgSpread = weightedAverage(spreadSignals);
-  const avgTotal = weightedAverage(totalSignals);
+  if (!homeProbPairs.length || !awayProbPairs.length) {
+    return null;
+  }
+
+  const homeMarketProb = weightedAverage(homeProbPairs);
+  const awayMarketProb = weightedAverage(awayProbPairs);
+
+  const spreadAdj = weightedAverage(spreadSignals) || 0;
+  const totalConsensus = weightedAverage(totalSignals) || 0;
+
+  let totalAdj = 0;
+  if (totalConsensus < 220) totalAdj = 0.005;
+  else if (totalConsensus > 236) totalAdj = -0.005;
+
+  const disagreementPenalty = clamp(
+    (variance(homeProbRaw) + variance(awayProbRaw)) * 10,
+    0,
+    0.035
+  );
+
+  const homePrices = books.map(b => b.homePrice).filter(v => typeof v === "number");
+  const awayPrices = books.map(b => b.awayPrice).filter(v => typeof v === "number");
+  const totals = books.map(b => b.total).filter(v => typeof v === "number");
+  const homeSpreads = books.map(b => b.homeSpread).filter(v => typeof v === "number");
 
   return {
-    marketProbabilityHome: round2(weightedAverage(homeProbPairs)),
-    marketProbabilityAway: round2(weightedAverage(awayProbPairs)),
-    bestHomeDecimal: bestHome === -Infinity ? null : round2(bestHome),
-    bestAwayDecimal: bestAway === -Infinity ? null : round2(bestAway),
-    avgHomeDecimal: round2(avgHome),
-    avgAwayDecimal: round2(avgAway),
-    avgHomeSpread: round2(avgSpread),
-    avgTotal: round2(avgTotal),
-    disagreementPenaltyPercent: round2(
-      (() => {
-        const hv = variance(homeProbRaw);
-        const av = variance(awayProbRaw);
-        if (hv === null || av === null) return null;
-        return clamp((hv + av) * 10, 0, 3.5);
-      })()
-    ),
-    bookCount: rows.filter(r => typeof r.homeDecimal === "number" && typeof r.awayDecimal === "number").length,
-    bookmakerTable: rows
+    homeMarketProb,
+    awayMarketProb,
+    spreadAdj,
+    totalConsensus,
+    totalAdj,
+    disagreementPenalty,
+    bestHomePrice: homePrices.length ? Math.max(...homePrices) : null,
+    bestAwayPrice: awayPrices.length ? Math.max(...awayPrices) : null,
+    avgHomePrice: average(homePrices),
+    avgAwayPrice: average(awayPrices),
+    avgHomeSpread: average(homeSpreads),
+    avgTotal: average(totals),
+    bookCount: books.filter(b => typeof b.homePrice === "number" && typeof b.awayPrice === "number").length,
+    books
   };
 }
 
-function groupPropMarkets(propsEventOdds) {
-  const grouped = {};
+// ---------- props ----------
+function groupPlayerPropMarkets(propsEventOdds) {
+  const groupedMarkets = {};
 
-  for (const bookmaker of propsEventOdds?.bookmakers || []) {
-    for (const market of bookmaker?.markets || []) {
-      if (!grouped[market.key]) grouped[market.key] = [];
+  for (const bookmaker of propsEventOdds.bookmakers || []) {
+    for (const market of bookmaker.markets || []) {
+      if (!groupedMarkets[market.key]) groupedMarkets[market.key] = [];
 
-      for (const outcome of market?.outcomes || []) {
-        grouped[market.key].push({
-          book: bookmaker?.key || "n/a",
-          player: outcome?.description || "",
-          side: outcome?.name || "",
-          line: outcome?.point ?? null,
-          decimal: outcome?.price ?? null
+      for (const outcome of market.outcomes || []) {
+        groupedMarkets[market.key].push({
+          book: bookmaker.key,
+          player: outcome.description || "",
+          side: outcome.name || "",
+          point: outcome.point ?? null,
+          price: outcome.price ?? null
         });
       }
     }
   }
 
-  return grouped;
+  return groupedMarkets;
 }
 
-function confidenceWord(probabilityPercent) {
-  if (typeof probabilityPercent !== "number") return "N/A";
-  if (probabilityPercent < 52) return "DON'T";
-  if (probabilityPercent < 57) return "Maybe";
-  if (probabilityPercent < 65) return "Do";
-  return "YES";
-}
+function buildStructuredPropSections(propsEventOdds) {
+  const groupedMarkets = groupPlayerPropMarkets(propsEventOdds);
 
-function confidenceColor(probabilityPercent) {
-  if (typeof probabilityPercent !== "number") return "gray";
-  if (probabilityPercent < 52) return "red";
-  if (probabilityPercent < 57) return "orange";
-  if (probabilityPercent < 65) return "gold";
-  return "green";
-}
-
-function buildPropSections(propsEventOdds) {
-  const raw = groupPropMarkets(propsEventOdds);
-
-  const marketToSection = {
+  const marketMap = {
     player_points: "points",
     player_assists: "assists",
     player_rebounds: "rebounds",
     player_points_rebounds_assists: "pra"
   };
 
-  const output = {
+  const sections = {
     points: [],
     assists: [],
     rebounds: [],
     pra: []
   };
 
-  for (const [marketKey, section] of Object.entries(marketToSection)) {
-    const rows = raw[marketKey] || [];
-    const bucket = {};
+  for (const [marketKey, displayKey] of Object.entries(marketMap)) {
+    const outcomes = groupedMarkets[marketKey] || [];
+    const grouped = {};
 
-    for (const row of rows) {
-      const key = `${row.player}__${row.line}`;
-      if (!bucket[key]) {
-        bucket[key] = {
-          player: row.player,
-          line: row.line,
+    for (const o of outcomes) {
+      const key = `${o.player}__${o.point}`;
+      if (!grouped[key]) {
+        grouped[key] = {
+          player: o.player,
+          point: o.point,
           overPrices: [],
           underPrices: []
         };
       }
 
-      if ((row.side || "").toLowerCase() === "over" && typeof row.decimal === "number") {
-        bucket[key].overPrices.push(row.decimal);
-      }
-      if ((row.side || "").toLowerCase() === "under" && typeof row.decimal === "number") {
-        bucket[key].underPrices.push(row.decimal);
+      if ((o.side || "").toLowerCase() === "over" && typeof o.price === "number") {
+        grouped[key].overPrices.push(o.price);
+      } else if ((o.side || "").toLowerCase() === "under" && typeof o.price === "number") {
+        grouped[key].underPrices.push(o.price);
       }
     }
 
-    output[section] = Object.values(bucket)
+    const rows = Object.values(grouped)
       .map(item => {
-        const overDecimal = average(item.overPrices);
-        const underDecimal = average(item.underPrices);
-        const overAmerican = decimalToAmerican(overDecimal);
-        const underAmerican = decimalToAmerican(underDecimal);
+        const avgOver = average(item.overPrices);
+        const avgUnder = average(item.underPrices);
 
-        let overProb = null;
-        let underProb = null;
-
-        if (typeof overDecimal === "number" && typeof underDecimal === "number") {
-          const nv = noVigTwoWayProbPercent(overDecimal, underDecimal);
-          overProb = nv.a;
-          underProb = nv.b;
-        }
-
-        let recommendedSide = "N/A";
-        let recommendedDecimal = null;
-        let recommendedAmerican = null;
-        let recommendedChance = null;
-
-        if (typeof overProb === "number" && typeof underProb === "number") {
-          if (overProb >= underProb) {
-            recommendedSide = "Over";
-            recommendedDecimal = overDecimal;
-            recommendedAmerican = overAmerican;
-            recommendedChance = overProb;
-          } else {
-            recommendedSide = "Under";
-            recommendedDecimal = underDecimal;
-            recommendedAmerican = underAmerican;
-            recommendedChance = underProb;
-          }
+        let hitProb = null;
+        if (typeof avgOver === "number" && typeof avgUnder === "number") {
+          hitProb = noVigTwoWayProb(avgOver, avgUnder).a;
+        } else if (typeof avgOver === "number") {
+          hitProb = decimalToImpliedPercent(avgOver);
         }
 
         return {
-          player: item.player || "N/A",
-          line: round2(item.line),
-          overDecimal: round2(overDecimal),
-          overAmerican,
-          underDecimal: round2(underDecimal),
-          underAmerican,
-          recommendedSide,
-          recommendedDecimal: round2(recommendedDecimal),
-          recommendedAmerican,
-          hitChancePercent: round2(recommendedChance),
-          confidenceText: confidenceWord(recommendedChance),
-          confidenceColor: confidenceColor(recommendedChance),
+          player: item.player,
+          line: item.point,
+          overDecimal: avgOver,
+          overAmerican: decimalToAmerican(avgOver),
+          hitProbability: hitProb,
           coverage: item.overPrices.length + item.underPrices.length
         };
       })
       .filter(row => row.player && typeof row.line === "number")
-      .sort((a, b) => (b.coverage - a.coverage) || ((b.hitChancePercent || 0) - (a.hitChancePercent || 0)))
-      .slice(0, 8);
+      .sort((a, b) => (b.coverage - a.coverage) || ((b.hitProbability || 0) - (a.hitProbability || 0)))
+      .slice(0, 12);
+
+    sections[displayKey] = rows;
   }
 
-  return output;
+  return sections;
 }
 
-function buildPlayerImpact(propSections) {
-  const allProps = [
+function buildPropSignal(propSections) {
+  const allRows = [
     ...(propSections.points || []),
     ...(propSections.assists || []),
     ...(propSections.rebounds || []),
     ...(propSections.pra || [])
   ];
 
-  const playerMap = {};
-
-  for (const row of allProps) {
-    const name = (row.player || "").toLowerCase().trim();
-    if (!name) continue;
-
-    const strength =
-      clamp((row.line || 0) * 0.01, 0, 1.5) +
-      clamp(((row.hitChancePercent || 50) - 50) * 0.03, 0, 1.5);
-
-    if (!playerMap[name]) playerMap[name] = 0;
-    playerMap[name] += strength;
+  if (!allRows.length) {
+    return { adj: 0, depth: 0 };
   }
 
-  return playerMap;
+  let strength = 0;
+  let observations = 0;
+
+  for (const row of allRows) {
+    const coverageBoost = clamp((row.coverage - 1) * 0.0015, 0, 0.01);
+    const lineStrength = clamp((row.line || 0) * 0.0005, 0, 0.02);
+    const probStrength = clamp(((row.hitProbability || 0.5) - 0.5) * 0.05, -0.015, 0.015);
+
+    strength += coverageBoost + lineStrength + probStrength;
+    observations += 1;
+  }
+
+  return {
+    adj: clamp((strength / Math.max(observations, 1)) * 0.4, 0, 0.01),
+    depth: observations
+  };
 }
 
-function normalizeFantasyRows(payload) {
+// ---------- historical ----------
+async function buildHistoricalComparisons(homeTeam, awayTeam) {
+  const comparisons = {};
+
+  for (const lookback of HISTORICAL_LOOKBACKS) {
+    const dateIso = toIso(Date.now() - lookback.ms);
+
+    try {
+      const snapshot = await getHistoricalSnapshot(dateIso);
+      const matched = matchHistoricalEvent(snapshot.data || snapshot, homeTeam, awayTeam);
+
+      if (matched) {
+        const extracted = extractFeaturedConsensus(matched);
+        if (extracted) {
+          comparisons[lookback.label] = {
+            timestampRequested: dateIso,
+            homeMarketProb: extracted.homeMarketProb,
+            awayMarketProb: extracted.awayMarketProb,
+            spreadAdj: extracted.spreadAdj,
+            totalConsensus: extracted.totalConsensus,
+            avgHomeSpread: extracted.avgHomeSpread,
+            avgTotal: extracted.avgTotal
+          };
+        }
+      }
+    } catch (err) {
+      comparisons[lookback.label] = { error: err.message };
+    }
+  }
+
+  return comparisons;
+}
+
+// ---------- Fantasy Nerds ----------
+function normalizeFantasyNerdsRows(payload) {
   if (Array.isArray(payload)) return payload;
   if (Array.isArray(payload?.Data)) return payload.Data;
   if (Array.isArray(payload?.data)) return payload.data;
@@ -589,66 +579,94 @@ function normalizeFantasyRows(payload) {
   return [];
 }
 
-async function getFantasyInjuries() {
-  if (!requireFantasyNerdsKey()) return { rows: [], available: false };
+function teamNameLooseMatch(sourceText, teamName) {
+  if (!sourceText || !teamName) return false;
+  const a = sourceText.toLowerCase();
+  const b = teamName.toLowerCase();
+  const lastWord = teamName.split(" ").slice(-1)[0].toLowerCase();
+  return a.includes(b) || a.includes(lastWord);
+}
 
-  const key = "fn-injuries";
-  const cached = cacheGet(sideInfoCache, key);
-  if (cached) return cached;
+async function getFantasyNerdsInjuries() {
+  if (!requireFantasyNerdsKey()) return { available: false, rows: [] };
+
+  const cacheKey = "fn:injuries";
+  const hit = cacheGet(sideInfoCache, cacheKey);
+  if (hit) return hit;
 
   const url = `https://api.fantasynerds.com/v1/nba/injuries?apikey=${encodeURIComponent(FANTASYNERDS_API_KEY)}`;
   const raw = await fetchJson(url);
-  const value = { rows: normalizeFantasyRows(raw), available: true };
-  cacheSet(sideInfoCache, key, value, SIDEINFO_TTL_MS);
+  const value = {
+    available: true,
+    rows: normalizeFantasyNerdsRows(raw),
+    raw
+  };
+  cacheSet(sideInfoCache, cacheKey, value, SIDEINFO_TTL_MS);
   return value;
 }
 
-async function getFantasyLineups() {
-  if (!requireFantasyNerdsKey()) return { rows: [], available: false };
+async function getFantasyNerdsLineups(dateStr = "") {
+  if (!requireFantasyNerdsKey()) return { available: false, rows: [] };
 
-  const key = "fn-lineups";
-  const cached = cacheGet(sideInfoCache, key);
-  if (cached) return cached;
+  const cacheKey = `fn:lineups:${dateStr || "today"}`;
+  const hit = cacheGet(sideInfoCache, cacheKey);
+  if (hit) return hit;
 
-  const url = `https://api.fantasynerds.com/v1/nba/lineups?apikey=${encodeURIComponent(FANTASYNERDS_API_KEY)}`;
+  const url = `https://api.fantasynerds.com/v1/nba/lineups?apikey=${encodeURIComponent(FANTASYNERDS_API_KEY)}&date=${encodeURIComponent(dateStr)}`;
   const raw = await fetchJson(url);
-  const value = { rows: normalizeFantasyRows(raw), available: true };
-  cacheSet(sideInfoCache, key, value, SIDEINFO_TTL_MS);
+  const value = {
+    available: true,
+    rows: normalizeFantasyNerdsRows(raw),
+    raw
+  };
+  cacheSet(sideInfoCache, cacheKey, value, SIDEINFO_TTL_MS);
   return value;
 }
 
-async function getFantasyDepth() {
-  if (!requireFantasyNerdsKey()) return { rows: [], available: false };
+async function getFantasyNerdsDepthCharts() {
+  if (!requireFantasyNerdsKey()) return { available: false, rows: [] };
 
-  const key = "fn-depth";
-  const cached = cacheGet(sideInfoCache, key);
-  if (cached) return cached;
+  const cacheKey = "fn:depthcharts";
+  const hit = cacheGet(sideInfoCache, cacheKey);
+  if (hit) return hit;
 
   const url = `https://api.fantasynerds.com/v1/nba/depthcharts?apikey=${encodeURIComponent(FANTASYNERDS_API_KEY)}`;
   const raw = await fetchJson(url);
-  const value = { rows: normalizeFantasyRows(raw), available: true };
-  cacheSet(sideInfoCache, key, value, SIDEINFO_TTL_MS);
+  const value = {
+    available: true,
+    rows: normalizeFantasyNerdsRows(raw),
+    raw
+  };
+  cacheSet(sideInfoCache, cacheKey, value, SIDEINFO_TTL_MS);
   return value;
 }
 
-function textContainsTeam(row, teamName) {
-  return JSON.stringify(row || {}).toLowerCase().includes(teamName.toLowerCase()) ||
-    JSON.stringify(row || {}).toLowerCase().includes(teamName.split(" ").slice(-1)[0].toLowerCase());
-}
-
-function extractPlayerName(row) {
+function extractPlayerName(obj) {
+  if (!obj) return "";
   return (
-    row?.PlayerName ||
-    row?.Name ||
-    row?.player ||
-    row?.playername ||
-    row?.full_name ||
-    "N/A"
+    obj.PlayerName ||
+    obj.Name ||
+    obj.player ||
+    obj.full_name ||
+    obj.playername ||
+    ""
   );
 }
 
-function injurySeverity(row) {
-  const text = JSON.stringify(row || {}).toLowerCase();
+function rowContainsTeam(row, teamName) {
+  return teamNameLooseMatch(JSON.stringify(row), teamName);
+}
+
+function lineupCertaintyValue(row) {
+  const text = JSON.stringify(row).toLowerCase();
+  if (text.includes("confirmed")) return 1.0;
+  if (text.includes("starting")) return 0.8;
+  if (text.includes("projected")) return 0.5;
+  return 0.25;
+}
+
+function injurySeverityValue(row) {
+  const text = JSON.stringify(row).toLowerCase();
   if (text.includes("out")) return 1.0;
   if (text.includes("doubtful")) return 0.8;
   if (text.includes("questionable")) return 0.5;
@@ -656,299 +674,294 @@ function injurySeverity(row) {
   return 0.4;
 }
 
-function lineupConfidence(row) {
-  const text = JSON.stringify(row || {}).toLowerCase();
-  if (text.includes("confirmed")) return 1.0;
-  if (text.includes("starting")) return 0.85;
-  if (text.includes("projected")) return 0.55;
-  return 0.25;
-}
-
-function depthRoleWeight(row) {
-  const text = JSON.stringify(row || {}).toLowerCase();
+function depthRoleValue(row) {
+  const text = JSON.stringify(row).toLowerCase();
   if (text.includes("starter") || text.includes("1st")) return 1.0;
-  if (text.includes("2nd")) return 0.6;
-  if (text.includes("3rd")) return 0.3;
+  if (text.includes("2nd")) return 0.55;
+  if (text.includes("3rd")) return 0.25;
   return 0.45;
 }
 
-function bestPlayerMatchValue(name, playerImpactMap) {
-  const key = (name || "").toLowerCase().trim();
-  if (!key) return 0;
-  if (playerImpactMap[key]) return playerImpactMap[key];
+function buildPlayerValueMap(propSections) {
+  const map = {};
 
-  let best = 0;
-  const parts = key.split(" ").filter(Boolean);
+  const weights = {
+    points: 1.0,
+    assists: 0.9,
+    rebounds: 0.8,
+    pra: 1.2
+  };
 
-  for (const [candidate, value] of Object.entries(playerImpactMap)) {
-    const matches = parts.filter(part => candidate.includes(part)).length;
-    if (matches >= Math.min(parts.length, 2)) {
-      best = Math.max(best, value);
+  for (const [sectionName, rows] of Object.entries(propSections)) {
+    for (const row of rows || []) {
+      const player = (row.player || "").toLowerCase().trim();
+      if (!player) continue;
+
+      const lineComponent = clamp((row.line || 0) * 0.01, 0, 0.6);
+      const probComponent = clamp((row.hitProbability || 0.5) - 0.5, 0, 0.25);
+      const coverageComponent = clamp((row.coverage || 0) * 0.015, 0, 0.15);
+
+      const score =
+        (lineComponent + probComponent + coverageComponent) *
+        (weights[sectionName] || 1.0);
+
+      if (!map[player]) map[player] = 0;
+      map[player] += score;
     }
   }
 
+  return map;
+}
+
+function findBestPlayerValue(name, playerValueMap) {
+  if (!name) return 0;
+  const key = name.toLowerCase().trim();
+  if (playerValueMap[key]) return playerValueMap[key];
+
+  const parts = key.split(" ").filter(Boolean);
+  if (!parts.length) return 0;
+
+  let best = 0;
+  for (const [candidate, value] of Object.entries(playerValueMap)) {
+    const matchCount = parts.filter(part => candidate.includes(part)).length;
+    if (matchCount >= Math.min(2, parts.length)) {
+      best = Math.max(best, value);
+    }
+  }
   return best;
 }
 
-function summarizeSideInfo(homeTeam, awayTeam, injuriesRows, lineupRows, depthRows, propSections) {
-  const playerImpactMap = buildPlayerImpact(propSections);
+function summarizeInjuryLineup(homeTeam, awayTeam, injuriesRows, lineupsRows, depthRows, propSections) {
+  const homeInjuries = injuriesRows.filter(row => rowContainsTeam(row, homeTeam));
+  const awayInjuries = injuriesRows.filter(row => rowContainsTeam(row, awayTeam));
 
-  const homeInjuries = injuriesRows.filter(row => textContainsTeam(row, homeTeam));
-  const awayInjuries = injuriesRows.filter(row => textContainsTeam(row, awayTeam));
-  const homeLineups = lineupRows.filter(row => textContainsTeam(row, homeTeam));
-  const awayLineups = lineupRows.filter(row => textContainsTeam(row, awayTeam));
-  const homeDepth = depthRows.filter(row => textContainsTeam(row, homeTeam));
-  const awayDepth = depthRows.filter(row => textContainsTeam(row, awayTeam));
+  const homeLineups = lineupsRows.filter(row => rowContainsTeam(row, homeTeam));
+  const awayLineups = lineupsRows.filter(row => rowContainsTeam(row, awayTeam));
 
-  function teamBreakdown(teamInjuries, teamLineups, teamDepth) {
-    let penalty = 0;
+  const homeDepth = depthRows.filter(row => rowContainsTeam(row, homeTeam));
+  const awayDepth = depthRows.filter(row => rowContainsTeam(row, awayTeam));
+
+  const playerValueMap = buildPlayerValueMap(propSections);
+
+  function computeTeamPenalty(injuries, lineupRows, depthRows) {
+    let totalPenalty = 0;
     let startersOut = 0;
+    let projectedStarters = 0;
 
-    for (const injury of teamInjuries) {
-      const name = extractPlayerName(injury);
-      const severity = injurySeverity(injury);
-      const lineupMatch = teamLineups.find(row => JSON.stringify(row).toLowerCase().includes(name.toLowerCase()));
-      const depthMatch = teamDepth.find(row => JSON.stringify(row).toLowerCase().includes(name.toLowerCase()));
+    for (const injury of injuries) {
+      const playerName = extractPlayerName(injury);
+      const severity = injurySeverityValue(injury);
 
-      const lineWeight = lineupMatch ? lineupConfidence(lineupMatch) : 0;
-      const roleWeight = depthMatch ? depthRoleWeight(depthMatch) : (lineupMatch ? 0.85 : 0.45);
-      const playerImpact = bestPlayerMatchValue(name, playerImpactMap);
+      const lineupMatch = lineupRows.find(row =>
+        JSON.stringify(row).toLowerCase().includes(playerName.toLowerCase())
+      );
 
-      const playerPenalty =
-        0.5 +
-        severity * 0.8 +
-        roleWeight * 0.8 +
-        lineWeight * 0.8 +
-        playerImpact * 0.35;
+      const depthMatch = depthRows.find(row =>
+        JSON.stringify(row).toLowerCase().includes(playerName.toLowerCase())
+      );
 
-      penalty += playerPenalty;
+      const lineupWeight = lineupMatch ? lineupCertaintyValue(lineupMatch) : 0;
+      const roleWeight = depthMatch ? depthRoleValue(depthMatch) : (lineupMatch ? 0.9 : 0.4);
+      const playerValue = findBestPlayerValue(playerName, playerValueMap);
 
-      if (roleWeight >= 0.8 || lineWeight >= 0.8) {
+      const basePenalty =
+        0.006 +
+        severity * 0.010 +
+        roleWeight * 0.010 +
+        lineupWeight * 0.010 +
+        playerValue * 0.008;
+
+      totalPenalty += basePenalty;
+
+      if (roleWeight >= 0.8 || lineupWeight >= 0.8) {
         startersOut += 1;
       }
     }
 
-    const starterCertaintyRaw = teamLineups.length
-      ? clamp(average(teamLineups.map(lineupConfidence)) || 0, 0, 1)
-      : 0;
+    for (const lineup of lineupRows) {
+      if (lineupCertaintyValue(lineup) >= 0.8) {
+        projectedStarters += 1;
+      }
+    }
+
+    const starterCertainty =
+      lineupRows.length > 0
+        ? clamp(projectedStarters / 5, 0, 1)
+        : 0;
 
     return {
-      penaltyPoints: round2(penalty),
+      penalty: clamp(totalPenalty, 0, 0.10),
       startersOut,
-      starterCertaintyPercent: round2(starterCertaintyRaw * 100)
+      starterCertainty
     };
   }
 
-  const home = teamBreakdown(homeInjuries, homeLineups, homeDepth);
-  const away = teamBreakdown(awayInjuries, awayLineups, awayDepth);
+  const homeCalc = computeTeamPenalty(homeInjuries, homeLineups, homeDepth);
+  const awayCalc = computeTeamPenalty(awayInjuries, awayLineups, awayDepth);
+
+  const homeLineupBoost = homeCalc.starterCertainty * 0.01;
+  const awayLineupBoost = awayCalc.starterCertainty * 0.01;
 
   return {
-    available: injuriesRows.length > 0 || lineupRows.length > 0 || depthRows.length > 0,
-    homeInjuries,
-    awayInjuries,
-    lineups: [...homeLineups, ...awayLineups],
+    available: injuriesRows.length > 0 || lineupsRows.length > 0 || depthRows.length > 0,
+
     homeInjuriesCount: homeInjuries.length,
     awayInjuriesCount: awayInjuries.length,
-    homeStartersOut: home.startersOut,
-    awayStartersOut: away.startersOut,
-    homeStarterCertaintyPercent: home.starterCertaintyPercent,
-    awayStarterCertaintyPercent: away.starterCertaintyPercent,
-    homePenaltyPoints: home.penaltyPoints,
-    awayPenaltyPoints: away.penaltyPoints
+
+    homePenalty: homeCalc.penalty,
+    awayPenalty: awayCalc.penalty,
+
+    homeStartersOut: homeCalc.startersOut,
+    awayStartersOut: awayCalc.startersOut,
+
+    homeStarterCertainty: homeCalc.starterCertainty,
+    awayStarterCertainty: awayCalc.starterCertainty,
+
+    homeLineupBoost,
+    awayLineupBoost,
+
+    lineupRowsCount: homeLineups.length + awayLineups.length,
+
+    homeInjuries,
+    awayInjuries,
+    lineups: [...homeLineups, ...awayLineups]
   };
 }
 
-async function buildHistoricalComparisons(homeTeam, awayTeam) {
-  const result = {};
+// ---------- model ----------
+function buildConfidence(currentConsensus, historicalComparisons, propSignal, injurySummary) {
+  let score = 50;
 
-  for (const lookback of HISTORICAL_LOOKBACKS) {
-    const iso = toIso(Date.now() - lookback.ms);
-    try {
-      const snapshot = await getHistoricalSnapshot(iso);
-      const matched = matchHistoricalEvent(snapshot?.data || snapshot, homeTeam, awayTeam);
-      if (!matched) {
-        result[lookback.label] = null;
-        continue;
-      }
+  score += clamp((currentConsensus.bookCount - 3) * 6, 0, 25);
+  score -= clamp(currentConsensus.disagreementPenalty * 800, 0, 22);
 
-      const extracted = extractMarketSnapshot(matched);
-      result[lookback.label] = extracted;
-    } catch {
-      result[lookback.label] = null;
-    }
+  if (historicalComparisons["2h"] && !historicalComparisons["2h"].error) score += 8;
+  if (historicalComparisons["24h"] && !historicalComparisons["24h"].error) score += 8;
+
+  score += clamp(propSignal.depth * 0.7, 0, 12);
+
+  if (injurySummary.available) {
+    score += 5;
+    score += clamp((injurySummary.homeStarterCertainty + injurySummary.awayStarterCertainty) * 8, 0, 8);
+    score -= clamp((injurySummary.homeStartersOut + injurySummary.awayStartersOut) * 2, 0, 10);
   }
 
-  return result;
+  score = clamp(score, 0, 100);
+
+  let label = "Low";
+  if (score >= 75) label = "High";
+  else if (score >= 55) label = "Medium";
+
+  return { label, percent: score / 100 };
 }
 
-function classifyLineMove(currentPercent, oldPercent) {
-  if (typeof currentPercent !== "number" || typeof oldPercent !== "number") return "N/A";
-  const delta = currentPercent - oldPercent;
-
-  if (Math.abs(delta) < 1) return "Flat";
-  if (delta >= 3) return "Steam up";
-  if (delta <= -3) return "Steam down";
-  if (delta > 0) return "Moving up";
-  return "Moving down";
+function buildStakeSuggestion(edge, confidenceLabel) {
+  if (edge < 0.02) return { tier: "No bet", fraction: 0 };
+  if (edge < 0.04) {
+    return confidenceLabel === "High"
+      ? { tier: "Small", fraction: 0.25 }
+      : { tier: "Tiny", fraction: 0.1 };
+  }
+  if (edge < 0.07) {
+    return confidenceLabel === "High"
+      ? { tier: "Normal", fraction: 0.5 }
+      : { tier: "Small", fraction: 0.25 };
+  }
+  return confidenceLabel === "High"
+    ? { tier: "Strong", fraction: 0.75 }
+    : { tier: "Normal", fraction: 0.5 };
 }
 
-function buildMatchupFlags(currentSnapshot) {
-  const flags = [];
+function buildVerdict(rawEdge, confidence, mode, disagreementPenalty) {
+  if (rawEdge < 0.015) return "No edge";
+  if (confidence.label === "Low" || disagreementPenalty > 0.025) return "Low confidence";
 
-  if (typeof currentSnapshot?.avgHomeSpread === "number") {
-    if (currentSnapshot.avgHomeSpread <= -7) flags.push("Big favorite");
-    if (currentSnapshot.avgHomeSpread >= 7) flags.push("Big underdog");
+  if (mode === "live") {
+    if (rawEdge >= 0.05 && confidence.percent >= 0.75) return "Bet now";
+    if (rawEdge >= 0.025) return "Watch";
+    return "Avoid";
   }
 
-  if (typeof currentSnapshot?.avgTotal === "number") {
-    if (currentSnapshot.avgTotal >= 235) flags.push("High total");
-    if (currentSnapshot.avgTotal <= 220) flags.push("Low total");
-  }
-
-  return flags;
+  if (rawEdge >= 0.045 && confidence.percent >= 0.70) return "Bet now";
+  if (rawEdge >= 0.02) return "Watch";
+  return "Avoid";
 }
 
-function buildConfidenceBreakdown(currentSnapshot, historical, sideInfo, propSections) {
-  const market = (() => {
-    if (typeof currentSnapshot?.bookCount !== "number") return null;
-    return round2(clamp((currentSnapshot.bookCount / 12) * 100, 0, 100));
-  })();
+function buildProbabilityModel(currentConsensus, historicalComparisons, propSignal, mode, injurySummary) {
+  const homeMarketProb = currentConsensus.homeMarketProb;
+  const awayMarketProb = currentConsensus.awayMarketProb;
 
-  const injury = sideInfo?.available
-    ? round2(
-        clamp(
-          60 +
-            ((sideInfo.homeStarterCertaintyPercent || 0) + (sideInfo.awayStarterCertaintyPercent || 0)) * 0.2 -
-            ((sideInfo.homeStartersOut || 0) + (sideInfo.awayStartersOut || 0)) * 6,
-          0,
-          100
-        )
+  let lineMovementAdj = 0;
+
+  const h24 = historicalComparisons["24h"];
+  const h2 = historicalComparisons["2h"];
+
+  if (h24 && typeof h24.homeMarketProb === "number") {
+    const delta24 = homeMarketProb - h24.homeMarketProb;
+    lineMovementAdj += clamp(delta24 * (mode === "pregame" ? 0.5 : 0.25), -0.03, 0.03);
+  }
+
+  if (h2 && typeof h2.homeMarketProb === "number") {
+    const delta2 = homeMarketProb - h2.homeMarketProb;
+    lineMovementAdj += clamp(delta2 * (mode === "live" ? 1.0 : 0.8), -0.03, 0.03);
+  }
+
+  const propAdj = clamp(propSignal.adj, 0, 0.01);
+
+  const injuryAdjHome = injurySummary.available
+    ? clamp(
+        (injurySummary.awayPenalty - injurySummary.homePenalty) +
+        (injurySummary.homeLineupBoost - injurySummary.awayLineupBoost),
+        -0.06,
+        0.06
       )
-    : null;
+    : 0;
 
-  const lineup = sideInfo?.available
-    ? round2(
-        clamp(
-          average([
-            sideInfo.homeStarterCertaintyPercent,
-            sideInfo.awayStarterCertaintyPercent
-          ]) || 0,
-          0,
-          100
-        )
-      )
-    : null;
+  let homeTrueProb =
+    homeMarketProb +
+    currentConsensus.spreadAdj +
+    currentConsensus.totalAdj +
+    lineMovementAdj +
+    propAdj +
+    injuryAdjHome -
+    currentConsensus.disagreementPenalty;
 
-  const propCount =
-    (propSections.points?.length || 0) +
-    (propSections.assists?.length || 0) +
-    (propSections.rebounds?.length || 0) +
-    (propSections.pra?.length || 0);
+  let awayTrueProb =
+    awayMarketProb -
+    currentConsensus.spreadAdj -
+    currentConsensus.totalAdj -
+    lineMovementAdj -
+    propAdj -
+    injuryAdjHome -
+    currentConsensus.disagreementPenalty;
 
-  const props = round2(clamp(propCount * 8, 0, 100));
+  homeTrueProb = clamp(homeTrueProb, 0.01, 0.99);
+  awayTrueProb = clamp(awayTrueProb, 0.01, 0.99);
 
-  const move =
-    historical["15m"] && historical["2h"]
-      ? 80
-      : historical["2h"] || historical["24h"]
-        ? 60
-        : 35;
+  const total = homeTrueProb + awayTrueProb;
+  homeTrueProb /= total;
+  awayTrueProb /= total;
 
-  const rawValues = [market, injury, lineup, props, move].filter(v => typeof v === "number");
-  const overall = rawValues.length ? round2(average(rawValues)) : null;
+  const homeEdge = homeTrueProb - homeMarketProb;
+  const awayEdge = awayTrueProb - awayMarketProb;
 
-  let label = "N/A";
-  if (typeof overall === "number") {
-    if (overall >= 75) label = "High";
-    else if (overall >= 55) label = "Medium";
-    else label = "Low";
-  }
+  const pickSide = homeEdge >= awayEdge ? "home" : "away";
+  const impliedProbability = pickSide === "home" ? homeMarketProb : awayMarketProb;
+  const trueProbability = pickSide === "home" ? homeTrueProb : awayTrueProb;
+  const rawEdge = pickSide === "home" ? homeEdge : awayEdge;
 
   return {
-    overallPercent: overall,
-    label,
-    parts: {
-      marketPercent: market,
-      injuryPercent: injury,
-      lineupPercent: lineup,
-      propsPercent: props,
-      movementPercent: move
-    }
+    pickSide,
+    impliedProbability,
+    trueProbability,
+    rawEdge,
+    lineMovementAdj,
+    propAdj,
+    injuryAdjHome
   };
 }
 
-function buildDerivedMetrics(currentSnapshot, historical, sideInfo) {
-  const currentHomeProb = currentSnapshot.marketProbabilityHome;
-  const prob15m = historical["15m"]?.marketProbabilityHome ?? null;
-  const prob2h = historical["2h"]?.marketProbabilityHome ?? null;
-  const prob24h = historical["24h"]?.marketProbabilityHome ?? null;
-
-  const move15m = typeof currentHomeProb === "number" && typeof prob15m === "number"
-    ? round2(currentHomeProb - prob15m)
-    : null;
-  const move2h = typeof currentHomeProb === "number" && typeof prob2h === "number"
-    ? round2(currentHomeProb - prob2h)
-    : null;
-  const move24h = typeof currentHomeProb === "number" && typeof prob24h === "number"
-    ? round2(currentHomeProb - prob24h)
-    : null;
-
-  const lineMoveClass = classifyLineMove(currentHomeProb, prob2h);
-
-  const injuryDifference =
-    sideInfo?.available
-      ? round2((sideInfo.awayPenaltyPoints || 0) - (sideInfo.homePenaltyPoints || 0))
-      : null;
-
-  return {
-    move15mPercent: move15m,
-    move2hPercent: move2h,
-    move24hPercent: move24h,
-    lineMoveClass,
-    injuryDifferencePoints: injuryDifference,
-    matchupFlags: buildMatchupFlags(currentSnapshot)
-  };
-}
-
-function buildSignal(currentSnapshot, confidence, derived) {
-  const bestHome = currentSnapshot.bestHomeDecimal;
-  const avgHome = currentSnapshot.avgHomeDecimal;
-
-  const bestLineValuePercent =
-    typeof bestHome === "number" && typeof avgHome === "number"
-      ? round2((decimalToImpliedPercent(avgHome) - decimalToImpliedPercent(bestHome)))
-      : null;
-
-  const signalReasons = [];
-
-  if (bestLineValuePercent !== null && bestLineValuePercent > 1) {
-    signalReasons.push("Best line beats market average");
-  }
-  if ((derived.move2hPercent || 0) > 1.5) {
-    signalReasons.push("Recent market move up");
-  }
-  if ((derived.injuryDifferencePoints || 0) > 1) {
-    signalReasons.push("Opponent injury burden higher");
-  }
-
-  let alert = "N/A";
-  if (confidence.label === "High" && signalReasons.length >= 2) {
-    alert = "YES";
-  } else if (confidence.label === "Medium" && signalReasons.length >= 1) {
-    alert = "Do";
-  } else if (confidence.label === "Low" && signalReasons.length >= 1) {
-    alert = "Maybe";
-  } else if (signalReasons.length === 0) {
-    alert = "DON'T";
-  }
-
-  return {
-    alert,
-    reasons: signalReasons,
-    bestLineValuePercent
-  };
-}
-
+// ---------- routes ----------
 app.get("/", (req, res) => {
   res.sendFile(path.join(__dirname, "index.html"));
 });
@@ -987,7 +1000,7 @@ app.get("/games", async (req, res) => {
         homeTeam: event.home_team,
         awayTeam: event.away_team,
         commenceTime: event.commence_time,
-        mode: gameMode(event.commence_time)
+        mode: buildMode(event.commence_time)
       }));
 
     res.json({ games });
@@ -1010,22 +1023,32 @@ app.get("/odds", async (req, res) => {
       return res.status(400).json({ error: "Missing gameId query parameter" });
     }
 
-    const [featured, props, injuriesInfo, lineupsInfo, depthInfo] = await Promise.all([
-      getEventFeaturedOdds(gameId),
-      getEventPlayerProps(gameId),
-      getFantasyInjuries(),
-      getFantasyLineups(),
-      getFantasyDepth()
-    ]);
+    const featured = await getEventFeaturedOdds(gameId);
+    const props = await getEventPlayerProps(gameId);
 
-    const currentSnapshot = extractMarketSnapshot(featured);
-    if (!currentSnapshot) {
-      return res.status(500).json({ error: "No market data available" });
+    const currentConsensus = extractFeaturedConsensus(featured);
+    if (!currentConsensus) {
+      return res.status(500).json({
+        error: "Could not extract featured odds consensus"
+      });
     }
 
-    const propSections = buildPropSections(props);
+    const mode = buildMode(featured.commence_time);
+    const historicalComparisons = await buildHistoricalComparisons(
+      featured.home_team,
+      featured.away_team
+    );
 
-    const sideInfo = summarizeSideInfo(
+    const propSections = buildStructuredPropSections(props);
+    const propSignal = buildPropSignal(propSections);
+
+    const [injuriesInfo, lineupsInfo, depthInfo] = await Promise.all([
+      getFantasyNerdsInjuries(),
+      getFantasyNerdsLineups(),
+      getFantasyNerdsDepthCharts()
+    ]);
+
+    const injurySummary = summarizeInjuryLineup(
       featured.home_team,
       featured.away_team,
       injuriesInfo.rows || [],
@@ -1034,98 +1057,124 @@ app.get("/odds", async (req, res) => {
       propSections
     );
 
-    const historical = await buildHistoricalComparisons(
-      featured.home_team,
-      featured.away_team
+    const model = buildProbabilityModel(
+      currentConsensus,
+      historicalComparisons,
+      propSignal,
+      mode,
+      injurySummary
     );
 
-    const derived = buildDerivedMetrics(currentSnapshot, historical, sideInfo);
-    const confidence = buildConfidenceBreakdown(currentSnapshot, historical, sideInfo, propSections);
-    const signal = buildSignal(currentSnapshot, confidence, derived);
+    const confidence = buildConfidence(
+      currentConsensus,
+      historicalComparisons,
+      propSignal,
+      injurySummary
+    );
 
-    const selectedSide = currentSnapshot.marketProbabilityHome >= currentSnapshot.marketProbabilityAway
-      ? "home"
-      : "away";
+    const verdict = buildVerdict(
+      model.rawEdge,
+      confidence,
+      mode,
+      currentConsensus.disagreementPenalty
+    );
 
-    const selectedOddsDecimal =
-      selectedSide === "home"
-        ? currentSnapshot.bestHomeDecimal
-        : currentSnapshot.bestAwayDecimal;
+    const stake = buildStakeSuggestion(model.rawEdge, confidence.label);
 
-    const impliedProbability = selectedOddsDecimal
-      ? round2(decimalToImpliedPercent(selectedOddsDecimal))
-      : null;
+    const pickTeam =
+      model.pickSide === "home" ? featured.home_team : featured.away_team;
 
-    const history = updatePriceHistory(gameId, currentSnapshot.marketProbabilityHome);
+    const chosenDecimal =
+      model.pickSide === "home"
+        ? currentConsensus.bestHomePrice
+        : currentConsensus.bestAwayPrice;
 
-    const payload = {
+    const pick = `${pickTeam} to win`;
+    const timestamp = new Date().toISOString();
+    const smoothedEdge = addEdgeHistory(gameId, model.rawEdge, timestamp);
+
+    const snapshot = {
+      timestamp,
+      mode,
+      impliedProbability: model.impliedProbability,
+      trueProbability: model.trueProbability,
+      edge: smoothedEdge,
+      rawEdge: model.rawEdge,
+      verdict,
+      confidencePercent: confidence.percent,
+      bestPrice: chosenDecimal,
+      pick,
+      stakeTier: stake.tier
+    };
+
+    logSnapshot(gameId, snapshot);
+
+    res.json({
       id: featured.id,
       homeTeam: featured.home_team,
       awayTeam: featured.away_team,
       commenceTime: featured.commence_time,
-      gameMode: gameMode(featured.commence_time),
+      gameMode: mode,
 
-      pick: selectedSide === "home" ? `${featured.home_team} ML` : `${featured.away_team} ML`,
+      pick,
+      verdict,
+      confidence,
 
-      sportsbookOdds: buildOddsFormatsFromDecimal(selectedOddsDecimal),
+      impliedProbability: model.impliedProbability,
+      impliedPercentFromOdds: model.impliedProbability,
+      trueProbability: model.trueProbability,
 
-      impliedProbabilityPercent: impliedProbability,
-      impliedPercentFromOdds: impliedProbability,
-      impliedProbabilityFormats: buildProbabilityFormats(impliedProbability),
+      impliedProbabilityFormats: buildProbabilityFormats(model.impliedProbability),
+      trueProbabilityFormats: buildProbabilityFormats(model.trueProbability),
 
-      trueProbabilityPercent: null,
-      trueProbabilityFormats: {
-        percent: null,
-        american: null,
-        americanText: null
+      edge: smoothedEdge,
+
+      oddsFormats: buildOddsFormatsFromDecimal(chosenDecimal),
+      sportsbookOddsDecimal: chosenDecimal,
+
+      stakeSuggestion: stake,
+      history: edgeHistoryStore[gameId] || [],
+
+      modelDetails: {
+        spreadAdj: currentConsensus.spreadAdj,
+        totalConsensus: currentConsensus.totalConsensus,
+        totalAdj: currentConsensus.totalAdj,
+        disagreementPenalty: currentConsensus.disagreementPenalty,
+        lineMovementAdj: model.lineMovementAdj,
+        propAdj: model.propAdj,
+        injuryAdjHome: model.injuryAdjHome,
+        avgHomePrice: currentConsensus.avgHomePrice,
+        avgAwayPrice: currentConsensus.avgAwayPrice,
+        bestHomePrice: currentConsensus.bestHomePrice,
+        bestAwayPrice: currentConsensus.bestAwayPrice,
+        avgHomeSpread: currentConsensus.avgHomeSpread,
+        avgTotal: currentConsensus.avgTotal,
+        bookCount: currentConsensus.bookCount,
+        historicalComparisons
       },
 
-      edgePercent: null,
-
-      confidence: {
-        label: confidence.label,
-        percent: confidence.overallPercent
-      },
-
-      confidenceBreakdown: confidence.parts,
-
-      currentMarket: currentSnapshot,
-      historical,
-      derived,
-      signal,
-
-      bookmakerTable: currentSnapshot.bookmakerTable,
+      bookmakerTable: currentConsensus.books,
 
       propSections,
 
-      injuryStatus: sideInfo,
+      injuryStatus: {
+        available: injurySummary.available,
+        homeInjuriesCount: injurySummary.homeInjuriesCount,
+        awayInjuriesCount: injurySummary.awayInjuriesCount,
+        lineupRowsCount: injurySummary.lineupRowsCount,
+        homePenalty: injurySummary.homePenalty,
+        awayPenalty: injurySummary.awayPenalty,
+        homeStartersOut: injurySummary.homeStartersOut,
+        awayStartersOut: injurySummary.awayStartersOut,
+        homeStarterCertainty: injurySummary.homeStarterCertainty,
+        awayStarterCertainty: injurySummary.awayStarterCertainty,
+        homeInjuries: injurySummary.homeInjuries,
+        awayInjuries: injurySummary.awayInjuries,
+        lineups: injurySummary.lineups
+      },
 
-      graphHistory: history,
-
-      timestamp: new Date().toISOString()
-    };
-
-    logSnapshot({
-      gameId,
-      timestamp: payload.timestamp,
-      gameMode: payload.gameMode,
-      pick: payload.pick,
-      selectedOddsAmerican: payload.sportsbookOdds.american,
-      selectedOddsDecimal: payload.sportsbookOdds.decimal,
-      impliedProbabilityPercent: payload.impliedProbabilityPercent,
-      move15mPercent: payload.derived.move15mPercent,
-      move2hPercent: payload.derived.move2hPercent,
-      move24hPercent: payload.derived.move24hPercent,
-      lineMoveClass: payload.derived.lineMoveClass,
-      alert: payload.signal.alert,
-      reasons: payload.signal.reasons,
-      confidenceLabel: payload.confidence.label,
-      confidencePercent: payload.confidence.percent,
-      homeInjuriesCount: payload.injuryStatus.homeInjuriesCount,
-      awayInjuriesCount: payload.injuryStatus.awayInjuriesCount
+      timestamp
     });
-
-    res.json(payload);
   } catch (error) {
     res.status(500).json({
       error: error.message
@@ -1134,30 +1183,17 @@ app.get("/odds", async (req, res) => {
 });
 
 app.get("/snapshots", (req, res) => {
-  try {
-    if (!fs.existsSync(SNAPSHOT_FILE)) {
-      return res.json({ snapshots: [] });
-    }
-
-    const lines = fs.readFileSync(SNAPSHOT_FILE, "utf8")
-      .split("\n")
-      .filter(Boolean)
-      .slice(-200)
-      .map(line => {
-        try {
-          return JSON.parse(line);
-        } catch {
-          return null;
-        }
-      })
-      .filter(Boolean);
-
-    res.json({ snapshots: lines });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
+  const gameId = req.query.gameId;
+  if (!gameId) {
+    return res.status(400).json({ error: "Missing gameId query parameter" });
   }
+
+  res.json({
+    gameId,
+    snapshots: snapshotLogStore[gameId] || []
+  });
 });
 
 app.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
+  console.log("Server running on port " + PORT);
 });
