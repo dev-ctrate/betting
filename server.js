@@ -4,9 +4,8 @@ const path = require("path");
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-7 const ODDS_API_KEY = process.env.ODDS_API_KEY || "";
-8 const FANTASYNERDS_API_KEY = process.env.FANTASYNERDS_API_KEY || "";
-9 const BDL_API_KEY = process.env.BDL_API_KEY || "";
+const ODDS_API_KEY = process.env.ODDS_API_KEY || "";
+const FANTASYNERDS_API_KEY = process.env.FANTASYNERDS_API_KEY || "";
 
 const SPORT_KEY = "basketball_nba";
 const REGIONS = "us";
@@ -40,10 +39,6 @@ function clamp(x, min, max) {
   return Math.max(min, Math.min(max, x));
 }
 
-// 👇 ADD HERE
-function round2(n) {
-  return typeof n === "number" ? Math.round(n * 100) / 100 : n;
-}
 function average(values) {
   if (!values.length) return null;
   return values.reduce((sum, v) => sum + v, 0) / values.length;
@@ -114,35 +109,6 @@ async function fetchJson(url) {
   return await response.json();
 }
 
-async function fetchJson(url) {
-  const response = await fetch(url);
-  if (!response.ok) {
-    const text = await response.text();
-    throw new Error(`Request failed ${response.status}: ${text}`);
-  }
-  return await response.json();
-}
-
-// 👇 ADD THIS EXACTLY HERE
-async function fetchBDL(url) {
-  if (!BDL_API_KEY) return null;
-
-  try {
-    const res = await fetch(url, {
-      headers: {
-        Authorization: BDL_API_KEY
-      }
-    });
-
-    if (!res.ok) return null;
-
-    const data = await res.json();
-    return data?.data || [];
-
-  } catch {
-    return null;
-  }
-}
 function buildOddsUrl(pathname, params) {
   const base = `https://api.the-odds-api.com${pathname}`;
   const sp = new URLSearchParams(params);
@@ -636,13 +602,7 @@ async function getFantasyNerdsInjuries() {
     raw
   };
   cacheSet(sideInfoCache, cacheKey, value, SIDEINFO_TTL_MS);
-return value;
-}
-
-// 👇 ADD THIS EXACTLY HERE
-async function getBDLInjuries() {
-  const data = await fetchBDL("https://api.balldontlie.io/v1/player_injuries");
-  return data || [];
+  return value;
 }
 
 async function getFantasyNerdsLineups(dateStr = "") {
@@ -1082,35 +1042,20 @@ app.get("/odds", async (req, res) => {
     const propSections = buildStructuredPropSections(props);
     const propSignal = buildPropSignal(propSections);
 
-    const [injuriesFN, lineupsFN, depthFN, injuriesBDL] = await Promise.all([
+    const [injuriesInfo, lineupsInfo, depthInfo] = await Promise.all([
       getFantasyNerdsInjuries(),
       getFantasyNerdsLineups(),
-      getFantasyNerdsDepthCharts(),
-      getBDLInjuries()
+      getFantasyNerdsDepthCharts()
     ]);
 
-let injuriesRows = [];
-let sourceUsed = "none";
-
-if (injuriesFN.available && injuriesFN.rows.length > 0) {
-  injuriesRows = injuriesFN.rows;
-  sourceUsed = "fantasynerds";
-} else if (injuriesBDL && injuriesBDL.length > 0) {
-  injuriesRows = injuriesBDL;
-  sourceUsed = "balldontlie";
-}
-
-const lineupsRows = lineupsFN.rows || [];
-const depthRows = depthFN.rows || [];
-
-const injurySummary = summarizeInjuryLineup(
-  featured.home_team,
-  featured.away_team,
-  injuriesRows,
-  lineupsRows,
-  depthRows,
-  propSections
-);
+    const injurySummary = summarizeInjuryLineup(
+      featured.home_team,
+      featured.away_team,
+      injuriesInfo.rows || [],
+      lineupsInfo.rows || [],
+      depthInfo.rows || [],
+      propSections
+    );
 
     const model = buildProbabilityModel(
       currentConsensus,
