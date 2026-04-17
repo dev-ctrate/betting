@@ -10,24 +10,48 @@ const PORT = process.env.PORT || 3000;
 // MOCK MODE FOR TESTING:
 const API_KEY = null;
 
-// Store last 15 minutes of edge history per game
 const historyStore = {};
+const teamFeatureCache = {};
 
-// Create a stable game id
-function makeGameId(game) {
-  return `${game.away_team}-at-${game.home_team}`
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-|-$/g, "");
-}
+// Cache NBA Stats features for 30 minutes
+const TEAM_FEATURE_TTL_MS = 30 * 60 * 1000;
 
-// Keep only last 15 minutes of history
-function trimHistory(gameId) {
-  const cutoff = Date.now() - 15 * 60 * 1000;
-  historyStore[gameId] = (historyStore[gameId] || []).filter(point => {
-    return new Date(point.timestamp).getTime() >= cutoff;
-  });
-}
+// 2025-26 for April 2026
+const NBA_SEASON = "2025-26";
+const NBA_SEASON_TYPE = "Regular Season";
+
+const TEAM_ID_MAP = {
+  "Atlanta Hawks": 1610612737,
+  "Boston Celtics": 1610612738,
+  "Brooklyn Nets": 1610612751,
+  "Charlotte Hornets": 1610612766,
+  "Chicago Bulls": 1610612741,
+  "Cleveland Cavaliers": 1610612739,
+  "Dallas Mavericks": 1610612742,
+  "Denver Nuggets": 1610612743,
+  "Detroit Pistons": 1610612765,
+  "Golden State Warriors": 1610612744,
+  "Houston Rockets": 1610612745,
+  "Indiana Pacers": 1610612754,
+  "LA Clippers": 1610612746,
+  "Los Angeles Lakers": 1610612747,
+  "Memphis Grizzlies": 1610612763,
+  "Miami Heat": 1610612748,
+  "Milwaukee Bucks": 1610612749,
+  "Minnesota Timberwolves": 1610612750,
+  "New Orleans Pelicans": 1610612740,
+  "New York Knicks": 1610612752,
+  "Oklahoma City Thunder": 1610612760,
+  "Orlando Magic": 1610612753,
+  "Philadelphia 76ers": 1610612755,
+  "Phoenix Suns": 1610612756,
+  "Portland Trail Blazers": 1610612757,
+  "Sacramento Kings": 1610612758,
+  "San Antonio Spurs": 1610612759,
+  "Toronto Raptors": 1610612761,
+  "Utah Jazz": 1610612762,
+  "Washington Wizards": 1610612764
+};
 
 function clamp(x, min, max) {
   return Math.max(min, Math.min(max, x));
@@ -46,15 +70,12 @@ function variance(values) {
 
 function weightedAverage(pairs) {
   if (!pairs.length) return null;
-
   let numerator = 0;
   let denominator = 0;
-
   for (const pair of pairs) {
     numerator += pair.value * pair.weight;
     denominator += pair.weight;
   }
-
   return denominator === 0 ? null : numerator / denominator;
 }
 
@@ -62,7 +83,6 @@ function noVigTwoWayProb(priceA, priceB) {
   const rawA = 1 / priceA;
   const rawB = 1 / priceB;
   const total = rawA + rawB;
-
   return {
     a: rawA / total,
     b: rawB / total
@@ -78,7 +98,75 @@ function getBookWeight(bookKey) {
   return 1.0;
 }
 
-// Fetch real NBA odds
+function makeGameId(game) {
+  return `${game.away_team}-at-${game.home_team}`
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-|-$/g, "");
+}
+
+function trimHistory(gameId) {
+  const cutoff = Date.now() - 15 * 60 * 1000;
+  historyStore[gameId] = (historyStore[gameId] || []).filter(point => {
+    return new Date(point.timestamp).getTime() >= cutoff;
+  });
+}
+
+function getNbaStatsHeaders() {
+  return {
+    "Host": "stats.nba.com",
+    "Connection": "keep-alive",
+    "Cache-Control": "max-age=0",
+    "Upgrade-Insecure-Requests": "1",
+    "User-Agent": "Mozilla/5.0",
+    "Accept": "application/json, text/plain, */*",
+    "Accept-Encoding": "gzip, deflate, br",
+    "Accept-Language": "en-US,en;q=0.9",
+    "Origin": "https://www.nba.com",
+    "Referer": "https://www.nba.com/"
+  };
+}
+
+function getResultSetRow(data, targetNameContains = null) {
+  if (!data || !Array.isArray(data.resultSets)) return null;
+
+  let resultSet = data.resultSets[0];
+  if (targetNameContains) {
+    const found = data.resultSets.find(rs =>
+      typeof rs.name === "string" &&
+      rs.name.toLowerCase().includes(targetNameContains.toLowerCase())
+    );
+    if (found) resultSet = found;
+  }
+
+  if (!resultSet || !Array.isArray(resultSet.headers) || !Array.isArray(resultSet.rowSet)) {
+    return null;
+  }
+
+  if (!resultSet.rowSet.length) return null;
+
+  const headers = resultSet.headers;
+  const row = resultSet.rowSet[0];
+  const obj = {};
+
+  headers.forEach((header, index) => {
+    obj[header] = row[index];
+  });
+
+  return obj;
+}
+
+async function fetchJson(url, headers = {}) {
+  const response = await fetch(url, { headers });
+
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(`Request failed ${response.status}: ${text}`);
+  }
+
+  return await response.json();
+}
+
 async function fetchNbaOdds() {
   const url =
     `https://api.the-odds-api.com/v4/sports/basketball_nba/odds/` +
@@ -87,18 +175,149 @@ async function fetchNbaOdds() {
     `&markets=h2h,spreads,totals` +
     `&oddsFormat=decimal`;
 
-  const response = await fetch(url);
-
-  if (!response.ok) {
-    const text = await response.text();
-    throw new Error(`Odds API error ${response.status}: ${text}`);
-  }
-
-  return await response.json();
+  return await fetchJson(url);
 }
 
-// Best possible "true probability" from odds-only inputs
-function getGameData(rawGame) {
+async function fetchTeamDashboard({ teamId, measureType, lastNGames = 0, location = "" }) {
+  const params = new URLSearchParams({
+    DateFrom: "",
+    DateTo: "",
+    GameSegment: "",
+    LastNGames: String(lastNGames),
+    LeagueID: "00",
+    Location: location,
+    MeasureType: measureType,
+    Month: "0",
+    OpponentTeamID: "0",
+    Outcome: "",
+    PORound: "0",
+    PaceAdjust: "N",
+    PerMode: "PerGame",
+    Period: "0",
+    PlusMinus: "N",
+    Rank: "N",
+    Season: NBA_SEASON,
+    SeasonSegment: "",
+    SeasonType: NBA_SEASON_TYPE,
+    ShotClockRange: "",
+    TeamID: String(teamId),
+    VsConference: "",
+    VsDivision: ""
+  });
+
+  const url = `https://stats.nba.com/stats/teamdashboardbygeneralsplits?${params.toString()}`;
+  return await fetchJson(url, getNbaStatsHeaders());
+}
+
+async function getTeamFeatures(teamName) {
+  const teamId = TEAM_ID_MAP[teamName];
+  if (!teamId) {
+    return null;
+  }
+
+  const cacheKey = `${teamId}`;
+  const cached = teamFeatureCache[cacheKey];
+
+  if (cached && (Date.now() - cached.timestamp < TEAM_FEATURE_TTL_MS)) {
+    return cached.data;
+  }
+
+  const [
+    seasonAdvancedRaw,
+    last10AdvancedRaw,
+    homeAdvancedRaw,
+    roadAdvancedRaw,
+    fourFactorsRaw
+  ] = await Promise.all([
+    fetchTeamDashboard({ teamId, measureType: "Advanced", lastNGames: 0, location: "" }),
+    fetchTeamDashboard({ teamId, measureType: "Advanced", lastNGames: 10, location: "" }),
+    fetchTeamDashboard({ teamId, measureType: "Advanced", lastNGames: 0, location: "Home" }),
+    fetchTeamDashboard({ teamId, measureType: "Advanced", lastNGames: 0, location: "Road" }),
+    fetchTeamDashboard({ teamId, measureType: "Four Factors", lastNGames: 0, location: "" })
+  ]);
+
+  const seasonAdvanced = getResultSetRow(seasonAdvancedRaw);
+  const last10Advanced = getResultSetRow(last10AdvancedRaw);
+  const homeAdvanced = getResultSetRow(homeAdvancedRaw);
+  const roadAdvanced = getResultSetRow(roadAdvancedRaw);
+  const fourFactors = getResultSetRow(fourFactorsRaw);
+
+  const features = {
+    teamId,
+    netRating: Number(seasonAdvanced?.NET_RATING ?? 0),
+    offRating: Number(seasonAdvanced?.OFF_RATING ?? 0),
+    defRating: Number(seasonAdvanced?.DEF_RATING ?? 0),
+    pace: Number(seasonAdvanced?.PACE ?? 0),
+    pie: Number(seasonAdvanced?.PIE ?? 0),
+
+    last10NetRating: Number(last10Advanced?.NET_RATING ?? 0),
+
+    homeNetRating: Number(homeAdvanced?.NET_RATING ?? 0),
+    roadNetRating: Number(roadAdvanced?.NET_RATING ?? 0),
+
+    efgPct: Number(fourFactors?.EFG_PCT ?? 0),
+    tovPct: Number(fourFactors?.TM_TOV_PCT ?? 0),
+    orebPct: Number(fourFactors?.OREB_PCT ?? 0),
+    ftRate: Number(fourFactors?.FTA_RATE ?? 0)
+  };
+
+  teamFeatureCache[cacheKey] = {
+    timestamp: Date.now(),
+    data: features
+  };
+
+  return features;
+}
+
+function buildStatsAdjustment(homeFeatures, awayFeatures) {
+  if (!homeFeatures || !awayFeatures) {
+    return 0;
+  }
+
+  // Season strength
+  const seasonNetAdj = clamp(
+    (homeFeatures.netRating - awayFeatures.netRating) * 0.0045,
+    -0.08,
+    0.08
+  );
+
+  // Recent form / momentum
+  const formAdj = clamp(
+    (homeFeatures.last10NetRating - awayFeatures.last10NetRating) * 0.003,
+    -0.05,
+    0.05
+  );
+
+  // Home/Road context
+  const splitAdj = clamp(
+    (homeFeatures.homeNetRating - awayFeatures.roadNetRating) * 0.0025,
+    -0.04,
+    0.04
+  );
+
+  // Four Factors blend
+  const fourFactorScoreHome =
+    (homeFeatures.efgPct * 0.40) -
+    (homeFeatures.tovPct * 0.25) +
+    (homeFeatures.orebPct * 0.20) +
+    (homeFeatures.ftRate * 0.15);
+
+  const fourFactorScoreAway =
+    (awayFeatures.efgPct * 0.40) -
+    (awayFeatures.tovPct * 0.25) +
+    (awayFeatures.orebPct * 0.20) +
+    (awayFeatures.ftRate * 0.15);
+
+  const fourFactorAdj = clamp(
+    (fourFactorScoreHome - fourFactorScoreAway) * 0.30,
+    -0.03,
+    0.03
+  );
+
+  return seasonNetAdj + formAdj + splitAdj + fourFactorAdj;
+}
+
+async function getGameData(rawGame) {
   if (!rawGame.bookmakers || rawGame.bookmakers.length === 0) {
     return null;
   }
@@ -117,7 +336,6 @@ function getGameData(rawGame) {
     const spreadsMarket = bookmaker.markets?.find(m => m.key === "spreads");
     const totalsMarket = bookmaker.markets?.find(m => m.key === "totals");
 
-    // Moneyline consensus
     if (h2hMarket?.outcomes?.length >= 2) {
       const homeOutcome = h2hMarket.outcomes.find(
         o => o.name === rawGame.home_team
@@ -137,20 +355,17 @@ function getGameData(rawGame) {
       }
     }
 
-    // Spread context
     if (spreadsMarket?.outcomes?.length >= 2) {
       const homeSpread = spreadsMarket.outcomes.find(
         o => o.name === rawGame.home_team
       );
 
       if (homeSpread && typeof homeSpread.point === "number") {
-        // More negative home spread means stronger home team
         const spreadAdj = clamp((-homeSpread.point) * 0.010, -0.08, 0.08);
         spreadSignals.push({ value: spreadAdj, weight });
       }
     }
 
-    // Total context
     if (totalsMarket?.outcomes?.length >= 2) {
       const over = totalsMarket.outcomes.find(o => o.name === "Over");
       if (over && typeof over.point === "number") {
@@ -163,11 +378,9 @@ function getGameData(rawGame) {
     return null;
   }
 
-  // Base fair probabilities from no-vig consensus
   const homeMarketProb = weightedAverage(homeProbPairs);
   const awayMarketProb = weightedAverage(awayProbPairs);
 
-  // Penalize disagreement between books
   const homeDisagreement = variance(homeProbUnweighted);
   const awayDisagreement = variance(awayProbUnweighted);
   const disagreementPenalty = clamp(
@@ -176,25 +389,28 @@ function getGameData(rawGame) {
     0.03
   );
 
-  // Spread signal
   const spreadAdj = weightedAverage(spreadSignals) || 0;
 
-  // Totals signal
   const totalConsensus = weightedAverage(totalSignals) || 0;
   let totalAdj = 0;
   if (totalConsensus < 220) totalAdj = 0.004;
   if (totalConsensus > 235) totalAdj = -0.004;
 
-  // Build "true" probabilities from available market info
+  const [homeFeatures, awayFeatures] = await Promise.all([
+    getTeamFeatures(rawGame.home_team),
+    getTeamFeatures(rawGame.away_team)
+  ]);
+
+  const statsAdj = buildStatsAdjustment(homeFeatures, awayFeatures);
+
   let homeTrueProbability =
-    homeMarketProb + spreadAdj + totalAdj - disagreementPenalty;
+    homeMarketProb + spreadAdj + totalAdj + statsAdj - disagreementPenalty;
   let awayTrueProbability =
-    awayMarketProb - spreadAdj - totalAdj - disagreementPenalty;
+    awayMarketProb - spreadAdj - totalAdj - statsAdj - disagreementPenalty;
 
   homeTrueProbability = clamp(homeTrueProbability, 0.01, 0.99);
   awayTrueProbability = clamp(awayTrueProbability, 0.01, 0.99);
 
-  // Normalize back to 100%
   const totalProb = homeTrueProbability + awayTrueProbability;
   homeTrueProbability = homeTrueProbability / totalProb;
   awayTrueProbability = awayTrueProbability / totalProb;
@@ -210,15 +426,13 @@ function getGameData(rawGame) {
   const trueProbability =
     pickSide === "home" ? homeTrueProbability : awayTrueProbability;
 
-  const edge =
-    pickSide === "home" ? homeEdge : awayEdge;
+  const edge = pickSide === "home" ? homeEdge : awayEdge;
 
   const pick =
     pickSide === "home"
       ? `${rawGame.home_team} to win`
       : `${rawGame.away_team} to win`;
 
-  // Display chosen side's odds from first bookmaker for UI
   let sportsbookOddsDecimal = null;
   const firstBookH2H = rawGame.bookmakers[0]?.markets?.find(m => m.key === "h2h");
 
@@ -226,7 +440,6 @@ function getGameData(rawGame) {
     const chosenOutcome = firstBookH2H.outcomes.find(o =>
       o.name === (pickSide === "home" ? rawGame.home_team : rawGame.away_team)
     );
-
     if (chosenOutcome) {
       sportsbookOddsDecimal = chosenOutcome.price;
     }
@@ -253,16 +466,17 @@ function getGameData(rawGame) {
     pick,
     disagreementPenalty,
     totalConsensus,
+    statsAdj,
+    homeFeatures,
+    awayFeatures,
     timestamp: new Date().toISOString()
   };
 }
 
-// Homepage
 app.get("/", (req, res) => {
   res.sendFile(path.join(__dirname, "index.html"));
 });
 
-// Health check
 app.get("/health", (req, res) => {
   res.json({
     status: "ok",
@@ -272,7 +486,6 @@ app.get("/health", (req, res) => {
   });
 });
 
-// Games list
 app.get("/games", async (req, res) => {
   try {
     if (!API_KEY) {
@@ -327,7 +540,6 @@ app.get("/games", async (req, res) => {
   }
 });
 
-// Selected game dashboard data
 app.get("/odds", async (req, res) => {
   try {
     const gameId = req.query.gameId;
@@ -421,7 +633,7 @@ app.get("/odds", async (req, res) => {
       });
     }
 
-    const current = getGameData(selectedRawGame);
+    const current = await getGameData(selectedRawGame);
 
     if (!current) {
       return res.status(500).json({
