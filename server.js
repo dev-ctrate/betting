@@ -4,13 +4,13 @@ const app = express();
 
 const PORT = process.env.PORT || 3000;
 
-// ====== PUT YOUR REAL API KEY HERE ======
+// PASTE YOUR REAL API KEY HERE TOMORROW
 const API_KEY = "PASTE_YOUR_API_KEY_HERE";
 
-// In-memory history store by game id
+// Store last 15 minutes of edge history per game
 const historyStore = {};
 
-// Build a simple game id
+// Create a stable game id
 function makeGameId(game) {
   return `${game.away_team}-at-${game.home_team}`
     .toLowerCase()
@@ -18,7 +18,7 @@ function makeGameId(game) {
     .replace(/^-|-$/g, "");
 }
 
-// Keep only last 15 minutes of history
+// Keep only last 15 minutes of data
 function trimHistory(gameId) {
   const cutoff = Date.now() - 15 * 60 * 1000;
   historyStore[gameId] = (historyStore[gameId] || []).filter(point => {
@@ -26,7 +26,7 @@ function trimHistory(gameId) {
   });
 }
 
-// Fetch NBA odds from The Odds API
+// Fetch real NBA odds
 async function fetchNbaOdds() {
   const url =
     `https://api.the-odds-api.com/v4/sports/basketball_nba/odds/` +
@@ -35,13 +35,14 @@ async function fetchNbaOdds() {
   const response = await fetch(url);
 
   if (!response.ok) {
-    throw new Error(`Odds API request failed with status ${response.status}`);
+    const text = await response.text();
+    throw new Error(`Odds API error ${response.status}: ${text}`);
   }
 
   return await response.json();
 }
 
-// Pick the first bookmaker/outcomes safely
+// Extract useful game data
 function getGameData(rawGame) {
   if (!rawGame.bookmakers || rawGame.bookmakers.length === 0) {
     return null;
@@ -74,8 +75,7 @@ function getGameData(rawGame) {
   const homeImpliedProbability = 1 / homeOdds;
   const awayImpliedProbability = 1 / awayOdds;
 
-  // Temporary placeholder model:
-  // slight adjustment over implied probability
+  // Temporary placeholder model for now
   const homeTrueProbability = Math.min(homeImpliedProbability + 0.03, 0.95);
   const awayTrueProbability = Math.min(awayImpliedProbability + 0.03, 0.95);
 
@@ -90,7 +90,10 @@ function getGameData(rawGame) {
   const trueProbability =
     pickSide === "home" ? homeTrueProbability : awayTrueProbability;
   const edge = pickSide === "home" ? homeEdge : awayEdge;
-  const pick = pickSide === "home" ? `${rawGame.home_team} to win` : `${rawGame.away_team} to win`;
+  const pick =
+    pickSide === "home"
+      ? `${rawGame.home_team} to win`
+      : `${rawGame.away_team} to win`;
 
   let verdict = "Bad value";
   if (edge >= 0.05) {
@@ -115,14 +118,30 @@ function getGameData(rawGame) {
   };
 }
 
-// Serve homepage
+// Homepage
 app.get("/", (req, res) => {
   res.sendFile(path.join(__dirname, "index.html"));
 });
 
-// Return NBA games happening now / next 24 hours
+// Health check
+app.get("/health", (req, res) => {
+  res.json({
+    status: "ok",
+    apiKeyAdded: API_KEY !== "PASTE_YOUR_API_KEY_HERE",
+    timestamp: new Date().toISOString()
+  });
+});
+
+// List NBA games now to next 24 hours
 app.get("/games", async (req, res) => {
   try {
+    if (API_KEY === "PASTE_YOUR_API_KEY_HERE") {
+      return res.json({
+        mode: "setup",
+        games: []
+      });
+    }
+
     const rawGames = await fetchNbaOdds();
 
     const now = Date.now();
@@ -141,32 +160,50 @@ app.get("/games", async (req, res) => {
         commenceTime: game.commence_time
       }));
 
-    res.json(filteredGames);
+    res.json({
+      mode: "live",
+      games: filteredGames
+    });
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    res.status(500).json({
+      error: error.message,
+      games: []
+    });
   }
 });
 
-// Return one selected game's current data + history
+// Return selected game data + history
 app.get("/odds", async (req, res) => {
   try {
+    if (API_KEY === "PASTE_YOUR_API_KEY_HERE") {
+      return res.status(400).json({
+        error: "API key not added yet"
+      });
+    }
+
     const gameId = req.query.gameId;
 
     if (!gameId) {
-      return res.status(400).json({ error: "Missing gameId query parameter" });
+      return res.status(400).json({
+        error: "Missing gameId query parameter"
+      });
     }
 
     const rawGames = await fetchNbaOdds();
     const selectedRawGame = rawGames.find(game => makeGameId(game) === gameId);
 
     if (!selectedRawGame) {
-      return res.status(404).json({ error: "Game not found" });
+      return res.status(404).json({
+        error: "Game not found"
+      });
     }
 
     const current = getGameData(selectedRawGame);
 
     if (!current) {
-      return res.status(500).json({ error: "Could not extract odds for game" });
+      return res.status(500).json({
+        error: "Could not extract odds for game"
+      });
     }
 
     if (!historyStore[gameId]) {
@@ -185,7 +222,9 @@ app.get("/odds", async (req, res) => {
       history: historyStore[gameId]
     });
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    res.status(500).json({
+      error: error.message
+    });
   }
 });
 
