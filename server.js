@@ -4,17 +4,13 @@ const path = require("path");
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// ===== REQUIRED ENV VAR =====
 const ODDS_API_KEY = process.env.ODDS_API_KEY || "";
 
-// ===== CONFIG =====
 const SPORT_KEY = "basketball_nba";
 const REGIONS = "us";
 const ODDS_FORMAT = "decimal";
 const FEATURED_MARKETS = "h2h,spreads,totals";
 
-// Keep prop markets limited or your usage will explode.
-// You can trim or expand this list later.
 const PLAYER_PROP_MARKETS = [
   "player_points",
   "player_rebounds",
@@ -23,20 +19,17 @@ const PLAYER_PROP_MARKETS = [
   "player_threes"
 ].join(",");
 
-// Historical snapshots to compare against current line.
-// These are expensive, so we cache them heavily.
 const HISTORICAL_LOOKBACKS = [
   { label: "2h", ms: 2 * 60 * 60 * 1000 },
   { label: "24h", ms: 24 * 60 * 60 * 1000 }
 ];
 
-// Cache current game summaries briefly, historical snapshots longer.
 const currentCache = new Map();
 const historicalCache = new Map();
+const edgeHistoryStore = {};
 const CURRENT_TTL_MS = 25 * 1000;
 const HISTORICAL_TTL_MS = 30 * 60 * 1000;
 
-// ===== BASIC HELPERS =====
 function clamp(x, min, max) {
   return Math.max(min, Math.min(max, x));
 }
@@ -56,12 +49,10 @@ function weightedAverage(pairs) {
   if (!pairs.length) return null;
   let num = 0;
   let den = 0;
-
   for (const pair of pairs) {
     num += pair.value * pair.weight;
     den += pair.weight;
   }
-
   return den === 0 ? null : num / den;
 }
 
@@ -69,7 +60,6 @@ function noVigTwoWayProb(priceA, priceB) {
   const rawA = 1 / priceA;
   const rawB = 1 / priceB;
   const total = rawA + rawB;
-
   return {
     a: rawA / total,
     b: rawB / total
@@ -77,17 +67,15 @@ function noVigTwoWayProb(priceA, priceB) {
 }
 
 function getBookWeight(bookKey) {
-  // You can tune these later.
   const sharpBooks = ["pinnacle", "circasports", "matchbook"];
-  const solidBooks = ["draftkings", "fanduel", "betmgm", "betrivers"];
-
-  if (sharpBooks.includes(bookKey)) return 1.35;
-  if (solidBooks.includes(bookKey)) return 1.12;
+  const strongBooks = ["draftkings", "fanduel", "betmgm", "betrivers"];
+  if (sharpBooks.includes(bookKey)) return 1.4;
+  if (strongBooks.includes(bookKey)) return 1.15;
   return 1.0;
 }
 
-function toIso(dateMs) {
-  return new Date(dateMs).toISOString();
+function toIso(ms) {
+  return new Date(ms).toISOString();
 }
 
 function cacheGet(map, key) {
@@ -109,12 +97,10 @@ function cacheSet(map, key, value, ttlMs) {
 
 async function fetchJson(url) {
   const response = await fetch(url);
-
   if (!response.ok) {
     const text = await response.text();
     throw new Error(`Request failed ${response.status}: ${text}`);
   }
-
   return await response.json();
 }
 
@@ -128,165 +114,35 @@ function requireApiKey() {
   return !!ODDS_API_KEY;
 }
 
-function makeUiGameId(game) {
-  return game.id;
-}
-
 function findMarket(bookmaker, marketKey) {
   return bookmaker.markets?.find(m => m.key === marketKey) || null;
 }
 
-function extractFeaturedConsensus(eventOdds) {
-  const homeProbPairs = [];
-  const awayProbPairs = [];
-  const homeProbRaw = [];
-  const awayProbRaw = [];
-  const spreadSignals = [];
-  const totalSignals = [];
-  const displayedMoneylines = [];
-
-  for (const bookmaker of eventOdds.bookmakers || []) {
-    const weight = getBookWeight(bookmaker.key || "");
-    const h2h = findMarket(bookmaker, "h2h");
-    const spreads = findMarket(bookmaker, "spreads");
-    const totals = findMarket(bookmaker, "totals");
-
-    if (h2h?.outcomes?.length >= 2) {
-      const homeOutcome = h2h.outcomes.find(o => o.name === eventOdds.home_team);
-      const awayOutcome = h2h.outcomes.find(o => o.name === eventOdds.away_team);
-
-      if (homeOutcome && awayOutcome) {
-        displayedMoneylines.push({
-          book: bookmaker.key,
-          home: homeOutcome.price,
-          away: awayOutcome.price
-        });
-
-        const nv = noVigTwoWayProb(homeOutcome.price, awayOutcome.price);
-        homeProbPairs.push({ value: nv.a, weight });
-        awayProbPairs.push({ value: nv.b, weight });
-        homeProbRaw.push(nv.a);
-        awayProbRaw.push(nv.b);
-      }
-    }
-
-    if (spreads?.outcomes?.length >= 2) {
-      const homeSpread = spreads.outcomes.find(o => o.name === eventOdds.home_team);
-      if (homeSpread && typeof homeSpread.point === "number") {
-        // More negative spread = stronger home team.
-        const spreadAdj = clamp((-homeSpread.point) * 0.010, -0.08, 0.08);
-        spreadSignals.push({ value: spreadAdj, weight });
-      }
-    }
-
-    if (totals?.outcomes?.length >= 2) {
-      const over = totals.outcomes.find(o => o.name === "Over");
-      if (over && typeof over.point === "number") {
-        totalSignals.push({ value: over.point, weight });
-      }
-    }
-  }
-
-  if (!homeProbPairs.length || !awayProbPairs.length) {
-    return null;
-  }
-
-  const homeMarketProb = weightedAverage(homeProbPairs);
-  const awayMarketProb = weightedAverage(awayProbPairs);
-
-  const spreadAdj = weightedAverage(spreadSignals) || 0;
-  const totalConsensus = weightedAverage(totalSignals) || 0;
-
-  let totalAdj = 0;
-  if (totalConsensus < 220) totalAdj = 0.004;
-  if (totalConsensus > 235) totalAdj = -0.004;
-
-  const disagreementPenalty = clamp(
-    (variance(homeProbRaw) + variance(awayProbRaw)) * 8,
-    0,
-    0.03
-  );
-
-  return {
-    homeMarketProb,
-    awayMarketProb,
-    spreadAdj,
-    totalConsensus,
-    totalAdj,
-    disagreementPenalty,
-    displayedMoneylines
-  };
+function trimEdgeHistory(gameId) {
+  const cutoff = Date.now() - 15 * 60 * 1000;
+  edgeHistoryStore[gameId] = (edgeHistoryStore[gameId] || []).filter(point => {
+    return new Date(point.timestamp).getTime() >= cutoff;
+  });
 }
 
-function matchHistoricalEvent(snapshotEvents, homeTeam, awayTeam) {
-  return (snapshotEvents || []).find(
-    event =>
-      event.home_team === homeTeam &&
-      event.away_team === awayTeam
-  ) || null;
-}
-
-function extractPropSummary(propsEventOdds) {
-  const byMarket = {};
-
-  for (const bookmaker of propsEventOdds.bookmakers || []) {
-    for (const market of bookmaker.markets || []) {
-      if (!byMarket[market.key]) {
-        byMarket[market.key] = [];
-      }
-
-      for (const outcome of market.outcomes || []) {
-        // outcome.description is commonly player name on prop markets.
-        byMarket[market.key].push({
-          book: bookmaker.key,
-          description: outcome.description || "",
-          name: outcome.name || "",
-          point: outcome.point ?? null,
-          price: outcome.price ?? null
-        });
-      }
-    }
+function addEdgeHistory(gameId, edge, timestamp) {
+  if (!edgeHistoryStore[gameId]) {
+    edgeHistoryStore[gameId] = [];
   }
 
-  const summaries = [];
-
-  for (const [marketKey, outcomes] of Object.entries(byMarket)) {
-    // Group by player + point + side (Over/Under)
-    const grouped = {};
-
-    for (const o of outcomes) {
-      const player = o.description || "Unknown";
-      const side = o.name || "";
-      const point = o.point ?? "";
-      const key = `${player}__${side}__${point}`;
-
-      if (!grouped[key]) grouped[key] = [];
-      grouped[key].push(o.price);
-    }
-
-    const rows = Object.entries(grouped).map(([key, prices]) => {
-      const [player, side, point] = key.split("__");
-      return {
-        market: marketKey,
-        player,
-        side,
-        point: point === "" ? null : Number(point),
-        avgPrice: average(prices),
-        booksCount: prices.length
-      };
-    });
-
-    // Keep strongest / most-covered lines first.
-    rows.sort((a, b) => b.booksCount - a.booksCount);
-
-    summaries.push({
-      market: marketKey,
-      count: rows.length,
-      top: rows.slice(0, 8)
-    });
+  let smoothedEdge = edge;
+  if (edgeHistoryStore[gameId].length > 0) {
+    const previousEdge = edgeHistoryStore[gameId][edgeHistoryStore[gameId].length - 1].edge;
+    smoothedEdge = previousEdge * 0.55 + edge * 0.45;
   }
 
-  return summaries;
+  edgeHistoryStore[gameId].push({
+    timestamp,
+    edge: smoothedEdge
+  });
+
+  trimEdgeHistory(gameId);
+  return smoothedEdge;
 }
 
 async function getUpcomingEvents() {
@@ -336,14 +192,13 @@ async function getEventPlayerProps(eventId) {
     const data = await fetchJson(url);
     cacheSet(currentCache, cacheKey, data, CURRENT_TTL_MS);
     return data;
-  } catch (err) {
-    // Props coverage can be incomplete; don't kill the whole response.
+  } catch {
     return { bookmakers: [] };
   }
 }
 
 async function getHistoricalSnapshot(dateIso) {
-  const cacheKey = `hist-sport:${dateIso}`;
+  const cacheKey = `hist:${dateIso}`;
   const hit = cacheGet(historicalCache, cacheKey);
   if (hit) return hit;
 
@@ -360,14 +215,215 @@ async function getHistoricalSnapshot(dateIso) {
   return data;
 }
 
+function matchHistoricalEvent(snapshotEvents, homeTeam, awayTeam) {
+  return (snapshotEvents || []).find(
+    event =>
+      event.home_team === homeTeam &&
+      event.away_team === awayTeam
+  ) || null;
+}
+
+function extractFeaturedConsensus(eventOdds) {
+  const homeProbPairs = [];
+  const awayProbPairs = [];
+  const homeProbRaw = [];
+  const awayProbRaw = [];
+  const spreadSignals = [];
+  const totalSignals = [];
+  const allHomePrices = [];
+  const allAwayPrices = [];
+
+  for (const bookmaker of eventOdds.bookmakers || []) {
+    const weight = getBookWeight(bookmaker.key || "");
+    const h2h = findMarket(bookmaker, "h2h");
+    const spreads = findMarket(bookmaker, "spreads");
+    const totals = findMarket(bookmaker, "totals");
+
+    if (h2h?.outcomes?.length >= 2) {
+      const homeOutcome = h2h.outcomes.find(o => o.name === eventOdds.home_team);
+      const awayOutcome = h2h.outcomes.find(o => o.name === eventOdds.away_team);
+
+      if (homeOutcome && awayOutcome) {
+        allHomePrices.push(homeOutcome.price);
+        allAwayPrices.push(awayOutcome.price);
+
+        const nv = noVigTwoWayProb(homeOutcome.price, awayOutcome.price);
+        homeProbPairs.push({ value: nv.a, weight });
+        awayProbPairs.push({ value: nv.b, weight });
+        homeProbRaw.push(nv.a);
+        awayProbRaw.push(nv.b);
+      }
+    }
+
+    if (spreads?.outcomes?.length >= 2) {
+      const homeSpread = spreads.outcomes.find(o => o.name === eventOdds.home_team);
+      if (homeSpread && typeof homeSpread.point === "number") {
+        spreadSignals.push({
+          value: clamp((-homeSpread.point) * 0.0105, -0.10, 0.10),
+          weight
+        });
+      }
+    }
+
+    if (totals?.outcomes?.length >= 2) {
+      const over = totals.outcomes.find(o => o.name === "Over");
+      if (over && typeof over.point === "number") {
+        totalSignals.push({
+          value: over.point,
+          weight
+        });
+      }
+    }
+  }
+
+  if (!homeProbPairs.length || !awayProbPairs.length) {
+    return null;
+  }
+
+  const homeMarketProb = weightedAverage(homeProbPairs);
+  const awayMarketProb = weightedAverage(awayProbPairs);
+
+  const spreadAdj = weightedAverage(spreadSignals) || 0;
+  const totalConsensus = weightedAverage(totalSignals) || 0;
+
+  let totalAdj = 0;
+  if (totalConsensus < 220) totalAdj = 0.005;
+  else if (totalConsensus > 236) totalAdj = -0.005;
+
+  const disagreementPenalty = clamp(
+    (variance(homeProbRaw) + variance(awayProbRaw)) * 10,
+    0,
+    0.035
+  );
+
+  return {
+    homeMarketProb,
+    awayMarketProb,
+    spreadAdj,
+    totalConsensus,
+    totalAdj,
+    disagreementPenalty,
+    bestHomePrice: Math.max(...allHomePrices),
+    bestAwayPrice: Math.max(...allAwayPrices),
+    avgHomePrice: average(allHomePrices),
+    avgAwayPrice: average(allAwayPrices)
+  };
+}
+
+function extractPropSummary(propsEventOdds) {
+  const groupedMarkets = {};
+
+  for (const bookmaker of propsEventOdds.bookmakers || []) {
+    for (const market of bookmaker.markets || []) {
+      if (!groupedMarkets[market.key]) groupedMarkets[market.key] = [];
+
+      for (const outcome of market.outcomes || []) {
+        groupedMarkets[market.key].push({
+          book: bookmaker.key,
+          player: outcome.description || "",
+          side: outcome.name || "",
+          point: outcome.point ?? null,
+          price: outcome.price ?? null
+        });
+      }
+    }
+  }
+
+  const result = [];
+
+  for (const [market, outcomes] of Object.entries(groupedMarkets)) {
+    const grouped = {};
+
+    for (const o of outcomes) {
+      const key = `${o.player}__${o.side}__${o.point}`;
+      if (!grouped[key]) grouped[key] = [];
+      grouped[key].push(o.price);
+    }
+
+    const rows = Object.entries(grouped).map(([key, prices]) => {
+      const [player, side, point] = key.split("__");
+      return {
+        market,
+        player,
+        side,
+        point: point === "null" ? null : Number(point),
+        avgPrice: average(prices),
+        booksCount: prices.length
+      };
+    });
+
+    rows.sort((a, b) => b.booksCount - a.booksCount);
+
+    result.push({
+      market,
+      count: rows.length,
+      top: rows.slice(0, 8)
+    });
+  }
+
+  return result;
+}
+
+function buildPropTeamSignal(propSummary, homeTeam, awayTeam) {
+  if (!propSummary || !propSummary.length) {
+    return {
+      homeAdj: 0,
+      awayAdj: 0
+    };
+  }
+
+  let homeStrength = 0;
+  let awayStrength = 0;
+
+  for (const market of propSummary) {
+    for (const row of market.top || []) {
+      if (!row.player || typeof row.point !== "number" || typeof row.avgPrice !== "number") {
+        continue;
+      }
+
+      // Simple proxy:
+      // If many books support a higher prop line at lower price, player is viewed stronger.
+      const booksBoost = clamp((row.booksCount - 1) * 0.0015, 0, 0.01);
+      const priceStrength = clamp((2.2 - row.avgPrice) * 0.01, -0.01, 0.02);
+      const pointStrength = clamp(row.point * 0.0008, 0, 0.02);
+
+      const strength = booksBoost + priceStrength + pointStrength;
+
+      // Very light team assignment heuristic based on selected event teams:
+      // We only use player props as a general strength pool and split it by side name presence if possible.
+      const playerName = row.player.toLowerCase();
+
+      if (
+        playerName.includes(homeTeam.split(" ").slice(-1)[0].toLowerCase()) ||
+        false
+      ) {
+        homeStrength += strength;
+      } else if (
+        playerName.includes(awayTeam.split(" ").slice(-1)[0].toLowerCase()) ||
+        false
+      ) {
+        awayStrength += strength;
+      }
+    }
+  }
+
+  // Since player name doesn't include team reliably, keep this conservative.
+  return {
+    homeAdj: clamp(homeStrength, 0, 0.01),
+    awayAdj: clamp(awayStrength, 0, 0.01)
+  };
+}
+
 async function buildHistoricalComparisons(homeTeam, awayTeam) {
   const comparisons = {};
 
   for (const lookback of HISTORICAL_LOOKBACKS) {
     const dateIso = toIso(Date.now() - lookback.ms);
+
     try {
       const snapshot = await getHistoricalSnapshot(dateIso);
       const matched = matchHistoricalEvent(snapshot.data || snapshot, homeTeam, awayTeam);
+
       if (matched) {
         const extracted = extractFeaturedConsensus(matched);
         if (extracted) {
@@ -390,32 +446,34 @@ async function buildHistoricalComparisons(homeTeam, awayTeam) {
   return comparisons;
 }
 
-function buildProbabilityModel(currentConsensus, historicalComparisons, homeTeam, awayTeam) {
+function buildProbabilityModel(currentConsensus, historicalComparisons, propSignal) {
   const homeMarketProb = currentConsensus.homeMarketProb;
   const awayMarketProb = currentConsensus.awayMarketProb;
 
   let lineMovementAdj = 0;
 
-  // Use 24h and 2h snapshots if available.
   const h24 = historicalComparisons["24h"];
   const h2 = historicalComparisons["2h"];
 
   if (h24 && typeof h24.homeMarketProb === "number") {
     const delta24 = homeMarketProb - h24.homeMarketProb;
-    lineMovementAdj += clamp(delta24 * 0.60, -0.035, 0.035);
+    lineMovementAdj += clamp(delta24 * 0.50, -0.03, 0.03);
   }
 
   if (h2 && typeof h2.homeMarketProb === "number") {
     const delta2 = homeMarketProb - h2.homeMarketProb;
-    lineMovementAdj += clamp(delta2 * 0.85, -0.030, 0.030);
+    lineMovementAdj += clamp(delta2 * 0.85, -0.025, 0.025);
   }
 
-  // Spread + total + line movement - disagreement.
+  // Keep prop signal light so it doesn't overpower the market.
+  const propAdj = clamp((propSignal.homeAdj - propSignal.awayAdj), -0.01, 0.01);
+
   let homeTrueProb =
     homeMarketProb +
     currentConsensus.spreadAdj +
     currentConsensus.totalAdj +
-    lineMovementAdj -
+    lineMovementAdj +
+    propAdj -
     currentConsensus.disagreementPenalty;
 
   let awayTrueProb =
@@ -423,6 +481,7 @@ function buildProbabilityModel(currentConsensus, historicalComparisons, homeTeam
     currentConsensus.spreadAdj -
     currentConsensus.totalAdj -
     lineMovementAdj -
+    propAdj -
     currentConsensus.disagreementPenalty;
 
   homeTrueProb = clamp(homeTrueProb, 0.01, 0.99);
@@ -438,28 +497,26 @@ function buildProbabilityModel(currentConsensus, historicalComparisons, homeTeam
   const pickSide = homeEdge >= awayEdge ? "home" : "away";
   const impliedProbability = pickSide === "home" ? homeMarketProb : awayMarketProb;
   const trueProbability = pickSide === "home" ? homeTrueProb : awayTrueProb;
-  const edge = pickSide === "home" ? homeEdge : awayEdge;
-  const pick = pickSide === "home" ? `${homeTeam} to win` : `${awayTeam} to win`;
+  const rawEdge = pickSide === "home" ? homeEdge : awayEdge;
 
   let verdict = "Avoid";
-  if (edge >= 0.04) {
+  if (rawEdge >= 0.05) {
     verdict = "Bet now";
-  } else if (edge >= 0.015) {
+  } else if (rawEdge >= 0.02) {
     verdict = "Watch";
   }
 
   return {
+    pickSide,
     impliedProbability,
     trueProbability,
-    edge,
-    pick,
+    rawEdge,
     verdict,
     lineMovementAdj,
-    pickSide
+    propAdj
   };
 }
 
-// ===== ROUTES =====
 app.get("/", (req, res) => {
   res.sendFile(path.join(__dirname, "index.html"));
 });
@@ -468,7 +525,7 @@ app.get("/health", (req, res) => {
   res.json({
     status: "ok",
     apiKeyAdded: requireApiKey(),
-    sport: SPORT_KEY,
+    mode: requireApiKey() ? "live" : "mock",
     timestamp: new Date().toISOString()
   });
 });
@@ -477,12 +534,12 @@ app.get("/games", async (req, res) => {
   try {
     if (!requireApiKey()) {
       return res.status(400).json({
-        error: "Missing ODDS_API_KEY"
+        error: "Missing ODDS_API_KEY",
+        games: []
       });
     }
 
     const events = await getUpcomingEvents();
-
     const now = Date.now();
     const next24h = now + 24 * 60 * 60 * 1000;
 
@@ -492,19 +549,18 @@ app.get("/games", async (req, res) => {
         return t >= now && t <= next24h;
       })
       .map(event => ({
-        id: makeUiGameId(event),
+        id: event.id,
         label: `${event.away_team} @ ${event.home_team}`,
         homeTeam: event.home_team,
         awayTeam: event.away_team,
         commenceTime: event.commence_time
       }));
 
-    res.json({
-      games
-    });
+    res.json({ games });
   } catch (error) {
     res.status(500).json({
-      error: error.message
+      error: error.message,
+      games: []
     });
   }
 });
@@ -512,16 +568,12 @@ app.get("/games", async (req, res) => {
 app.get("/odds", async (req, res) => {
   try {
     if (!requireApiKey()) {
-      return res.status(400).json({
-        error: "Missing ODDS_API_KEY"
-      });
+      return res.status(400).json({ error: "Missing ODDS_API_KEY" });
     }
 
     const gameId = req.query.gameId;
     if (!gameId) {
-      return res.status(400).json({
-        error: "Missing gameId query parameter"
-      });
+      return res.status(400).json({ error: "Missing gameId query parameter" });
     }
 
     const featured = await getEventFeaturedOdds(gameId);
@@ -530,7 +582,7 @@ app.get("/odds", async (req, res) => {
     const currentConsensus = extractFeaturedConsensus(featured);
     if (!currentConsensus) {
       return res.status(500).json({
-        error: "Could not extract featured odds consensus for event"
+        error: "Could not extract featured odds consensus"
       });
     }
 
@@ -539,71 +591,63 @@ app.get("/odds", async (req, res) => {
       featured.away_team
     );
 
-    const model = buildProbabilityModel(
-      currentConsensus,
-      historicalComparisons,
+    const propSummary = extractPropSummary(props);
+    const propSignal = buildPropTeamSignal(
+      propSummary,
       featured.home_team,
       featured.away_team
     );
 
-    const propSummary = extractPropSummary(props);
+    const model = buildProbabilityModel(
+      currentConsensus,
+      historicalComparisons,
+      propSignal
+    );
 
-    // Choose displayed odds from first bookmaker for selected side
-    let sportsbookOddsDecimal = null;
-    const firstBookH2H = featured.bookmakers?.[0]?.markets?.find(m => m.key === "h2h");
-    if (firstBookH2H?.outcomes?.length >= 2) {
-      const chosen = firstBookH2H.outcomes.find(o =>
-        o.name === (model.pickSide === "home" ? featured.home_team : featured.away_team)
-      );
-      if (chosen) sportsbookOddsDecimal = chosen.price;
-    }
+    const pickTeam =
+      model.pickSide === "home" ? featured.home_team : featured.away_team;
+
+    const sportsbookOddsDecimal =
+      model.pickSide === "home"
+        ? currentConsensus.bestHomePrice
+        : currentConsensus.bestAwayPrice;
+
+    const pick = `${pickTeam} to win`;
+
+    const smoothedEdge = addEdgeHistory(
+      gameId,
+      model.rawEdge,
+      new Date().toISOString()
+    );
 
     res.json({
       id: featured.id,
-      sport: featured.sport_key,
       homeTeam: featured.home_team,
       awayTeam: featured.away_team,
       commenceTime: featured.commence_time,
       sportsbookOddsDecimal,
       impliedProbability: model.impliedProbability,
       trueProbability: model.trueProbability,
-      edge: model.edge,
+      edge: smoothedEdge,
       verdict: model.verdict,
-      pick: model.pick,
+      pick,
+      history: edgeHistoryStore[gameId] || [],
       modelDetails: {
         spreadAdj: currentConsensus.spreadAdj,
         totalConsensus: currentConsensus.totalConsensus,
         totalAdj: currentConsensus.totalAdj,
         disagreementPenalty: currentConsensus.disagreementPenalty,
         lineMovementAdj: model.lineMovementAdj,
+        propAdj: model.propAdj,
+        avgHomePrice: currentConsensus.avgHomePrice,
+        avgAwayPrice: currentConsensus.avgAwayPrice,
+        bestHomePrice: currentConsensus.bestHomePrice,
+        bestAwayPrice: currentConsensus.bestAwayPrice,
         historicalComparisons
       },
       propsSummary: propSummary,
       timestamp: new Date().toISOString()
     });
-  } catch (error) {
-    res.status(500).json({
-      error: error.message
-    });
-  }
-});
-
-// Optional light endpoint for recent scores (The Odds API supports scores).
-app.get("/scores", async (req, res) => {
-  try {
-    if (!requireApiKey()) {
-      return res.status(400).json({
-        error: "Missing ODDS_API_KEY"
-      });
-    }
-
-    const url = buildUrl(`/v4/sports/${SPORT_KEY}/scores/`, {
-      apiKey: ODDS_API_KEY,
-      daysFrom: "3"
-    });
-
-    const data = await fetchJson(url);
-    res.json(data);
   } catch (error) {
     res.status(500).json({
       error: error.message
