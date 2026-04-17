@@ -4,7 +4,7 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 
 app.get("/", (req, res) => {
-  res.send("KIA DEKH RAHA HAI");
+  res.send("KIA DEKHI RAHA HAI");
 });
 
 app.get("/odds", (req, res) => {
@@ -15,5 +15,5 @@ app.get("/odds", (req, res) => {
 });
 
 app.listen(PORT, () => {
-  console.log(⁠ "Server running on port " + PORT⁠);
+  console.log("Server running on port " + PORT);
 });
