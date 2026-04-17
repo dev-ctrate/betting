@@ -1324,6 +1324,7 @@ app.get("/odds", async (req, res) => {
     };
 
     logSnapshot(gameId, snapshot);
+  
 
     res.json({
       id: featured.id,
