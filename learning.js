@@ -23,15 +23,18 @@ function roundToTwo(num) {
 function readJson(filePath, fallback) {
   try {
     ensureDir();
+
     if (!fs.existsSync(filePath)) {
       fs.writeFileSync(filePath, JSON.stringify(fallback, null, 2), "utf8");
       return fallback;
     }
+
     const raw = fs.readFileSync(filePath, "utf8");
     if (!raw.trim()) return fallback;
+
     return JSON.parse(raw);
   } catch (err) {
-    console.error(⁠ readJson failed for ${filePath}: ⁠, err.message);
+    console.error(`readJson failed for ${filePath}:`, err.message);
     return fallback;
   }
 }
@@ -42,14 +45,14 @@ function writeJson(filePath, value) {
     fs.writeFileSync(filePath, JSON.stringify(value, null, 2), "utf8");
     return true;
   } catch (err) {
-    console.error(⁠ writeJson failed for ${filePath}: ⁠, err.message);
+    console.error(`writeJson failed for ${filePath}:`, err.message);
     return false;
   }
 }
 
 function probabilityBucket(probability) {
   if (typeof probability !== "number") return null;
-  return (Math.floor(probability * 20) / 20).toFixed(2); // 5% buckets
+  return (Math.floor(probability * 20) / 20).toFixed(2);
 }
 
 function getSnapshots() {
@@ -68,12 +71,10 @@ function saveCalibrationTable(table) {
   return writeJson(CALIBRATION_FILE, table);
 }
 
-function recordSnapshot(row) {
-  const snapshots = getSnapshots();
-
-  snapshots.push({
-    id: row.id || ⁠ ${row.gameId}_${Date.now()} ⁠,
-    gameId: row.gameId,
+function normalizeRow(row = {}) {
+  return {
+    id: row.id || `${row.gameId || "unknown"}_${Date.now()}`,
+    gameId: String(row.gameId || ""),
     timestamp: row.timestamp || new Date().toISOString(),
     commenceTime: row.commenceTime || null,
     homeTeam: row.homeTeam || "",
@@ -91,63 +92,15 @@ function recordSnapshot(row) {
     confidencePercent: row.confidencePercent ?? null,
     source: row.source || "live",
     features: {
-      spreadAdj: row.spreadAdj ?? null,
-      totalAdj: row.totalAdj ?? null,
-      lineMovementAdj: row.lineMovementAdj ?? null,
-      propAdj: row.propAdj ?? null,
-      injuryAdjHome: row.injuryAdjHome ?? null,
-      disagreementPenalty: row.disagreementPenalty ?? null,
-      avgHomeSpread: row.avgHomeSpread ?? null,
-      avgTotal: row.avgTotal ?? null,
-      bookCount: row.bookCount ?? null
-    },
-    result: {
-      finalWinner: row.result?.finalWinner ?? null,
-      modelWon: row.result?.modelWon ?? null,
-      finalHomeScore: row.result?.finalHomeScore ?? null,
-      finalAwayScore: row.result?.finalAwayScore ?? null,
-      gradedAt: row.result?.gradedAt ?? null
-    }
-  });
-
-  saveSnapshots(snapshots.slice(-50000));
-}
-
-function upsertBackfillRow(row) {
-  const snapshots = getSnapshots();
-  const idx = snapshots.findIndex(
-    x => x.gameId === row.gameId && x.source === "backfill"
-  );
-
-  const finalRow = {
-    id: row.id || ⁠ ${row.gameId}_backfill ⁠,
-    gameId: row.gameId,
-    timestamp: row.timestamp || new Date().toISOString(),
-    commenceTime: row.commenceTime || null,
-    homeTeam: row.homeTeam || "",
-    awayTeam: row.awayTeam || "",
-    pickSide: row.pickSide || "",
-    pickTeam: row.pickTeam || "",
-    impliedProbability: row.impliedProbability ?? null,
-    trueProbability: row.trueProbability ?? null,
-    calibratedProbability: row.calibratedProbability ?? null,
-    rawEdge: row.rawEdge ?? null,
-    calibratedEdge: row.calibratedEdge ?? null,
-    sportsbookDecimal: row.sportsbookDecimal ?? null,
-    verdict: row.verdict || "",
-    confidenceLabel: row.confidenceLabel || "",
-    confidencePercent: row.confidencePercent ?? null,
-    source: "backfill",
-    features: {
-      spreadAdj: row.spreadAdj ?? null,
-      totalAdj: row.totalAdj ?? null,
-      lineMovementAdj: row.lineMovementAdj ?? null,
-      propAdj: row.propAdj ?? null,
-      injuryAdjHome: row.injuryAdjHome ?? null,
-      disagreementPenalty: row.disagreementPenalty ?? null,
-      avgHomeSpread: row.avgHomeSpread ?? null,
-      avgTotal: row.avgTotal ?? null,
-      bookCount: row.bookCount ?? null
+      spreadAdj: row.features?.spreadAdj ?? row.spreadAdj ?? null,
+      totalAdj: row.features?.totalAdj ?? row.totalAdj ?? null,
+      lineMovementAdj: row.features?.lineMovementAdj ?? row.lineMovementAdj ?? null,
+      propAdj: row.features?.propAdj ?? row.propAdj ?? null,
+      injuryAdjHome: row.features?.injuryAdjHome ?? row.injuryAdjHome ?? null,
+      disagreementPenalty: row.features?.disagreementPenalty ?? row.disagreementPenalty ?? null,
+      avgHomeSpread: row.features?.avgHomeSpread ?? row.avgHomeSpread ?? null,
+      avgTotal: row.features?.avgTotal ?? row.avgTotal ?? null,
+      bookCount: row.features?.bookCount ?? row.bookCount ?? null
     },
     result: {
       finalWinner: row.result?.finalWinner ?? null,
@@ -157,9 +110,24 @@ function upsertBackfillRow(row) {
       gradedAt: row.result?.gradedAt ?? null
     }
   };
+}
 
-  if (idx >= 0) snapshots[idx] = finalRow;
-  else snapshots.push(finalRow);
+function recordSnapshot(row) {
+  const snapshots = getSnapshots();
+  snapshots.push(normalizeRow(row));
+  saveSnapshots(snapshots.slice(-50000));
+}
+
+function upsertBackfillRow(row) {
+  const snapshots = getSnapshots();
+  const normalized = normalizeRow({ ...row, source: "backfill" });
+
+  const idx = snapshots.findIndex(
+    x => String(x.gameId) === String(normalized.gameId) && x.source === "backfill"
+  );
+
+  if (idx >= 0) snapshots[idx] = normalized;
+  else snapshots.push(normalized);
 
   saveSnapshots(snapshots.slice(-50000));
 }
@@ -169,7 +137,8 @@ function updateGameResult({ gameId, finalWinner, finalHomeScore = null, finalAwa
   let changed = 0;
 
   for (const row of snapshots) {
-    if (row.gameId !== gameId) continue;
+    if (String(row.gameId) !== String(gameId)) continue;
+
     row.result.finalWinner = finalWinner;
     row.result.modelWon = row.pickSide === finalWinner;
     row.result.finalHomeScore = finalHomeScore;
@@ -262,6 +231,7 @@ module.exports = {
   buildCalibrationTable,
   applyCalibration,
   getSnapshots,
+  saveSnapshots,
   getCalibrationTable,
   getLearningSummary
 };
