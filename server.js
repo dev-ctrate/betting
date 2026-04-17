@@ -5,7 +5,7 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 
 // PASTE YOUR REAL API KEY HERE TOMORROW
-const API_KEY = process.env.API_KEY;
+const API_KEY = null;
 
 // Store last 15 minutes of edge history per game
 const historyStore = {};
