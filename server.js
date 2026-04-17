@@ -7,7 +7,7 @@ const PORT = process.env.PORT || 3000;
 // ===== MODE =====
 // For tomorrow, switch to:
 // const API_KEY = process.env.API_KEY;
-const API_KEY = null;
+const API_KEY = process.env.ODDS_API_KEY;
 
 // ===== CONFIG =====
 const NBA_SEASON = "2025-26";
