@@ -8,6 +8,17 @@ const REGIONS = "us";
 const ODDS_FORMAT = "decimal";
 const FEATURED_MARKETS = "h2h,spreads,totals";
 
+// Multiple pregame timestamps to learn faster.
+const SNAPSHOT_OFFSETS_MINUTES = [
+  24 * 60, // 24h
+  12 * 60, // 12h
+  6 * 60,  // 6h
+  2 * 60,  // 2h
+  60,      // 1h
+  30,      // 30m
+  10       // 10m
+];
+
 if (!ODDS_API_KEY) {
   throw new Error("Missing ODDS_API_KEY");
 }
@@ -67,7 +78,7 @@ function getBookWeight(bookKey) {
 
 async function fetchJson(url, options = {}) {
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 15000);
+  const timeout = setTimeout(() => controller.abort(), 20000);
 
   try {
     const response = await fetch(url, {
@@ -254,20 +265,39 @@ function extractFeaturedConsensus(eventOdds) {
   };
 }
 
-function buildSimpleHistoricalModel(consensus) {
+function buildHistoricalModel(consensus, movement) {
   const homeMarketProb = consensus.homeMarketProb;
   const awayMarketProb = consensus.awayMarketProb;
+
+  let lineMovementAdj = 0;
+
+  if (movement && typeof movement.delta24h === "number") {
+    lineMovementAdj += clamp(movement.delta24h * 0.45, -0.03, 0.03);
+  }
+
+  if (movement && typeof movement.delta2h === "number") {
+    lineMovementAdj += clamp(movement.delta2h * 0.8, -0.03, 0.03);
+  }
+
+  const propAdj = 0;
+  const injuryAdjHome = 0;
 
   let homeTrueProb =
     homeMarketProb +
     consensus.spreadAdj +
-    consensus.totalAdj -
+    consensus.totalAdj +
+    lineMovementAdj +
+    propAdj +
+    injuryAdjHome -
     consensus.disagreementPenalty;
 
   let awayTrueProb =
     awayMarketProb -
     consensus.spreadAdj -
     consensus.totalAdj -
+    lineMovementAdj -
+    propAdj -
+    injuryAdjHome -
     consensus.disagreementPenalty;
 
   homeTrueProb = clamp(homeTrueProb, 0.01, 0.99);
@@ -290,9 +320,9 @@ function buildSimpleHistoricalModel(consensus) {
     impliedProbability,
     trueProbability,
     rawEdge,
-    lineMovementAdj: 0,
-    propAdj: 0,
-    injuryAdjHome: 0
+    lineMovementAdj,
+    propAdj,
+    injuryAdjHome
   };
 }
 
@@ -345,6 +375,52 @@ function isFinalGame(game) {
   return status.includes("final");
 }
 
+function toIsoFromMs(ms) {
+  return new Date(ms).toISOString();
+}
+
+function getSnapshotTimes(commenceTimeIso) {
+  const startMs = new Date(commenceTimeIso).getTime();
+
+  return SNAPSHOT_OFFSETS_MINUTES.map(offsetMin => ({
+    label: `${offsetMin}m`,
+    offsetMin,
+    iso: toIsoFromMs(startMs - offsetMin * 60 * 1000)
+  }));
+}
+
+function buildMovementMap(consensusByOffset) {
+  const result = {};
+
+  for (const [offsetKey, entry] of Object.entries(consensusByOffset)) {
+    if (!entry?.consensus) continue;
+
+    const currentProb = entry.consensus.homeMarketProb;
+    const currentOffset = Number(offsetKey);
+
+    const offset24 = 24 * 60;
+    const offset2 = 2 * 60;
+
+    let delta24h = null;
+    let delta2h = null;
+
+    if (consensusByOffset[offset24]?.consensus?.homeMarketProb != null) {
+      delta24h = currentProb - consensusByOffset[offset24].consensus.homeMarketProb;
+    }
+
+    if (consensusByOffset[offset2]?.consensus?.homeMarketProb != null) {
+      delta2h = currentProb - consensusByOffset[offset2].consensus.homeMarketProb;
+    }
+
+    result[currentOffset] = {
+      delta24h,
+      delta2h
+    };
+  }
+
+  return result;
+}
+
 async function backfillDate(ymd) {
   console.log(`Backfilling ${ymd}...`);
 
@@ -356,81 +432,96 @@ async function backfillDate(ymd) {
     return { date: ymd, added: 0, skipped: 0 };
   }
 
-  const snapshotIso = `${ymd}T16:00:00Z`;
-  const historical = await getHistoricalOddsSnapshot(snapshotIso);
-  const oddsEvents = historical?.data || historical || [];
-
   let added = 0;
   let skipped = 0;
 
   for (const game of finalGames) {
-    const oddsEvent = findHistoricalOddsEvent(oddsEvents, game);
-
-    if (!oddsEvent) {
-      skipped += 1;
-      continue;
-    }
-
-    const consensus = extractFeaturedConsensus(oddsEvent);
-    if (!consensus) {
-      skipped += 1;
-      continue;
-    }
-
-    const model = buildSimpleHistoricalModel(consensus);
     const finalWinner = deriveFinalWinner(game);
-
-    if (!finalWinner) {
+    if (!finalWinner || !game.datetime) {
       skipped += 1;
       continue;
     }
 
-    const pickTeam =
-      model.pickSide === "home"
-        ? game.home_team?.full_name || oddsEvent.home_team
-        : game.visitor_team?.full_name || oddsEvent.away_team;
+    const snapshotTimes = getSnapshotTimes(game.datetime);
+    const consensusByOffset = {};
 
-    const chosenDecimal =
-      model.pickSide === "home"
-        ? consensus.bestHomePrice
-        : consensus.bestAwayPrice;
+    for (const snapshot of snapshotTimes) {
+      try {
+        const historical = await getHistoricalOddsSnapshot(snapshot.iso);
+        const oddsEvents = historical?.data || historical || [];
+        const oddsEvent = findHistoricalOddsEvent(oddsEvents, game);
 
-    learning.upsertBackfillRow({
-      gameId: String(game.id),
-      timestamp: new Date().toISOString(),
-      commenceTime: game.datetime || null,
-      homeTeam: game.home_team?.full_name || oddsEvent.home_team,
-      awayTeam: game.visitor_team?.full_name || oddsEvent.away_team,
-      pickSide: model.pickSide,
-      pickTeam,
-      impliedProbability: roundToTwo(model.impliedProbability),
-      trueProbability: roundToTwo(model.trueProbability),
-      calibratedProbability: null,
-      rawEdge: roundToTwo(model.rawEdge),
-      calibratedEdge: null,
-      sportsbookDecimal: chosenDecimal,
-      verdict: "",
-      confidenceLabel: "",
-      confidencePercent: null,
-      spreadAdj: roundToTwo(consensus.spreadAdj),
-      totalAdj: roundToTwo(consensus.totalAdj),
-      lineMovementAdj: 0,
-      propAdj: 0,
-      injuryAdjHome: 0,
-      disagreementPenalty: roundToTwo(consensus.disagreementPenalty),
-      avgHomeSpread: roundToTwo(consensus.avgHomeSpread),
-      avgTotal: roundToTwo(consensus.avgTotal),
-      bookCount: consensus.bookCount,
-      result: {
-        finalWinner,
-        modelWon: model.pickSide === finalWinner,
-        finalHomeScore: game.home_team_score,
-        finalAwayScore: game.visitor_team_score,
-        gradedAt: new Date().toISOString()
+        if (!oddsEvent) continue;
+
+        const consensus = extractFeaturedConsensus(oddsEvent);
+        if (!consensus) continue;
+
+        consensusByOffset[snapshot.offsetMin] = {
+          snapshotIso: snapshot.iso,
+          consensus,
+          oddsEvent
+        };
+      } catch (err) {
+        console.error(`  snapshot failed ${snapshot.iso}: ${err.message}`);
       }
-    });
+    }
 
-    added += 1;
+    const movementMap = buildMovementMap(consensusByOffset);
+
+    for (const [offsetKey, entry] of Object.entries(consensusByOffset)) {
+      const offsetMin = Number(offsetKey);
+      const movement = movementMap[offsetMin] || {};
+      const model = buildHistoricalModel(entry.consensus, movement);
+
+      const pickTeam =
+        model.pickSide === "home"
+          ? game.home_team?.full_name || entry.oddsEvent.home_team
+          : game.visitor_team?.full_name || entry.oddsEvent.away_team;
+
+      const chosenDecimal =
+        model.pickSide === "home"
+          ? entry.consensus.bestHomePrice
+          : entry.consensus.bestAwayPrice;
+
+      learning.upsertBackfillRow({
+        id: `${game.id}_${offsetMin}`,
+        gameId: `${game.id}_${offsetMin}`,
+        timestamp: entry.snapshotIso,
+        commenceTime: game.datetime,
+        homeTeam: game.home_team?.full_name || entry.oddsEvent.home_team,
+        awayTeam: game.visitor_team?.full_name || entry.oddsEvent.away_team,
+        pickSide: model.pickSide,
+        pickTeam,
+        impliedProbability: roundToTwo(model.impliedProbability),
+        trueProbability: roundToTwo(model.trueProbability),
+        calibratedProbability: null,
+        rawEdge: roundToTwo(model.rawEdge),
+        calibratedEdge: null,
+        sportsbookDecimal: chosenDecimal,
+        verdict: "",
+        confidenceLabel: "",
+        confidencePercent: null,
+        spreadAdj: roundToTwo(entry.consensus.spreadAdj),
+        totalAdj: roundToTwo(entry.consensus.totalAdj),
+        lineMovementAdj: roundToTwo(model.lineMovementAdj),
+        propAdj: 0,
+        injuryAdjHome: 0,
+        disagreementPenalty: roundToTwo(entry.consensus.disagreementPenalty),
+        avgHomeSpread: roundToTwo(entry.consensus.avgHomeSpread),
+        avgTotal: roundToTwo(entry.consensus.avgTotal),
+        bookCount: entry.consensus.bookCount,
+        source: "backfill",
+        result: {
+          finalWinner,
+          modelWon: model.pickSide === finalWinner,
+          finalHomeScore: game.home_team_score,
+          finalAwayScore: game.visitor_team_score,
+          gradedAt: new Date().toISOString()
+        }
+      });
+
+      added += 1;
+    }
   }
 
   console.log(`  Added ${added}, skipped ${skipped}`);
