@@ -70,6 +70,14 @@
     .good { color: #4ade80; }
     .small-edge { color: #facc15; }
     .bad { color: #f87171; }
+
+    .message {
+      background: #2a2a2a;
+      padding: 12px;
+      border-radius: 10px;
+      margin-top: 12px;
+      color: #ddd;
+    }
   </style>
 </head>
 <body>
@@ -83,12 +91,13 @@
       <div class="selector-row">
         <label for="gameSelect">Select NBA game (now to next 24 hours)</label>
         <select id="gameSelect"></select>
+        <div id="statusMessage" class="message">Loading...</div>
       </div>
     </div>
 
     <div class="card">
-      <h2 id="matchup">Loading...</h2>
-      <p id="pick"></p>
+      <h2 id="matchup">Waiting for game selection</h2>
+      <p id="pick">Pick: -</p>
 
       <div class="stats">
         <div class="stat">
@@ -126,6 +135,7 @@
 
   <script>
     const gameSelect = document.getElementById("gameSelect");
+    const statusMessage = document.getElementById("statusMessage");
     let selectedGameId = null;
 
     const ctx = document.getElementById("edgeChart").getContext("2d");
@@ -173,32 +183,62 @@
       }
     }
 
+    function clearDashboard(message) {
+      document.getElementById("matchup").textContent = message;
+      document.getElementById("pick").textContent = "Pick: -";
+      document.getElementById("edgeValue").textContent = "-";
+      document.getElementById("verdict").textContent = "-";
+      document.getElementById("odds").textContent = "-";
+      document.getElementById("implied").textContent = "-";
+      document.getElementById("trueProb").textContent = "-";
+      document.getElementById("updatedAt").textContent = "-";
+
+      edgeChart.data.labels = [];
+      edgeChart.data.datasets[0].data = [];
+      edgeChart.update();
+    }
+
     async function loadGames() {
       const res = await fetch("/games");
-      const games = await res.json();
+      const payload = await res.json();
 
       gameSelect.innerHTML = "";
 
-      if (!Array.isArray(games) || games.length === 0) {
+      if (payload.mode === "setup") {
+        const option = document.createElement("option");
+        option.textContent = "Add API key to activate real data";
+        option.value = "";
+        gameSelect.appendChild(option);
+        statusMessage.textContent = "Setup mode: add your API key in server.js tomorrow.";
+        clearDashboard("API key not added yet");
+        selectedGameId = null;
+        return;
+      }
+
+      if (!payload.games || payload.games.length === 0) {
         const option = document.createElement("option");
         option.textContent = "No NBA games found in next 24 hours";
         option.value = "";
         gameSelect.appendChild(option);
+        statusMessage.textContent = "No NBA games found in the next 24 hours.";
+        clearDashboard("No NBA games found in next 24 hours");
+        selectedGameId = null;
         return;
       }
 
-      games.forEach(game => {
+      payload.games.forEach(game => {
         const option = document.createElement("option");
         option.value = game.id;
         option.textContent = game.label;
         gameSelect.appendChild(option);
       });
 
-      if (!selectedGameId) {
-        selectedGameId = games[0].id;
+      if (!selectedGameId || !payload.games.some(g => g.id === selectedGameId)) {
+        selectedGameId = payload.games[0].id;
       }
 
       gameSelect.value = selectedGameId;
+      statusMessage.textContent = `${payload.games.length} NBA game(s) loaded.`;
     }
 
     async function loadSelectedGame() {
@@ -208,7 +248,8 @@
       const data = await res.json();
 
       if (data.error) {
-        document.getElementById("matchup").textContent = data.error;
+        statusMessage.textContent = data.error;
+        clearDashboard(data.error);
         return;
       }
 
