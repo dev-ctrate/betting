@@ -40,6 +40,10 @@ function clamp(x, min, max) {
   return Math.max(min, Math.min(max, x));
 }
 
+// 👇 ADD HERE
+function round2(n) {
+  return typeof n === "number" ? Math.round(n * 100) / 100 : n;
+}
 function average(values) {
   if (!values.length) return null;
   return values.reduce((sum, v) => sum + v, 0) / values.length;
