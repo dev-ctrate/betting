@@ -43,195 +43,218 @@ function writeJson(filePath, value) {
   try {
     ensureDir();
     fs.writeFileSync(filePath, JSON.stringify(value, null, 2), "utf8");
-    return true;
   } catch (err) {
     console.error(`writeJson failed for ${filePath}:`, err.message);
-    return false;
   }
 }
 
-function probabilityBucket(probability) {
-  if (typeof probability !== "number") return null;
-  return (Math.floor(probability * 20) / 20).toFixed(2);
+let snapshots = readJson(SNAPSHOT_FILE, []);
+let calibrationTable = readJson(CALIBRATION_FILE, {});
+
+function persistSnapshots() {
+  writeJson(SNAPSHOT_FILE, snapshots);
 }
 
-function getSnapshots() {
-  return readJson(SNAPSHOT_FILE, []);
+function persistCalibration() {
+  writeJson(CALIBRATION_FILE, calibrationTable);
 }
 
-function saveSnapshots(rows) {
-  return writeJson(SNAPSHOT_FILE, rows);
+function probabilityBucket(prob) {
+  const p = Number(prob);
+  if (!Number.isFinite(p)) return "unknown";
+
+  const lower = Math.floor(p * 20) / 20;
+  const upper = lower + 0.05;
+
+  const loPct = Math.round(lower * 100);
+  const hiPct = Math.round(upper * 100);
+
+  return `${loPct}-${hiPct}`;
 }
 
-function getCalibrationTable() {
-  return readJson(CALIBRATION_FILE, {});
+function cloneSnapshotRow(row) {
+  return JSON.parse(JSON.stringify(row));
 }
 
-function saveCalibrationTable(table) {
-  return writeJson(CALIBRATION_FILE, table);
-}
-
-function normalizeRow(row = {}) {
+function normalizeSnapshot(row) {
   return {
-    id: row.id || `${row.gameId || "unknown"}_${Date.now()}`,
-    gameId: String(row.gameId || ""),
-    timestamp: row.timestamp || new Date().toISOString(),
-    commenceTime: row.commenceTime || null,
-    homeTeam: row.homeTeam || "",
-    awayTeam: row.awayTeam || "",
-    pickSide: row.pickSide || "",
-    pickTeam: row.pickTeam || "",
-    impliedProbability: row.impliedProbability ?? null,
-    trueProbability: row.trueProbability ?? null,
-    calibratedProbability: row.calibratedProbability ?? null,
-    rawEdge: row.rawEdge ?? null,
-    calibratedEdge: row.calibratedEdge ?? null,
-    sportsbookDecimal: row.sportsbookDecimal ?? null,
-    verdict: row.verdict || "",
-    confidenceLabel: row.confidenceLabel || "",
-    confidencePercent: row.confidencePercent ?? null,
-    source: row.source || "live",
-    features: {
-      spreadAdj: row.features?.spreadAdj ?? row.spreadAdj ?? null,
-      totalAdj: row.features?.totalAdj ?? row.totalAdj ?? null,
-      lineMovementAdj: row.features?.lineMovementAdj ?? row.lineMovementAdj ?? null,
-      propAdj: row.features?.propAdj ?? row.propAdj ?? null,
-      injuryAdjHome: row.features?.injuryAdjHome ?? row.injuryAdjHome ?? null,
-      disagreementPenalty: row.features?.disagreementPenalty ?? row.disagreementPenalty ?? null,
-      avgHomeSpread: row.features?.avgHomeSpread ?? row.avgHomeSpread ?? null,
-      avgTotal: row.features?.avgTotal ?? row.avgTotal ?? null,
-      bookCount: row.features?.bookCount ?? row.bookCount ?? null
-    },
-    result: {
-      finalWinner: row.result?.finalWinner ?? null,
-      modelWon: row.result?.modelWon ?? null,
-      finalHomeScore: row.result?.finalHomeScore ?? null,
-      finalAwayScore: row.result?.finalAwayScore ?? null,
-      gradedAt: row.result?.gradedAt ?? null
-    }
+    ...row,
+    impliedProbability: roundToTwo(row.impliedProbability),
+    trueProbability: roundToTwo(row.trueProbability),
+    calibratedProbability: roundToTwo(row.calibratedProbability),
+    rawEdge: roundToTwo(row.rawEdge),
+    calibratedEdge: roundToTwo(row.calibratedEdge),
+    sportsbookDecimal: roundToTwo(row.sportsbookDecimal),
+    confidencePercent: roundToTwo(row.confidencePercent),
+    spreadAdj: roundToTwo(row.spreadAdj),
+    totalAdj: roundToTwo(row.totalAdj),
+    lineMovementAdj: roundToTwo(row.lineMovementAdj),
+    propAdj: roundToTwo(row.propAdj),
+    injuryAdjHome: roundToTwo(row.injuryAdjHome),
+    disagreementPenalty: roundToTwo(row.disagreementPenalty),
+    avgHomeSpread: roundToTwo(row.avgHomeSpread),
+    avgTotal: roundToTwo(row.avgTotal),
+    totalConsensus: roundToTwo(row.totalConsensus),
+    scoreAdj: roundToTwo(row.scoreAdj),
+    comebackAdj: roundToTwo(row.comebackAdj),
+    momentumAdj: roundToTwo(row.momentumAdj),
+    pacePressureAdj: roundToTwo(row.pacePressureAdj),
+    garbageTimePenalty: roundToTwo(row.garbageTimePenalty),
+    timeLeverage: roundToTwo(row.timeLeverage)
   };
 }
 
 function recordSnapshot(row) {
-  const snapshots = getSnapshots();
-  snapshots.push(normalizeRow(row));
-  saveSnapshots(snapshots.slice(-50000));
-}
+  const normalized = normalizeSnapshot(row);
+  snapshots.push(cloneSnapshotRow(normalized));
 
-function upsertBackfillRow(row) {
-  const snapshots = getSnapshots();
-  const normalized = normalizeRow({ ...row, source: "backfill" });
-
-  const idx = snapshots.findIndex(
-    x => String(x.gameId) === String(normalized.gameId) && x.source === "backfill"
-  );
-
-  if (idx >= 0) snapshots[idx] = normalized;
-  else snapshots.push(normalized);
-
-  saveSnapshots(snapshots.slice(-50000));
-}
-
-function updateGameResult({ gameId, finalWinner, finalHomeScore = null, finalAwayScore = null }) {
-  const snapshots = getSnapshots();
-  let changed = 0;
-
-  for (const row of snapshots) {
-    if (String(row.gameId) !== String(gameId)) continue;
-
-    row.result.finalWinner = finalWinner;
-    row.result.modelWon = row.pickSide === finalWinner;
-    row.result.finalHomeScore = finalHomeScore;
-    row.result.finalAwayScore = finalAwayScore;
-    row.result.gradedAt = new Date().toISOString();
-    changed += 1;
+  if (snapshots.length > 100000) {
+    snapshots = snapshots.slice(-100000);
   }
 
-  saveSnapshots(snapshots);
-  return changed;
+  persistSnapshots();
+  return normalized;
 }
 
-function buildCalibrationTable() {
-  const snapshots = getSnapshots();
-  const grouped = {};
-
-  for (const row of snapshots) {
-    if (!row?.result || typeof row.result.modelWon !== "boolean") continue;
-    if (typeof row.trueProbability !== "number") continue;
-
-    const key = probabilityBucket(row.trueProbability);
-    if (!key) continue;
-
-    if (!grouped[key]) {
-      grouped[key] = {
-        games: 0,
-        wins: 0,
-        avgPredictedProbSum: 0
-      };
-    }
-
-    grouped[key].games += 1;
-    grouped[key].wins += row.result.modelWon ? 1 : 0;
-    grouped[key].avgPredictedProbSum += row.trueProbability;
-  }
-
-  const table = {};
-
-  for (const [key, stats] of Object.entries(grouped)) {
-    const avgPredictedProb = stats.avgPredictedProbSum / stats.games;
-    const actualWinRate = stats.wins / stats.games;
-
-    table[key] = {
-      games: stats.games,
-      wins: stats.wins,
-      avgPredictedProb: roundToTwo(avgPredictedProb),
-      actualWinRate: roundToTwo(actualWinRate),
-      correction: roundToTwo(actualWinRate - avgPredictedProb)
-    };
-  }
-
-  saveCalibrationTable(table);
-  return table;
-}
-
-function applyCalibration(probability, table = null) {
-  if (typeof probability !== "number") return probability;
-
-  const calibrationTable = table || getCalibrationTable();
-  const bucket = probabilityBucket(probability);
-  const stats = calibrationTable[bucket];
-
-  if (!stats || typeof stats.games !== "number" || stats.games < 20) {
-    return clamp(probability, 0.01, 0.99);
-  }
-
-  const correction = typeof stats.correction === "number" ? stats.correction : 0;
-  return clamp(probability + correction * 0.6, 0.01, 0.99);
+function getSnapshots() {
+  return snapshots;
 }
 
 function getLearningSummary() {
-  const snapshots = getSnapshots();
-  const graded = snapshots.filter(x => typeof x?.result?.modelWon === "boolean");
-  const wins = graded.filter(x => x.result.modelWon).length;
+  const graded = snapshots.filter(s => s?.result && typeof s.result.modelWon === "boolean");
+  const wins = graded.filter(s => s.result.modelWon).length;
+
+  const byMode = {};
+  const byVerdict = {};
+
+  for (const row of graded) {
+    const mode = row.mode || row.source || "unknown";
+    const verdict = row.verdict || "unknown";
+
+    if (!byMode[mode]) byMode[mode] = { bets: 0, wins: 0, winRate: null };
+    if (!byVerdict[verdict]) byVerdict[verdict] = { bets: 0, wins: 0, winRate: null };
+
+    byMode[mode].bets += 1;
+    byVerdict[verdict].bets += 1;
+
+    if (row.result.modelWon) {
+      byMode[mode].wins += 1;
+      byVerdict[verdict].wins += 1;
+    }
+  }
+
+  for (const key of Object.keys(byMode)) {
+    byMode[key].winRate = byMode[key].bets ? byMode[key].wins / byMode[key].bets : null;
+  }
+
+  for (const key of Object.keys(byVerdict)) {
+    byVerdict[key].winRate = byVerdict[key].bets ? byVerdict[key].wins / byVerdict[key].bets : null;
+  }
 
   return {
     totalSnapshots: snapshots.length,
-    gradedGames: graded.length,
+    gradedSnapshots: graded.length,
     wins,
-    losses: graded.length - wins,
-    hitRate: graded.length ? roundToTwo(wins / graded.length) : null,
-    calibrationBuckets: Object.keys(getCalibrationTable()).length
+    overallWinRate: graded.length ? wins / graded.length : null,
+    byMode,
+    byVerdict
   };
+}
+
+function buildCalibrationTable() {
+  const graded = snapshots.filter(
+    s => s?.result && typeof s.result.modelWon === "boolean" && Number.isFinite(s.calibratedProbability ?? s.trueProbability)
+  );
+
+  const buckets = {};
+
+  for (const row of graded) {
+    const prob = Number(row.calibratedProbability ?? row.trueProbability);
+    const bucket = probabilityBucket(prob);
+
+    if (!buckets[bucket]) {
+      buckets[bucket] = {
+        predictions: 0,
+        wins: 0,
+        predictedAverage: 0,
+        actualRate: 0,
+        bias: 0
+      };
+    }
+
+    buckets[bucket].predictions += 1;
+    buckets[bucket].predictedAverage += prob;
+    if (row.result.modelWon) buckets[bucket].wins += 1;
+  }
+
+  for (const bucket of Object.keys(buckets)) {
+    const row = buckets[bucket];
+    row.predictedAverage = row.predictions
+      ? row.predictedAverage / row.predictions
+      : 0;
+    row.actualRate = row.predictions
+      ? row.wins / row.predictions
+      : 0;
+    row.bias = row.actualRate - row.predictedAverage;
+  }
+
+  calibrationTable = buckets;
+  persistCalibration();
+
+  return calibrationTable;
+}
+
+function getCalibrationTable() {
+  return calibrationTable;
+}
+
+function applyCalibration(prob) {
+  const p = Number(prob);
+  if (!Number.isFinite(p)) return prob;
+
+  const bucket = probabilityBucket(p);
+  const row = calibrationTable[bucket];
+
+  if (!row || !Number.isFinite(row.bias)) {
+    return clamp(p, 0.01, 0.99);
+  }
+
+  return clamp(p + row.bias, 0.01, 0.99);
+}
+
+function updateGameResult({ gameId, finalWinner, finalHomeScore, finalAwayScore }) {
+  let updated = 0;
+
+  snapshots = snapshots.map(row => {
+    if (String(row.gameId) !== String(gameId)) return row;
+    if (!["home", "away"].includes(finalWinner)) return row;
+
+    updated += 1;
+
+    return {
+      ...row,
+      result: {
+        finalWinner,
+        modelWon: row.pickSide === finalWinner,
+        finalHomeScore,
+        finalAwayScore,
+        gradedAt: new Date().toISOString()
+      }
+    };
+  });
+
+  persistSnapshots();
+  buildCalibrationTable();
+
+  return updated;
 }
 
 module.exports = {
   recordSnapshot,
-  upsertBackfillRow,
-  updateGameResult,
-  buildCalibrationTable,
-  applyCalibration,
   getSnapshots,
-  saveSnapshots,
+  getLearningSummary,
   getCalibrationTable,
-  getLearningSummary
+  buildCalibrationTable,
+  updateGameResult,
+  applyCalibration
 };
