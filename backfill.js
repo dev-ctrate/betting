@@ -8,15 +8,14 @@ const REGIONS = "us";
 const ODDS_FORMAT = "decimal";
 const FEATURED_MARKETS = "h2h,spreads,totals";
 
-// Multiple pregame timestamps to learn faster.
 const SNAPSHOT_OFFSETS_MINUTES = [
-  24 * 60, // 24h
-  12 * 60, // 12h
-  6 * 60,  // 6h
-  2 * 60,  // 2h
-  60,      // 1h
-  30,      // 30m
-  10       // 10m
+  24 * 60,
+  12 * 60,
+  6 * 60,
+  2 * 60,
+  60,
+  30,
+  10
 ];
 
 if (!ODDS_API_KEY) {
@@ -37,14 +36,16 @@ function roundToTwo(num) {
 }
 
 function average(values) {
-  if (!values.length) return null;
-  return values.reduce((sum, v) => sum + v, 0) / values.length;
+  const nums = (values || []).filter(v => typeof v === "number" && Number.isFinite(v));
+  if (!nums.length) return null;
+  return nums.reduce((sum, v) => sum + v, 0) / nums.length;
 }
 
 function variance(values) {
-  if (!values.length) return 0;
-  const avg = average(values);
-  return average(values.map(v => (v - avg) ** 2));
+  const nums = (values || []).filter(v => typeof v === "number" && Number.isFinite(v));
+  if (!nums.length) return 0;
+  const avg = average(nums);
+  return average(nums.map(v => (v - avg) ** 2)) || 0;
 }
 
 function weightedAverage(pairs) {
@@ -59,6 +60,13 @@ function weightedAverage(pairs) {
 }
 
 function noVigTwoWayProb(priceA, priceB) {
+  if (
+    typeof priceA !== "number" || !Number.isFinite(priceA) || priceA <= 1 ||
+    typeof priceB !== "number" || !Number.isFinite(priceB) || priceB <= 1
+  ) {
+    return { a: 0.5, b: 0.5 };
+  }
+
   const rawA = 1 / priceA;
   const rawB = 1 / priceB;
   const total = rawA + rawB;
@@ -137,14 +145,8 @@ function namesMatch(a, b) {
   return normalizeName(a) === normalizeName(b);
 }
 
-function decimalToAmerican(decimalOdds) {
-  if (typeof decimalOdds !== "number" || decimalOdds <= 1) return null;
-  if (decimalOdds >= 2) return Math.round((decimalOdds - 1) * 100);
-  return Math.round(-100 / (decimalOdds - 1));
-}
-
 function findMarket(bookmaker, marketKey) {
-  return bookmaker.markets?.find(m => m.key === marketKey) || null;
+  return bookmaker?.markets?.find(m => m.key === marketKey) || null;
 }
 
 function extractFeaturedConsensus(eventOdds) {
@@ -156,7 +158,7 @@ function extractFeaturedConsensus(eventOdds) {
   const totalSignals = [];
   const books = [];
 
-  for (const bookmaker of eventOdds.bookmakers || []) {
+  for (const bookmaker of eventOdds?.bookmakers || []) {
     const weight = getBookWeight(bookmaker.key || "");
     const h2h = findMarket(bookmaker, "h2h");
     const spreads = findMarket(bookmaker, "spreads");
@@ -215,11 +217,7 @@ function extractFeaturedConsensus(eventOdds) {
       awayPrice: bookAwayPrice,
       homeSpread: bookHomeSpread,
       awaySpread: bookAwaySpread,
-      total: bookTotal,
-      homeDecimal: bookHomePrice,
-      homeAmerican: decimalToAmerican(bookHomePrice),
-      awayDecimal: bookAwayPrice,
-      awayAmerican: decimalToAmerican(bookAwayPrice)
+      total: bookTotal
     });
   }
 
@@ -254,14 +252,9 @@ function extractFeaturedConsensus(eventOdds) {
     disagreementPenalty,
     bestHomePrice: homePrices.length ? Math.max(...homePrices) : null,
     bestAwayPrice: awayPrices.length ? Math.max(...awayPrices) : null,
-    avgHomePrice: average(homePrices),
-    avgAwayPrice: average(awayPrices),
     avgHomeSpread: average(homeSpreads),
     avgTotal: average(totals),
-    bookCount: books.filter(
-      b => typeof b.homePrice === "number" && typeof b.awayPrice === "number"
-    ).length,
-    books
+    bookCount: books.filter(b => typeof b.homePrice === "number" && typeof b.awayPrice === "number").length
   };
 }
 
@@ -421,6 +414,23 @@ function buildMovementMap(consensusByOffset) {
   return result;
 }
 
+function buildBackfillVerdict(rawEdge) {
+  if (rawEdge >= 0.045) return "Bet now";
+  if (rawEdge >= 0.02) return "Watch";
+  return "Avoid";
+}
+
+function buildBackfillConfidence(rawEdge) {
+  const pct = clamp(0.55 + rawEdge * 3.5, 0.5, 0.9);
+  let label = "Low";
+  if (pct >= 0.75) label = "High";
+  else if (pct >= 0.62) label = "Medium";
+  return {
+    percent: roundToTwo(pct),
+    label
+  };
+}
+
 async function backfillDate(ymd) {
   console.log(`Backfilling ${ymd}...`);
 
@@ -472,6 +482,9 @@ async function backfillDate(ymd) {
       const offsetMin = Number(offsetKey);
       const movement = movementMap[offsetMin] || {};
       const model = buildHistoricalModel(entry.consensus, movement);
+      const confidence = buildBackfillConfidence(model.rawEdge);
+      const calibratedTrueProbability = learning.applyCalibration(model.trueProbability);
+      const calibratedEdge = calibratedTrueProbability - model.impliedProbability;
 
       const pickTeam =
         model.pickSide === "home"
@@ -490,17 +503,20 @@ async function backfillDate(ymd) {
         commenceTime: game.datetime,
         homeTeam: game.home_team?.full_name || entry.oddsEvent.home_team,
         awayTeam: game.visitor_team?.full_name || entry.oddsEvent.away_team,
+        mode: "pregame",
         pickSide: model.pickSide,
         pickTeam,
         impliedProbability: roundToTwo(model.impliedProbability),
         trueProbability: roundToTwo(model.trueProbability),
-        calibratedProbability: null,
+        calibratedProbability: roundToTwo(calibratedTrueProbability),
+        calibratedTrueProbability: roundToTwo(calibratedTrueProbability),
         rawEdge: roundToTwo(model.rawEdge),
-        calibratedEdge: null,
+        edge: roundToTwo(calibratedEdge),
+        calibratedEdge: roundToTwo(calibratedEdge),
         sportsbookDecimal: chosenDecimal,
-        verdict: "",
-        confidenceLabel: "",
-        confidencePercent: null,
+        verdict: buildBackfillVerdict(calibratedEdge),
+        confidenceLabel: confidence.label,
+        confidencePercent: confidence.percent,
         spreadAdj: roundToTwo(entry.consensus.spreadAdj),
         totalAdj: roundToTwo(entry.consensus.totalAdj),
         lineMovementAdj: roundToTwo(model.lineMovementAdj),
@@ -509,7 +525,7 @@ async function backfillDate(ymd) {
         disagreementPenalty: roundToTwo(entry.consensus.disagreementPenalty),
         avgHomeSpread: roundToTwo(entry.consensus.avgHomeSpread),
         avgTotal: roundToTwo(entry.consensus.avgTotal),
-        bookCount: entry.consensus.bookCount,
+        totalConsensus: roundToTwo(entry.consensus.totalConsensus),
         source: "backfill",
         result: {
           finalWinner,
