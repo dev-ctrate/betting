@@ -11,13 +11,11 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 
 const ODDS_API_KEY = process.env.ODDS_API_KEY || "";
-const FANTASYNERDS_API_KEY = process.env.FANTASYNERDS_API_KEY || "";
 const BALLDONTLIE_API_KEY = process.env.BALLDONTLIE_API_KEY || "";
 
 const SPORT_KEY = "basketball_nba";
 const REGIONS = "us";
 const ODDS_FORMAT = "decimal";
-
 const FEATURED_MARKETS = "h2h,spreads,totals";
 const PLAYER_PROP_MARKETS = [
   "player_points",
@@ -33,14 +31,11 @@ const HISTORICAL_LOOKBACKS = [
 
 const currentCache = new Map();
 const historicalCache = new Map();
-const sideInfoCache = new Map();
-
 const edgeHistoryStore = {};
 const snapshotLogStore = {};
 
 const CURRENT_TTL_MS = 25 * 1000;
 const HISTORICAL_TTL_MS = 30 * 60 * 1000;
-const SIDEINFO_TTL_MS = 10 * 60 * 1000;
 const SNAPSHOT_RETENTION = 500;
 
 app.use(express.json());
@@ -105,9 +100,46 @@ function noVigTwoWayProb(priceA, priceB) {
   };
 }
 
-function decimalToImpliedPercent(decimalOdds) {
+function decimalToAmerican(decimalOdds) {
   if (typeof decimalOdds !== "number" || !Number.isFinite(decimalOdds) || decimalOdds <= 1) return null;
-  return 1 / decimalOdds;
+  if (decimalOdds >= 2) return Math.round((decimalOdds - 1) * 100);
+  return Math.round(-100 / (decimalOdds - 1));
+}
+
+function probabilityToDecimal(probability) {
+  if (typeof probability !== "number" || !Number.isFinite(probability) || probability <= 0 || probability >= 1) {
+    return null;
+  }
+  return 1 / probability;
+}
+
+function probabilityToAmerican(probability) {
+  const decimal = probabilityToDecimal(probability);
+  return decimalToAmerican(decimal);
+}
+
+function buildOddsFormatsFromDecimal(decimalOdds) {
+  if (typeof decimalOdds !== "number" || !Number.isFinite(decimalOdds) || decimalOdds <= 1) {
+    return {
+      decimal: null,
+      american: null,
+      impliedPercent: null
+    };
+  }
+
+  const implied = 1 / decimalOdds;
+  return {
+    decimal: roundToTwo(decimalOdds),
+    american: decimalToAmerican(decimalOdds),
+    impliedPercent: roundToTwo(implied)
+  };
+}
+
+function buildProbabilityFormats(probability) {
+  return {
+    percent: roundToTwo(probability),
+    american: probabilityToAmerican(probability)
+  };
 }
 
 function getBookWeight(bookKey) {
@@ -183,12 +215,23 @@ function requireOddsKey() {
   return !!ODDS_API_KEY;
 }
 
-function requireFantasyNerdsKey() {
-  return !!FANTASYNERDS_API_KEY;
-}
-
 function requireBallDontLieKey() {
   return !!BALLDONTLIE_API_KEY;
+}
+
+function normalizeTeamName(name) {
+  return String(name || "")
+    .toLowerCase()
+    .replace(/[^a-z0-9 ]/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function teamsMatch(event, homeTeam, awayTeam) {
+  return (
+    normalizeTeamName(event?.home_team) === normalizeTeamName(homeTeam) &&
+    normalizeTeamName(event?.away_team) === normalizeTeamName(awayTeam)
+  );
 }
 
 function trimEdgeHistory(gameId) {
@@ -235,55 +278,6 @@ function buildMode(commenceTime) {
   return Date.now() >= startMs ? "live" : "pregame";
 }
 
-function decimalToAmerican(decimalOdds) {
-  if (typeof decimalOdds !== "number" || !Number.isFinite(decimalOdds) || decimalOdds <= 1) return null;
-  if (decimalOdds >= 2) return Math.round((decimalOdds - 1) * 100);
-  return Math.round(-100 / (decimalOdds - 1));
-}
-
-function probabilityToDecimal(probability) {
-  if (typeof probability !== "number" || !Number.isFinite(probability) || probability <= 0 || probability >= 1) {
-    return null;
-  }
-  return 1 / probability;
-}
-
-function probabilityToAmerican(probability) {
-  const decimal = probabilityToDecimal(probability);
-  return decimalToAmerican(decimal);
-}
-
-function buildOddsFormatsFromDecimal(decimalOdds) {
-  if (typeof decimalOdds !== "number" || !Number.isFinite(decimalOdds) || decimalOdds <= 1) {
-    return {
-      decimal: null,
-      american: null,
-      impliedPercent: null
-    };
-  }
-
-  const implied = 1 / decimalOdds;
-  return {
-    decimal: roundToTwo(decimalOdds),
-    american: decimalToAmerican(decimalOdds),
-    impliedPercent: roundToTwo(implied)
-  };
-}
-
-function buildProbabilityFormats(probability) {
-  return {
-    percent: roundToTwo(probability),
-    american: probabilityToAmerican(probability)
-  };
-}
-
-function formatClockFromSeconds(clockSec) {
-  if (typeof clockSec !== "number" || !Number.isFinite(clockSec)) return "-";
-  const mins = Math.floor(clockSec / 60);
-  const secs = Math.floor(clockSec % 60);
-  return `${mins}:${String(secs).padStart(2, "0")}`;
-}
-
 function safeLearningSummary() {
   return typeof learning.getLearningSummary === "function"
     ? learning.getLearningSummary()
@@ -327,18 +321,97 @@ function safeApplyCalibration(prob) {
     : prob;
 }
 
-async function getUpcomingEvents() {
-  const cacheKey = "events";
-  const hit = cacheGet(currentCache, cacheKey);
-  if (hit) return hit;
+function safeStakeSuggestion(rawStake) {
+  const text = String(rawStake || "No bet");
+  const fractionMap = {
+    "No bet": 0,
+    "0.5u": 0.5,
+    "1u": 1,
+    "1.5u": 1.5
+  };
 
-  const url = buildOddsUrl(`/v4/sports/${SPORT_KEY}/events`, {
-    apiKey: ODDS_API_KEY
-  });
+  return {
+    tier: text,
+    fraction: Object.prototype.hasOwnProperty.call(fractionMap, text) ? fractionMap[text] : 0
+  };
+}
 
-  const data = await fetchJson(url);
-  cacheSet(currentCache, cacheKey, data, CURRENT_TTL_MS);
-  return data;
+function findMarket(bookmaker, marketKey) {
+  return bookmaker?.markets?.find(m => m.key === marketKey) || null;
+}
+
+function extractFeaturedConsensus(eventOdds) {
+  const homeProbPairs = [];
+  const awayProbPairs = [];
+  const homeProbRaw = [];
+  const awayProbRaw = [];
+  const spreadSignals = [];
+  const totalSignals = [];
+
+  for (const bookmaker of eventOdds?.bookmakers || []) {
+    const weight = getBookWeight(bookmaker.key || "");
+    const h2h = findMarket(bookmaker, "h2h");
+    const spreads = findMarket(bookmaker, "spreads");
+    const totals = findMarket(bookmaker, "totals");
+
+    if (h2h?.outcomes?.length >= 2) {
+      const homeOutcome = h2h.outcomes.find(o => o.name === eventOdds.home_team);
+      const awayOutcome = h2h.outcomes.find(o => o.name === eventOdds.away_team);
+
+      if (homeOutcome && awayOutcome) {
+        const nv = noVigTwoWayProb(homeOutcome.price, awayOutcome.price);
+        homeProbPairs.push({ value: nv.a, weight });
+        awayProbPairs.push({ value: nv.b, weight });
+        homeProbRaw.push(nv.a);
+        awayProbRaw.push(nv.b);
+      }
+    }
+
+    if (spreads?.outcomes?.length >= 2) {
+      const homeSpreadOutcome = spreads.outcomes.find(o => o.name === eventOdds.home_team);
+      if (homeSpreadOutcome && typeof homeSpreadOutcome.point === "number") {
+        spreadSignals.push({
+          value: clamp((-homeSpreadOutcome.point) * 0.0105, -0.10, 0.10),
+          weight
+        });
+      }
+    }
+
+    if (totals?.outcomes?.length >= 2) {
+      const over = totals.outcomes.find(o => o.name === "Over");
+      if (over && typeof over.point === "number") {
+        totalSignals.push({ value: over.point, weight });
+      }
+    }
+  }
+
+  if (!homeProbPairs.length || !awayProbPairs.length) return null;
+
+  const homeMarketProb = weightedAverage(homeProbPairs);
+  const awayMarketProb = weightedAverage(awayProbPairs);
+  const spreadAdj = spreadSignals.length ? weightedAverage(spreadSignals) : 0;
+  const totalConsensus = totalSignals.length ? weightedAverage(totalSignals) : 0;
+
+  let totalAdj = 0;
+  if (typeof totalConsensus === "number" && Number.isFinite(totalConsensus)) {
+    if (totalConsensus < 216) totalAdj = 0.006;
+    else if (totalConsensus > 238) totalAdj = -0.006;
+  }
+
+  const disagreementPenalty = clamp(
+    (variance(homeProbRaw) + variance(awayProbRaw)) * 12,
+    0,
+    0.05
+  );
+
+  return {
+    homeMarketProb,
+    awayMarketProb,
+    spreadAdj,
+    totalConsensus,
+    totalAdj,
+    disagreementPenalty
+  };
 }
 
 async function getCurrentFeaturedBoard() {
@@ -356,21 +429,6 @@ async function getCurrentFeaturedBoard() {
   const data = await fetchJson(url);
   cacheSet(currentCache, cacheKey, data, CURRENT_TTL_MS);
   return data;
-}
-
-function normalizeTeamName(name) {
-  return String(name || "")
-    .toLowerCase()
-    .replace(/[^a-z0-9 ]/g, "")
-    .replace(/\s+/g, " ")
-    .trim();
-}
-
-function teamsMatch(event, homeTeam, awayTeam) {
-  return (
-    normalizeTeamName(event?.home_team) === normalizeTeamName(homeTeam) &&
-    normalizeTeamName(event?.away_team) === normalizeTeamName(awayTeam)
-  );
 }
 
 async function resolveFeaturedOdds({ gameId, homeTeam, awayTeam }) {
@@ -449,140 +507,6 @@ async function getEventPlayerPropsByResolvedEvent(eventId) {
   }
 }
 
-function findMarket(bookmaker, marketKey) {
-  return bookmaker?.markets?.find(m => m.key === marketKey) || null;
-}
-
-function extractFeaturedConsensus(eventOdds) {
-  const homeProbPairs = [];
-  const awayProbPairs = [];
-  const homeProbRaw = [];
-  const awayProbRaw = [];
-  const spreadSignals = [];
-  const totalSignals = [];
-
-  for (const bookmaker of eventOdds?.bookmakers || []) {
-    const weight = getBookWeight(bookmaker.key || "");
-    const h2h = findMarket(bookmaker, "h2h");
-    const spreads = findMarket(bookmaker, "spreads");
-    const totals = findMarket(bookmaker, "totals");
-
-    if (h2h?.outcomes?.length >= 2) {
-      const homeOutcome = h2h.outcomes.find(o => o.name === eventOdds.home_team);
-      const awayOutcome = h2h.outcomes.find(o => o.name === eventOdds.away_team);
-
-      if (homeOutcome && awayOutcome) {
-        const nv = noVigTwoWayProb(homeOutcome.price, awayOutcome.price);
-        homeProbPairs.push({ value: nv.a, weight });
-        awayProbPairs.push({ value: nv.b, weight });
-        homeProbRaw.push(nv.a);
-        awayProbRaw.push(nv.b);
-      }
-    }
-
-    if (spreads?.outcomes?.length >= 2) {
-      const homeSpreadOutcome = spreads.outcomes.find(o => o.name === eventOdds.home_team);
-      if (homeSpreadOutcome && typeof homeSpreadOutcome.point === "number") {
-        spreadSignals.push({
-          value: clamp((-homeSpreadOutcome.point) * 0.0105, -0.10, 0.10),
-          weight
-        });
-      }
-    }
-
-    if (totals?.outcomes?.length >= 2) {
-      const over = totals.outcomes.find(o => o.name === "Over");
-      if (over && typeof over.point === "number") {
-        totalSignals.push({ value: over.point, weight });
-      }
-    }
-  }
-
-  if (!homeProbPairs.length || !awayProbPairs.length) return null;
-
-  const homeMarketProb = weightedAverage(homeProbPairs);
-  const awayMarketProb = weightedAverage(awayProbPairs);
-
-  const spreadAdj = spreadSignals.length ? weightedAverage(spreadSignals) : 0;
-  const totalConsensus = totalSignals.length ? weightedAverage(totalSignals) : 0;
-
-  let totalAdj = 0;
-  if (typeof totalConsensus === "number" && Number.isFinite(totalConsensus)) {
-    if (totalConsensus < 216) totalAdj = 0.006;
-    else if (totalConsensus > 238) totalAdj = -0.006;
-  }
-
-  const disagreementPenalty = clamp(
-    (variance(homeProbRaw) + variance(awayProbRaw)) * 12,
-    0,
-    0.05
-  );
-
-  return {
-    homeMarketProb,
-    awayMarketProb,
-    spreadAdj,
-    totalConsensus,
-    totalAdj,
-    disagreementPenalty
-  };
-}
-
-async function getHistoricalSnapshot(dateIso) {
-  const cacheKey = `hist:${dateIso}`;
-  const hit = cacheGet(historicalCache, cacheKey);
-  if (hit) return hit;
-
-  const url = buildOddsUrl(`/v4/historical/sports/${SPORT_KEY}/odds`, {
-    apiKey: ODDS_API_KEY,
-    regions: REGIONS,
-    markets: FEATURED_MARKETS,
-    oddsFormat: ODDS_FORMAT,
-    date: dateIso
-  });
-
-  const data = await fetchJson(url);
-  cacheSet(historicalCache, cacheKey, data, HISTORICAL_TTL_MS);
-  return data;
-}
-
-async function buildHistoricalComparisons(homeTeam, awayTeam) {
-  const out = {};
-
-  for (const lookback of HISTORICAL_LOOKBACKS) {
-    const dateIso = toIso(Date.now() - lookback.ms);
-
-    try {
-      const snap = await getHistoricalSnapshot(dateIso);
-      const found = (snap?.data || snap || []).find(event => teamsMatch(event, homeTeam, awayTeam));
-
-      if (!found) {
-        out[lookback.label] = null;
-        continue;
-      }
-
-      const consensus = extractFeaturedConsensus(found);
-      if (!consensus) {
-        out[lookback.label] = null;
-        continue;
-      }
-
-      out[lookback.label] = {
-        homeMarketProb: roundToTwo(consensus.homeMarketProb),
-        awayMarketProb: roundToTwo(consensus.awayMarketProb),
-        spreadAdj: roundToTwo(consensus.spreadAdj),
-        totalAdj: roundToTwo(consensus.totalAdj),
-        totalConsensus: roundToTwo(consensus.totalConsensus),
-        disagreementPenalty: roundToTwo(consensus.disagreementPenalty)
-      };
-    } catch (err) {
-      out[lookback.label] = null;
-    }
-  }
-
-  return out;
-}
-
 function buildStructuredPropSections(propsPayload) {
   const buckets = {
     points: [],
@@ -643,159 +567,89 @@ function buildPropSignal(propSections) {
   };
 }
 
-async function getBestInjuries() {
-  if (!requireFantasyNerdsKey()) {
-    return { available: false, rows: [], source: "none" };
-  }
-
-  const cacheKey = "injuries";
-  const hit = cacheGet(sideInfoCache, cacheKey);
-  if (hit) return hit;
-
-  const candidates = [
-    `https://www.fantasynerds.com/api/injuries/json/${FANTASYNERDS_API_KEY}/NBA`,
-    `https://api.fantasynerds.com/v1/nba/injuries?apikey=${encodeURIComponent(FANTASYNERDS_API_KEY)}`
-  ];
-
-  for (const url of candidates) {
-    try {
-      const data = await fetchJson(url);
-      const rows = Array.isArray(data?.Injuries) ? data.Injuries :
-        Array.isArray(data?.injuries) ? data.injuries :
-        Array.isArray(data?.data) ? data.data : [];
-
-      const payload = {
-        available: rows.length > 0,
-        rows,
-        source: url.includes("fantasynerds.com/api") ? "fantasynerds-legacy" : "fantasynerds-v1"
-      };
-
-      cacheSet(sideInfoCache, cacheKey, payload, SIDEINFO_TTL_MS);
-      return payload;
-    } catch {}
-  }
-
-  return { available: false, rows: [], source: "none" };
-}
-
-async function getBestLineups(dateYmd) {
-  if (!requireFantasyNerdsKey()) {
-    return { available: false, rows: [], source: "none" };
-  }
-
-  const cacheKey = `lineups:${dateYmd}`;
-  const hit = cacheGet(sideInfoCache, cacheKey);
-  if (hit) return hit;
-
-  const candidates = [
-    `https://www.fantasynerds.com/api/lineups/json/${FANTASYNERDS_API_KEY}/NBA`,
-    `https://api.fantasynerds.com/v1/nba/lineups?apikey=${encodeURIComponent(FANTASYNERDS_API_KEY)}&date=${encodeURIComponent(dateYmd)}`
-  ];
-
-  for (const url of candidates) {
-    try {
-      const data = await fetchJson(url);
-      const rows = Array.isArray(data?.Lineups) ? data.Lineups :
-        Array.isArray(data?.lineups) ? data.lineups :
-        Array.isArray(data?.data) ? data.data : [];
-
-      const payload = {
-        available: rows.length > 0,
-        rows,
-        source: url.includes("fantasynerds.com/api") ? "fantasynerds-legacy" : "fantasynerds-v1"
-      };
-
-      cacheSet(sideInfoCache, cacheKey, payload, SIDEINFO_TTL_MS);
-      return payload;
-    } catch {}
-  }
-
-  return { available: false, rows: [], source: "none" };
-}
-
-async function getBestDepthCharts() {
-  if (!requireFantasyNerdsKey()) {
-    return { available: false, rows: [], source: "none" };
-  }
-
-  const cacheKey = "depth";
-  const hit = cacheGet(sideInfoCache, cacheKey);
-  if (hit) return hit;
-
-  const candidates = [
-    `https://www.fantasynerds.com/api/depthcharts/json/${FANTASYNERDS_API_KEY}/NBA`,
-    `https://api.fantasynerds.com/v1/nba/depthcharts?apikey=${encodeURIComponent(FANTASYNERDS_API_KEY)}`
-  ];
-
-  for (const url of candidates) {
-    try {
-      const data = await fetchJson(url);
-      const rows = Array.isArray(data?.DepthCharts) ? data.DepthCharts :
-        Array.isArray(data?.depthcharts) ? data.depthcharts :
-        Array.isArray(data?.data) ? data.data : [];
-
-      const payload = {
-        available: rows.length > 0,
-        rows,
-        source: url.includes("fantasynerds.com/api") ? "fantasynerds-legacy" : "fantasynerds-v1"
-      };
-
-      cacheSet(sideInfoCache, cacheKey, payload, SIDEINFO_TTL_MS);
-      return payload;
-    } catch {}
-  }
-
-  return { available: false, rows: [], source: "none" };
-}
-
-function textIncludesTeam(row, teamName) {
-  const hay = JSON.stringify(row || {}).toLowerCase();
-  const target = String(teamName || "").toLowerCase();
-  if (hay.includes(target)) return true;
-  const words = target.split(" ").filter(Boolean);
-  const lastWord = words[words.length - 1] || "";
-  return !!lastWord && hay.includes(lastWord);
-}
-
-function summarizeInjuryLineup(homeTeam, awayTeam, injuryRows, lineupRows, depthRows, propSections) {
-  const homeInjuries = (injuryRows || []).filter(r => textIncludesTeam(r, homeTeam));
-  const awayInjuries = (injuryRows || []).filter(r => textIncludesTeam(r, awayTeam));
-  const lineups = (lineupRows || []).filter(r => textIncludesTeam(r, homeTeam) || textIncludesTeam(r, awayTeam));
-
-  const homePenalty = clamp(homeInjuries.length * 0.006, 0, 0.05);
-  const awayPenalty = clamp(awayInjuries.length * 0.006, 0, 0.05);
-
-  const homeStartersOut = homeInjuries.length;
-  const awayStartersOut = awayInjuries.length;
-
-  const homeStarterCertainty = lineups.length ? 0.75 : 0;
-  const awayStarterCertainty = lineups.length ? 0.75 : 0;
-
-  const homeLineupBoost = 0;
-  const awayLineupBoost = 0;
-
+function buildNeutralInjuryStatus() {
   return {
-    available: (injuryRows || []).length > 0 || (lineupRows || []).length > 0 || (depthRows || []).length > 0,
-    homeInjuriesCount: homeInjuries.length,
-    awayInjuriesCount: awayInjuries.length,
-    lineupRowsCount: lineups.length,
-    homePenalty,
-    awayPenalty,
-    homeStartersOut,
-    awayStartersOut,
-    homeStarterCertainty,
-    awayStarterCertainty,
-    homeLineupBoost,
-    awayLineupBoost,
-    homeInjuries: homeInjuries.slice(0, 8),
-    awayInjuries: awayInjuries.slice(0, 8),
-    lineups: lineups.slice(0, 10),
-    propSignalDepth:
-      (propSections?.points?.length || 0) +
-      (propSections?.rebounds?.length || 0) +
-      (propSections?.assists?.length || 0) +
-      (propSections?.pra?.length || 0)
+    available: false,
+    homeInjuriesCount: 0,
+    awayInjuriesCount: 0,
+    lineupRowsCount: 0,
+    homePenalty: 0,
+    awayPenalty: 0,
+    homeStartersOut: 0,
+    awayStartersOut: 0,
+    homeStarterCertainty: 0,
+    awayStarterCertainty: 0,
+    sourceSelection: {
+      injuries: "not_enabled",
+      lineups: "not_enabled",
+      depth: "not_enabled"
+    },
+    homeInjuries: [],
+    awayInjuries: [],
+    lineups: []
   };
+}
+
+async function getHistoricalSnapshot(dateIso) {
+  const cacheKey = `hist:${dateIso}`;
+  const hit = cacheGet(historicalCache, cacheKey);
+  if (hit) return hit;
+
+  const url = buildOddsUrl(`/v4/historical/sports/${SPORT_KEY}/odds`, {
+    apiKey: ODDS_API_KEY,
+    regions: REGIONS,
+    markets: FEATURED_MARKETS,
+    oddsFormat: ODDS_FORMAT,
+    date: dateIso
+  });
+
+  const data = await fetchJson(url);
+  cacheSet(historicalCache, cacheKey, data, HISTORICAL_TTL_MS);
+  return data;
+}
+
+async function buildHistoricalComparisons(homeTeam, awayTeam) {
+  const out = {};
+
+  for (const lookback of HISTORICAL_LOOKBACKS) {
+    const dateIso = toIso(Date.now() - lookback.ms);
+
+    try {
+      const snap = await getHistoricalSnapshot(dateIso);
+      const found = (snap?.data || snap || []).find(event => teamsMatch(event, homeTeam, awayTeam));
+
+      if (!found) {
+        out[lookback.label] = null;
+        continue;
+      }
+
+      const consensus = extractFeaturedConsensus(found);
+      if (!consensus) {
+        out[lookback.label] = null;
+        continue;
+      }
+
+      out[lookback.label] = {
+        homeMarketProb: roundToTwo(consensus.homeMarketProb),
+        awayMarketProb: roundToTwo(consensus.awayMarketProb),
+        spreadAdj: roundToTwo(consensus.spreadAdj),
+        totalAdj: roundToTwo(consensus.totalAdj),
+        totalConsensus: roundToTwo(consensus.totalConsensus),
+        disagreementPenalty: roundToTwo(consensus.disagreementPenalty)
+      };
+    } catch {
+      out[lookback.label] = null;
+    }
+  }
+
+  return out;
+}
+
+function formatClockFromSeconds(clockSec) {
+  if (typeof clockSec !== "number" || !Number.isFinite(clockSec)) return "-";
+  const mins = Math.floor(clockSec / 60);
+  const secs = Math.floor(clockSec % 60);
+  return `${mins}:${String(secs).padStart(2, "0")}`;
 }
 
 app.get("/", (req, res) => {
@@ -806,7 +660,6 @@ app.get("/health", (req, res) => {
   res.json({
     status: "ok",
     oddsApiKeyAdded: requireOddsKey(),
-    fantasyNerdsKeyAdded: requireFantasyNerdsKey(),
     ballDontLieKeyAdded: requireBallDontLieKey(),
     mode: requireOddsKey() ? "live" : "mock",
     timestamp: new Date().toISOString()
@@ -864,63 +717,19 @@ app.get("/odds", async (req, res) => {
       });
     }
 
-    const featured = await resolveFeaturedOdds({
-      gameId,
-      homeTeam,
-      awayTeam
-    });
-
+    const featured = await resolveFeaturedOdds({ gameId, homeTeam, awayTeam });
     const currentConsensus = extractFeaturedConsensus(featured);
+
     if (!currentConsensus) {
-      return res.status(500).json({
-        error: "Could not extract featured odds consensus"
-      });
+      return res.status(500).json({ error: "Could not extract featured odds consensus" });
     }
 
     const mode = buildMode(featured.commence_time);
-
-    const historicalComparisons = await buildHistoricalComparisons(
-      featured.home_team,
-      featured.away_team
-    );
-
+    const historicalComparisons = await buildHistoricalComparisons(featured.home_team, featured.away_team);
     const props = await getEventPlayerPropsByResolvedEvent(featured.id);
     const propSections = buildStructuredPropSections(props);
     const propSignal = buildPropSignal(propSections);
-
-    const lineupDate = featured.commence_time
-      ? featured.commence_time.slice(0, 10)
-      : todayYmd();
-
-    const settledSideInfo = await Promise.allSettled([
-      getBestInjuries(),
-      getBestLineups(lineupDate),
-      getBestDepthCharts()
-    ]);
-
-    const injuriesInfo =
-      settledSideInfo[0].status === "fulfilled"
-        ? settledSideInfo[0].value
-        : { available: false, rows: [], source: "none" };
-
-    const lineupsInfo =
-      settledSideInfo[1].status === "fulfilled"
-        ? settledSideInfo[1].value
-        : { available: false, rows: [], source: "none" };
-
-    const depthInfo =
-      settledSideInfo[2].status === "fulfilled"
-        ? settledSideInfo[2].value
-        : { available: false, rows: [], source: "none" };
-
-    const injurySummary = summarizeInjuryLineup(
-      featured.home_team,
-      featured.away_team,
-      injuriesInfo.rows || [],
-      lineupsInfo.rows || [],
-      depthInfo.rows || [],
-      propSections
-    );
+    const injuryStatus = buildNeutralInjuryStatus();
 
     let finalModel;
     let liveScoreState = null;
@@ -972,7 +781,15 @@ app.get("/odds", async (req, res) => {
         featuredOdds: featured,
         historicalComparisons,
         propSignal,
-        injurySummary,
+        injurySummary: {
+          available: false,
+          lineups: [],
+          lineupsRowsCount: 0,
+          homePenalty: 0,
+          awayPenalty: 0,
+          homeLineupBoost: 0,
+          awayLineupBoost: 0
+        },
         calibrationFn: safeApplyCalibration
       });
     }
@@ -983,6 +800,7 @@ app.get("/odds", async (req, res) => {
     const smoothedEdge = addEdgeHistory(edgeKey, finalModel.calibratedEdge, timestamp);
 
     const snapshot = {
+      id: `${edgeKey}_${timestamp}`,
       gameId: edgeKey,
       timestamp,
       commenceTime: featured.commence_time,
@@ -1014,6 +832,11 @@ app.get("/odds", async (req, res) => {
       result: null
     });
 
+    const mergedModelDetails = {
+      ...finalModel.modelDetails,
+      historicalComparisons
+    };
+
     res.json({
       id: featured.id,
       homeTeam: featured.home_team,
@@ -1029,52 +852,31 @@ app.get("/odds", async (req, res) => {
       noBetFilter: finalModel.noBetFilter || { blocked: false, reasons: [] },
       impliedProbability: roundToTwo(finalModel.impliedProbability),
       impliedPercentFromOdds: roundToTwo(finalModel.impliedProbability),
-      trueProbability: roundToTwo(finalModel.trueProbability),
+      trueProbability: roundToTwo(finalModel.calibratedTrueProbability),
       calibratedTrueProbability: roundToTwo(finalModel.calibratedTrueProbability),
-      impliedProbabilityFormats: finalModel.impliedProbabilityFormats,
-      trueProbabilityFormats: finalModel.trueProbabilityFormats,
+      impliedProbabilityFormats: buildProbabilityFormats(finalModel.impliedProbability),
+      trueProbabilityFormats: buildProbabilityFormats(finalModel.calibratedTrueProbability),
       edge: roundToTwo(smoothedEdge),
       rawEdge: roundToTwo(finalModel.rawEdge),
       calibratedEdge: roundToTwo(finalModel.calibratedEdge),
-      oddsFormats: finalModel.oddsFormats,
+      oddsFormats: buildOddsFormatsFromDecimal(finalModel.sportsbookDecimal),
       sportsbookOddsDecimal: roundToTwo(finalModel.sportsbookDecimal),
-      stakeSuggestion: finalModel.stakeSuggestion,
+      stakeSuggestion: safeStakeSuggestion(finalModel.stakeSuggestion),
       learningSummary: safeLearningSummary(),
       history: (edgeHistoryStore[edgeKey] || []).map(point => ({
         timestamp: point.timestamp,
         edge: roundToTwo(point.edge)
       })),
-      modelDetails: finalModel.modelDetails,
+      modelDetails: mergedModelDetails,
       bookmakerTable: finalModel.bookmakerTable,
       propSections,
-      injuryStatus: {
-        available: injurySummary.available,
-        homeInjuriesCount: injurySummary.homeInjuriesCount,
-        awayInjuriesCount: injurySummary.awayInjuriesCount,
-        lineupRowsCount: injurySummary.lineupRowsCount,
-        homePenalty: roundToTwo(injurySummary.homePenalty),
-        awayPenalty: roundToTwo(injurySummary.awayPenalty),
-        homeStartersOut: injurySummary.homeStartersOut,
-        awayStartersOut: injurySummary.awayStartersOut,
-        homeStarterCertainty: roundToTwo(injurySummary.homeStarterCertainty),
-        awayStarterCertainty: roundToTwo(injurySummary.awayStarterCertainty),
-        sourceSelection: {
-          injuries: injuriesInfo.source || "none",
-          lineups: lineupsInfo.source || "none",
-          depth: depthInfo.source || "none"
-        },
-        homeInjuries: injurySummary.homeInjuries,
-        awayInjuries: injurySummary.awayInjuries,
-        lineups: injurySummary.lineups
-      },
+      injuryStatus,
       scoreState: liveScoreState,
       timestamp
     });
   } catch (error) {
     console.error("/odds failed:", error);
-    res.status(500).json({
-      error: error.message
-    });
+    res.status(500).json({ error: error.message });
   }
 });
 
@@ -1111,9 +913,7 @@ app.get("/learning/summary", (req, res) => {
 
 app.get("/learning/calibration", (req, res) => {
   try {
-    res.json({
-      calibration: safeCalibrationTable()
-    });
+    res.json({ calibration: safeCalibrationTable() });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
@@ -1134,9 +934,7 @@ app.post("/learning/grade", (req, res) => {
     const { gameId, finalWinner, finalHomeScore, finalAwayScore } = req.body || {};
 
     if (!gameId || !finalWinner) {
-      return res.status(400).json({
-        error: "Missing gameId or finalWinner"
-      });
+      return res.status(400).json({ error: "Missing gameId or finalWinner" });
     }
 
     const updated = safeUpdateGameResult({
