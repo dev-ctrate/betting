@@ -82,7 +82,9 @@ function normalizeSnapshot(row) {
     impliedProbability: roundToTwo(row.impliedProbability),
     trueProbability: roundToTwo(row.trueProbability),
     calibratedProbability: roundToTwo(row.calibratedProbability),
+    calibratedTrueProbability: roundToTwo(row.calibratedTrueProbability),
     rawEdge: roundToTwo(row.rawEdge),
+    edge: roundToTwo(row.edge),
     calibratedEdge: roundToTwo(row.calibratedEdge),
     sportsbookDecimal: roundToTwo(row.sportsbookDecimal),
     confidencePercent: roundToTwo(row.confidencePercent),
@@ -107,6 +109,25 @@ function normalizeSnapshot(row) {
 function recordSnapshot(row) {
   const normalized = normalizeSnapshot(row);
   snapshots.push(cloneSnapshotRow(normalized));
+
+  if (snapshots.length > 100000) {
+    snapshots = snapshots.slice(-100000);
+  }
+
+  persistSnapshots();
+  return normalized;
+}
+
+function upsertBackfillRow(row) {
+  const normalized = normalizeSnapshot(row);
+  const key = row.id || row.gameId;
+  const idx = snapshots.findIndex(s => (s.id || s.gameId) === key);
+
+  if (idx >= 0) {
+    snapshots[idx] = cloneSnapshotRow(normalized);
+  } else {
+    snapshots.push(cloneSnapshotRow(normalized));
+  }
 
   if (snapshots.length > 100000) {
     snapshots = snapshots.slice(-100000);
@@ -163,13 +184,13 @@ function getLearningSummary() {
 
 function buildCalibrationTable() {
   const graded = snapshots.filter(
-    s => s?.result && typeof s.result.modelWon === "boolean" && Number.isFinite(s.calibratedProbability ?? s.trueProbability)
+    s => s?.result && typeof s.result.modelWon === "boolean" && Number.isFinite(s.calibratedProbability ?? s.calibratedTrueProbability ?? s.trueProbability)
   );
 
   const buckets = {};
 
   for (const row of graded) {
-    const prob = Number(row.calibratedProbability ?? row.trueProbability);
+    const prob = Number(row.calibratedProbability ?? row.calibratedTrueProbability ?? row.trueProbability);
     const bucket = probabilityBucket(prob);
 
     if (!buckets[bucket]) {
@@ -189,12 +210,8 @@ function buildCalibrationTable() {
 
   for (const bucket of Object.keys(buckets)) {
     const row = buckets[bucket];
-    row.predictedAverage = row.predictions
-      ? row.predictedAverage / row.predictions
-      : 0;
-    row.actualRate = row.predictions
-      ? row.wins / row.predictions
-      : 0;
+    row.predictedAverage = row.predictions ? row.predictedAverage / row.predictions : 0;
+    row.actualRate = row.predictions ? row.wins / row.predictions : 0;
     row.bias = row.actualRate - row.predictedAverage;
   }
 
@@ -208,53 +225,81 @@ function getCalibrationTable() {
   return calibrationTable;
 }
 
+function getNearestCalibrationRows(prob) {
+  const rows = Object.values(calibrationTable || {}).filter(r => Number.isFinite(r?.predictedAverage));
+  return rows
+    .map(r => ({ ...r, distance: Math.abs(r.predictedAverage - prob) }))
+    .sort((a, b) => a.distance - b.distance)
+    .slice(0, 2);
+}
+
 function applyCalibration(prob) {
   const p = Number(prob);
   if (!Number.isFinite(p)) return prob;
 
-  const bucket = probabilityBucket(p);
-  const row = calibrationTable[bucket];
-
-  if (!row || !Number.isFinite(row.bias)) {
+  if (!calibrationTable || !Object.keys(calibrationTable).length) {
     return clamp(p, 0.01, 0.99);
   }
 
-  return clamp(p + row.bias, 0.01, 0.99);
+  const bucket = probabilityBucket(p);
+  const direct = calibrationTable[bucket];
+
+  if (direct && direct.predictions >= 8) {
+    const shrink = clamp(direct.predictions / 40, 0.2, 1);
+    return clamp(p + direct.bias * shrink, 0.01, 0.99);
+  }
+
+  const nearest = getNearestCalibrationRows(p);
+  if (!nearest.length) return clamp(p, 0.01, 0.99);
+
+  const weightedBias = nearest.reduce((sum, row) => {
+    const weight = 1 / Math.max(row.distance, 0.01);
+    return sum + row.bias * weight;
+  }, 0) / nearest.reduce((sum, row) => sum + (1 / Math.max(row.distance, 0.01)), 0);
+
+  const sampleStrength = nearest.reduce((sum, row) => sum + row.predictions, 0) / nearest.length;
+  const shrink = clamp(sampleStrength / 40, 0.1, 0.8);
+
+  return clamp(p + weightedBias * shrink, 0.01, 0.99);
 }
 
-function updateGameResult({ gameId, finalWinner, finalHomeScore, finalAwayScore }) {
+function updateGameResult(payload) {
+  const { gameId, finalWinner, finalHomeScore, finalAwayScore } = payload || {};
+  if (!gameId || !finalWinner) return 0;
+
   let updated = 0;
 
   snapshots = snapshots.map(row => {
-    if (String(row.gameId) !== String(gameId)) return row;
-    if (!["home", "away"].includes(finalWinner)) return row;
+    if (row.gameId !== gameId) return row;
 
     updated += 1;
-
     return {
       ...row,
       result: {
         finalWinner,
         modelWon: row.pickSide === finalWinner,
-        finalHomeScore,
-        finalAwayScore,
+        finalHomeScore: typeof finalHomeScore === "number" ? finalHomeScore : null,
+        finalAwayScore: typeof finalAwayScore === "number" ? finalAwayScore : null,
         gradedAt: new Date().toISOString()
       }
     };
   });
 
-  persistSnapshots();
-  buildCalibrationTable();
+  if (updated > 0) {
+    persistSnapshots();
+    buildCalibrationTable();
+  }
 
   return updated;
 }
 
 module.exports = {
   recordSnapshot,
+  upsertBackfillRow,
   getSnapshots,
   getLearningSummary,
-  getCalibrationTable,
   buildCalibrationTable,
-  updateGameResult,
-  applyCalibration
+  getCalibrationTable,
+  applyCalibration,
+  updateGameResult
 };
