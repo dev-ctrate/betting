@@ -68,7 +68,6 @@ function teamLooseMatch(sourceText, teamName) {
 
   const words = target.split(" ").filter(Boolean);
   const lastWord = words[words.length - 1] || "";
-
   if (lastWord && hay.includes(lastWord)) return true;
 
   const aliases = {
