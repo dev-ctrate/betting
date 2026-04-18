@@ -139,7 +139,6 @@ function decimalToImpliedPercent(decimalOdds) {
 function getBookWeight(bookKey) {
   const sharpBooks = ["pinnacle", "circasports", "matchbook"];
   const strongBooks = ["draftkings", "fanduel", "betmgm", "betrivers"];
-
   if (sharpBooks.includes(bookKey)) return 1.4;
   if (strongBooks.includes(bookKey)) return 1.15;
   return 1.0;
@@ -231,7 +230,6 @@ function addEdgeHistory(gameId, edge, timestamp) {
   }
 
   let smoothedEdge = edge;
-
   if (edgeHistoryStore[gameId].length > 0) {
     const prev = edgeHistoryStore[gameId][edgeHistoryStore[gameId].length - 1].edge;
     smoothedEdge = prev * 0.55 + edge * 0.45;
@@ -369,12 +367,12 @@ async function getUpcomingEvents() {
   return data;
 }
 
-async function getEventFeaturedOdds(eventId) {
-  const cacheKey = `featured:${eventId}`;
+async function getCurrentFeaturedBoard() {
+  const cacheKey = "featured-board";
   const hit = cacheGet(currentCache, cacheKey);
   if (hit) return hit;
 
-  const url = buildOddsUrl(`/v4/sports/${SPORT_KEY}/events/${eventId}/odds`, {
+  const url = buildOddsUrl(`/v4/sports/${SPORT_KEY}/odds`, {
     apiKey: ODDS_API_KEY,
     regions: REGIONS,
     markets: FEATURED_MARKETS,
@@ -386,7 +384,76 @@ async function getEventFeaturedOdds(eventId) {
   return data;
 }
 
-async function getEventPlayerProps(eventId) {
+function normalizeTeamName(name) {
+  return String(name || "")
+    .toLowerCase()
+    .replace(/[^a-z0-9 ]/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function teamsMatch(event, homeTeam, awayTeam) {
+  return (
+    normalizeTeamName(event?.home_team) === normalizeTeamName(homeTeam) &&
+    normalizeTeamName(event?.away_team) === normalizeTeamName(awayTeam)
+  );
+}
+
+async function resolveFeaturedOdds({ gameId, homeTeam, awayTeam }) {
+  let featured = null;
+
+  if (gameId) {
+    try {
+      const cacheKey = `featured:${gameId}`;
+      const hit = cacheGet(currentCache, cacheKey);
+
+      if (hit) {
+        featured = hit;
+      } else {
+        const url = buildOddsUrl(`/v4/sports/${SPORT_KEY}/events/${gameId}/odds`, {
+          apiKey: ODDS_API_KEY,
+          regions: REGIONS,
+          markets: FEATURED_MARKETS,
+          oddsFormat: ODDS_FORMAT
+        });
+
+        featured = await fetchJson(url);
+        cacheSet(currentCache, cacheKey, featured, CURRENT_TTL_MS);
+      }
+
+      if (featured?.home_team && featured?.away_team) {
+        return featured;
+      }
+    } catch (err) {
+      const msg = String(err.message || "");
+      const invalidEvent =
+        msg.includes("INVALID_EVENT_ID") ||
+        msg.includes("invalid event_id parameter") ||
+        msg.includes("422");
+
+      if (!invalidEvent) {
+        throw err;
+      }
+    }
+  }
+
+  if (!homeTeam || !awayTeam) {
+    throw new Error("Could not resolve odds event. Missing homeTeam/awayTeam fallback.");
+  }
+
+  const board = await getCurrentFeaturedBoard();
+  const matched = (board || []).find(event => teamsMatch(event, homeTeam, awayTeam));
+
+  if (!matched) {
+    throw new Error(`Could not find Odds API event for ${awayTeam} @ ${homeTeam}`);
+  }
+
+  return matched;
+}
+
+async function getEventPlayerPropsByResolvedEvent(eventId) {
+  if (!eventId) return { bookmakers: [] };
+
   const cacheKey = `props:${eventId}`;
   const hit = cacheGet(currentCache, cacheKey);
   if (hit) return hit;
@@ -403,7 +470,7 @@ async function getEventPlayerProps(eventId) {
     cacheSet(currentCache, cacheKey, data, CURRENT_TTL_MS);
     return data;
   } catch (err) {
-    console.error("getEventPlayerProps failed:", err.message);
+    console.error("getEventPlayerPropsByResolvedEvent failed:", err.message);
     return { bookmakers: [] };
   }
 }
@@ -1148,8 +1215,8 @@ function summarizeInjuryLineup(homeTeam, awayTeam, injuriesRows, lineupsRows, de
     homeLineupBoost,
     awayLineupBoost,
     lineupRowsCount: homeLineups.length + awayLineups.length,
-    homeInjuries,
-    awayInjuries,
+    homeInjuries: homeInjuries,
+    awayInjuries: awayInjuries,
     lineups: [...homeLineups, ...awayLineups]
   };
 }
@@ -1211,13 +1278,23 @@ app.get("/odds", async (req, res) => {
       return res.status(400).json({ error: "Missing ODDS_API_KEY" });
     }
 
-    const gameId = req.query.gameId;
-    if (!gameId) {
-      return res.status(400).json({ error: "Missing gameId query parameter" });
+    const gameId = req.query.gameId || "";
+    const homeTeam = req.query.homeTeam || "";
+    const awayTeam = req.query.awayTeam || "";
+
+    if (!gameId && (!homeTeam || !awayTeam)) {
+      return res.status(400).json({
+        error: "Need either gameId or both homeTeam and awayTeam"
+      });
     }
 
-    const featured = await getEventFeaturedOdds(gameId);
-    const props = await getEventPlayerProps(gameId);
+    const featured = await resolveFeaturedOdds({
+      gameId,
+      homeTeam,
+      awayTeam
+    });
+
+    const props = await getEventPlayerPropsByResolvedEvent(featured.id);
 
     const currentConsensus = extractFeaturedConsensus(featured);
     if (!currentConsensus) {
@@ -1227,6 +1304,7 @@ app.get("/odds", async (req, res) => {
     }
 
     const mode = buildMode(featured.commence_time);
+
     const historicalComparisons = await buildHistoricalComparisons(
       featured.home_team,
       featured.away_team
@@ -1304,10 +1382,11 @@ app.get("/odds", async (req, res) => {
 
     const timestamp = new Date().toISOString();
     const pick = `${finalModel.pickTeam} to win`;
-    const smoothedEdge = addEdgeHistory(gameId, finalModel.calibratedEdge, timestamp);
+    const edgeKey = featured.id || gameId || `${featured.home_team}_${featured.away_team}`;
+    const smoothedEdge = addEdgeHistory(edgeKey, finalModel.calibratedEdge, timestamp);
 
     const snapshot = {
-      gameId,
+      gameId: edgeKey,
       timestamp,
       commenceTime: featured.commence_time,
       homeTeam: featured.home_team,
@@ -1331,7 +1410,7 @@ app.get("/odds", async (req, res) => {
       source: mode
     };
 
-    logSnapshot(gameId, snapshot);
+    logSnapshot(edgeKey, snapshot);
     safeRecordSnapshot({
       ...snapshot,
       result: null
@@ -1363,7 +1442,7 @@ app.get("/odds", async (req, res) => {
       sportsbookOddsDecimal: roundToTwo(finalModel.sportsbookDecimal),
       stakeSuggestion: finalModel.stakeSuggestion,
       learningSummary: safeLearningSummary(),
-      history: (edgeHistoryStore[gameId] || []).map(point => ({
+      history: (edgeHistoryStore[edgeKey] || []).map(point => ({
         timestamp: point.timestamp,
         edge: roundToTwo(point.edge)
       })),
