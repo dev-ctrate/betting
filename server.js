@@ -72,6 +72,7 @@ function variance(values) {
 
 function weightedAverage(pairs) {
   if (!pairs.length) return null;
+
   let num = 0;
   let den = 0;
 
@@ -94,6 +95,7 @@ function noVigTwoWayProb(priceA, priceB) {
   const rawA = 1 / priceA;
   const rawB = 1 / priceB;
   const total = rawA + rawB;
+
   return {
     a: rawA / total,
     b: rawB / total
@@ -101,13 +103,28 @@ function noVigTwoWayProb(priceA, priceB) {
 }
 
 function decimalToAmerican(decimalOdds) {
-  if (typeof decimalOdds !== "number" || !Number.isFinite(decimalOdds) || decimalOdds <= 1) return null;
+  if (typeof decimalOdds !== "number" || !Number.isFinite(decimalOdds) || decimalOdds <= 1) {
+    return null;
+  }
+
   if (decimalOdds >= 2) return Math.round((decimalOdds - 1) * 100);
   return Math.round(-100 / (decimalOdds - 1));
 }
 
+function decimalToImpliedPercent(decimalOdds) {
+  if (typeof decimalOdds !== "number" || !Number.isFinite(decimalOdds) || decimalOdds <= 1) {
+    return null;
+  }
+  return 1 / decimalOdds;
+}
+
 function probabilityToDecimal(probability) {
-  if (typeof probability !== "number" || !Number.isFinite(probability) || probability <= 0 || probability >= 1) {
+  if (
+    typeof probability !== "number" ||
+    !Number.isFinite(probability) ||
+    probability <= 0 ||
+    probability >= 1
+  ) {
     return null;
   }
   return 1 / probability;
@@ -152,10 +169,6 @@ function getBookWeight(bookKey) {
 
 function toIso(ms) {
   return new Date(ms).toISOString();
-}
-
-function todayYmd() {
-  return new Date().toISOString().slice(0, 10);
 }
 
 function cacheGet(map, key) {
@@ -278,6 +291,13 @@ function buildMode(commenceTime) {
   return Date.now() >= startMs ? "live" : "pregame";
 }
 
+function formatClockFromSeconds(clockSec) {
+  if (typeof clockSec !== "number" || !Number.isFinite(clockSec)) return "-";
+  const mins = Math.floor(clockSec / 60);
+  const secs = Math.floor(clockSec % 60);
+  return `${mins}:${String(secs).padStart(2, "0")}`;
+}
+
 function safeLearningSummary() {
   return typeof learning.getLearningSummary === "function"
     ? learning.getLearningSummary()
@@ -347,6 +367,7 @@ function extractFeaturedConsensus(eventOdds) {
   const awayProbRaw = [];
   const spreadSignals = [];
   const totalSignals = [];
+  const books = [];
 
   for (const bookmaker of eventOdds?.bookmakers || []) {
     const weight = getBookWeight(bookmaker.key || "");
@@ -354,11 +375,20 @@ function extractFeaturedConsensus(eventOdds) {
     const spreads = findMarket(bookmaker, "spreads");
     const totals = findMarket(bookmaker, "totals");
 
+    let bookHomePrice = null;
+    let bookAwayPrice = null;
+    let bookHomeSpread = null;
+    let bookAwaySpread = null;
+    let bookTotal = null;
+
     if (h2h?.outcomes?.length >= 2) {
       const homeOutcome = h2h.outcomes.find(o => o.name === eventOdds.home_team);
       const awayOutcome = h2h.outcomes.find(o => o.name === eventOdds.away_team);
 
       if (homeOutcome && awayOutcome) {
+        bookHomePrice = homeOutcome.price;
+        bookAwayPrice = awayOutcome.price;
+
         const nv = noVigTwoWayProb(homeOutcome.price, awayOutcome.price);
         homeProbPairs.push({ value: nv.a, weight });
         awayProbPairs.push({ value: nv.b, weight });
@@ -369,40 +399,68 @@ function extractFeaturedConsensus(eventOdds) {
 
     if (spreads?.outcomes?.length >= 2) {
       const homeSpreadOutcome = spreads.outcomes.find(o => o.name === eventOdds.home_team);
+      const awaySpreadOutcome = spreads.outcomes.find(o => o.name === eventOdds.away_team);
+
       if (homeSpreadOutcome && typeof homeSpreadOutcome.point === "number") {
+        bookHomeSpread = homeSpreadOutcome.point;
         spreadSignals.push({
           value: clamp((-homeSpreadOutcome.point) * 0.0105, -0.10, 0.10),
           weight
         });
+      }
+
+      if (awaySpreadOutcome && typeof awaySpreadOutcome.point === "number") {
+        bookAwaySpread = awaySpreadOutcome.point;
       }
     }
 
     if (totals?.outcomes?.length >= 2) {
       const over = totals.outcomes.find(o => o.name === "Over");
       if (over && typeof over.point === "number") {
+        bookTotal = over.point;
         totalSignals.push({ value: over.point, weight });
       }
     }
+
+    books.push({
+      book: bookmaker.title || bookmaker.key || "book",
+      homePrice: roundToTwo(bookHomePrice),
+      awayPrice: roundToTwo(bookAwayPrice),
+      homeSpread: roundToTwo(bookHomeSpread),
+      awaySpread: roundToTwo(bookAwaySpread),
+      total: roundToTwo(bookTotal),
+      homeDecimal: roundToTwo(bookHomePrice),
+      homeAmerican: decimalToAmerican(bookHomePrice),
+      awayDecimal: roundToTwo(bookAwayPrice),
+      awayAmerican: decimalToAmerican(bookAwayPrice)
+    });
   }
 
-  if (!homeProbPairs.length || !awayProbPairs.length) return null;
+  if (!homeProbPairs.length || !awayProbPairs.length) {
+    return null;
+  }
 
   const homeMarketProb = weightedAverage(homeProbPairs);
   const awayMarketProb = weightedAverage(awayProbPairs);
-  const spreadAdj = spreadSignals.length ? weightedAverage(spreadSignals) : 0;
-  const totalConsensus = totalSignals.length ? weightedAverage(totalSignals) : 0;
+  const spreadAdj = weightedAverage(spreadSignals) || 0;
+  const totalConsensus = weightedAverage(totalSignals) || 0;
 
   let totalAdj = 0;
   if (typeof totalConsensus === "number" && Number.isFinite(totalConsensus)) {
-    if (totalConsensus < 216) totalAdj = 0.006;
-    else if (totalConsensus > 238) totalAdj = -0.006;
+    if (totalConsensus < 220) totalAdj = 0.005;
+    else if (totalConsensus > 236) totalAdj = -0.005;
   }
 
   const disagreementPenalty = clamp(
-    (variance(homeProbRaw) + variance(awayProbRaw)) * 12,
+    (variance(homeProbRaw) + variance(awayProbRaw)) * 10,
     0,
-    0.05
+    0.035
   );
+
+  const homePrices = books.map(b => b.homePrice).filter(v => typeof v === "number");
+  const awayPrices = books.map(b => b.awayPrice).filter(v => typeof v === "number");
+  const totals = books.map(b => b.total).filter(v => typeof v === "number");
+  const homeSpreads = books.map(b => b.homeSpread).filter(v => typeof v === "number");
 
   return {
     homeMarketProb,
@@ -410,7 +468,188 @@ function extractFeaturedConsensus(eventOdds) {
     spreadAdj,
     totalConsensus,
     totalAdj,
-    disagreementPenalty
+    disagreementPenalty,
+    bestHomePrice: homePrices.length ? Math.max(...homePrices) : null,
+    bestAwayPrice: awayPrices.length ? Math.max(...awayPrices) : null,
+    avgHomePrice: average(homePrices),
+    avgAwayPrice: average(awayPrices),
+    avgHomeSpread: average(homeSpreads),
+    avgTotal: average(totals),
+    bookCount: books.filter(
+      b => typeof b.homePrice === "number" && typeof b.awayPrice === "number"
+    ).length,
+    books
+  };
+}
+
+function groupPlayerPropMarkets(propsEventOdds) {
+  const groupedMarkets = {};
+
+  for (const bookmaker of propsEventOdds?.bookmakers || []) {
+    for (const market of bookmaker.markets || []) {
+      if (!groupedMarkets[market.key]) groupedMarkets[market.key] = [];
+
+      for (const outcome of market.outcomes || []) {
+        groupedMarkets[market.key].push({
+          book: bookmaker.key,
+          player: outcome.description || "",
+          side: outcome.name || "",
+          point: outcome.point ?? null,
+          price: outcome.price ?? null
+        });
+      }
+    }
+  }
+
+  return groupedMarkets;
+}
+
+function decidePropSide(row) {
+  if (typeof row.hitProbability !== "number" || !Number.isFinite(row.hitProbability)) {
+    return null;
+  }
+
+  if (row.hitProbability > 0.5) {
+    return {
+      pick: "over",
+      probability: row.hitProbability
+    };
+  }
+
+  return {
+    pick: "under",
+    probability: 1 - row.hitProbability
+  };
+}
+
+function buildStructuredPropSections(propsEventOdds) {
+  const groupedMarkets = groupPlayerPropMarkets(propsEventOdds);
+
+  const marketMap = {
+    player_points: "points",
+    player_assists: "assists",
+    player_rebounds: "rebounds",
+    player_points_rebounds_assists: "pra"
+  };
+
+  const sections = {
+    points: [],
+    assists: [],
+    rebounds: [],
+    pra: []
+  };
+
+  for (const [marketKey, displayKey] of Object.entries(marketMap)) {
+    const outcomes = groupedMarkets[marketKey] || [];
+    const grouped = {};
+
+    for (const o of outcomes) {
+      const key = `${o.player}__${o.point}`;
+
+      if (!grouped[key]) {
+        grouped[key] = {
+          player: o.player,
+          point: o.point,
+          overPrices: [],
+          underPrices: []
+        };
+      }
+
+      if ((o.side || "").toLowerCase() === "over" && typeof o.price === "number") {
+        grouped[key].overPrices.push(o.price);
+      } else if ((o.side || "").toLowerCase() === "under" && typeof o.price === "number") {
+        grouped[key].underPrices.push(o.price);
+      }
+    }
+
+    const rows = Object.values(grouped)
+      .map(item => {
+        const avgOver = average(item.overPrices);
+        const avgUnder = average(item.underPrices);
+
+        let hitProb = null;
+
+        if (typeof avgOver === "number" && typeof avgUnder === "number") {
+          hitProb = noVigTwoWayProb(avgOver, avgUnder).a;
+        } else if (typeof avgOver === "number") {
+          hitProb = decimalToImpliedPercent(avgOver);
+        }
+
+        const decision = decidePropSide({ hitProbability: hitProb });
+
+        return {
+          player: item.player,
+          line: roundToTwo(item.point),
+          overDecimal: roundToTwo(avgOver),
+          overAmerican: decimalToAmerican(avgOver),
+          hitProbability: roundToTwo(hitProb),
+          coverage: item.overPrices.length + item.underPrices.length,
+          pick: decision?.pick || null,
+          pickProbability: roundToTwo(decision?.probability)
+        };
+      })
+      .filter(row => row.player && typeof row.line === "number")
+      .sort((a, b) => {
+        return (b.coverage - a.coverage) || ((b.pickProbability || 0) - (a.pickProbability || 0));
+      })
+      .slice(0, 12);
+
+    sections[displayKey] = rows;
+  }
+
+  return sections;
+}
+
+function buildPropSignal(propSections) {
+  const allRows = [
+    ...(propSections.points || []),
+    ...(propSections.assists || []),
+    ...(propSections.rebounds || []),
+    ...(propSections.pra || [])
+  ];
+
+  if (!allRows.length) {
+    return { adj: 0, depth: 0 };
+  }
+
+  let strength = 0;
+  let observations = 0;
+
+  for (const row of allRows) {
+    const coverageBoost = clamp((row.coverage - 1) * 0.0015, 0, 0.01);
+    const lineStrength = clamp((row.line || 0) * 0.0005, 0, 0.02);
+    const probStrength = clamp(((row.hitProbability || 0.5) - 0.5) * 0.05, -0.015, 0.015);
+
+    strength += coverageBoost + lineStrength + probStrength;
+    observations += 1;
+  }
+
+  return {
+    adj: clamp((strength / Math.max(observations, 1)) * 0.4, 0, 0.01),
+    depth: observations
+  };
+}
+
+function buildNeutralInjuryStatus() {
+  return {
+    available: false,
+    homeInjuriesCount: 0,
+    awayInjuriesCount: 0,
+    lineupRowsCount: 0,
+    homePenalty: 0,
+    awayPenalty: 0,
+    homeStartersOut: 0,
+    awayStartersOut: 0,
+    homeStarterCertainty: 0,
+    awayStarterCertainty: 0,
+    sourceSelection: {
+      injuries: "not_enabled",
+      lineups: "not_enabled",
+      depth: "not_enabled"
+    },
+    homeInjuries: [],
+    awayInjuries: [],
+    lineups: []
   };
 }
 
@@ -429,6 +668,61 @@ async function getCurrentFeaturedBoard() {
   const data = await fetchJson(url);
   cacheSet(currentCache, cacheKey, data, CURRENT_TTL_MS);
   return data;
+}
+
+async function getHistoricalSnapshot(dateIso) {
+  const cacheKey = `hist:${dateIso}`;
+  const hit = cacheGet(historicalCache, cacheKey);
+  if (hit) return hit;
+
+  const url = buildOddsUrl(`/v4/historical/sports/${SPORT_KEY}/odds`, {
+    apiKey: ODDS_API_KEY,
+    regions: REGIONS,
+    markets: FEATURED_MARKETS,
+    oddsFormat: ODDS_FORMAT,
+    date: dateIso
+  });
+
+  const data = await fetchJson(url);
+  cacheSet(historicalCache, cacheKey, data, HISTORICAL_TTL_MS);
+  return data;
+}
+
+async function buildHistoricalComparisons(homeTeam, awayTeam) {
+  const out = {};
+
+  for (const lookback of HISTORICAL_LOOKBACKS) {
+    const dateIso = toIso(Date.now() - lookback.ms);
+
+    try {
+      const snap = await getHistoricalSnapshot(dateIso);
+      const found = (snap?.data || snap || []).find(event => teamsMatch(event, homeTeam, awayTeam));
+
+      if (!found) {
+        out[lookback.label] = null;
+        continue;
+      }
+
+      const consensus = extractFeaturedConsensus(found);
+      if (!consensus) {
+        out[lookback.label] = null;
+        continue;
+      }
+
+      out[lookback.label] = {
+        homeMarketProb: roundToTwo(consensus.homeMarketProb),
+        awayMarketProb: roundToTwo(consensus.awayMarketProb),
+        spreadAdj: roundToTwo(consensus.spreadAdj),
+        totalAdj: roundToTwo(consensus.totalAdj),
+        totalConsensus: roundToTwo(consensus.totalConsensus),
+        disagreementPenalty: roundToTwo(consensus.disagreementPenalty)
+      };
+    } catch {
+      out[lookback.label] = null;
+    }
+  }
+
+  return out;
 }
 
 async function resolveFeaturedOdds({ gameId, homeTeam, awayTeam }) {
@@ -507,149 +801,33 @@ async function getEventPlayerPropsByResolvedEvent(eventId) {
   }
 }
 
-function buildStructuredPropSections(propsPayload) {
-  const buckets = {
-    points: [],
-    rebounds: [],
-    assists: [],
-    pra: []
-  };
+async function safeGetLiveState({ gameId, homeTeam, awayTeam }) {
+  try {
+    const liveState = await getLiveTrackerData({
+      gameId,
+      homeTeam,
+      awayTeam
+    });
 
-  for (const bookmaker of propsPayload?.bookmakers || []) {
-    for (const market of bookmaker.markets || []) {
-      let key = null;
-      if (market.key === "player_points") key = "points";
-      if (market.key === "player_rebounds") key = "rebounds";
-      if (market.key === "player_assists") key = "assists";
-      if (market.key === "player_points_rebounds_assists") key = "pra";
-      if (!key) continue;
-
-      for (const outcome of market.outcomes || []) {
-        buckets[key].push({
-          book: bookmaker.title || bookmaker.key || "book",
-          playerName: outcome.description || outcome.name || "Unknown",
-          side: outcome.name || "",
-          line: typeof outcome.point === "number" ? roundToTwo(outcome.point) : null,
-          price: typeof outcome.price === "number" ? roundToTwo(outcome.price) : null
-        });
-      }
-    }
+    return liveState || {
+      liveFound: false,
+      homeScore: 0,
+      awayScore: 0,
+      period: 1,
+      clockSec: 12 * 60,
+      clock: "12:00"
+    };
+  } catch (err) {
+    console.error("getLiveTrackerData failed:", err.message);
+    return {
+      liveFound: false,
+      homeScore: 0,
+      awayScore: 0,
+      period: 1,
+      clockSec: 12 * 60,
+      clock: "12:00"
+    };
   }
-
-  for (const key of Object.keys(buckets)) {
-    buckets[key] = buckets[key].slice(0, 20);
-  }
-
-  return buckets;
-}
-
-function buildPropSignal(propSections) {
-  const allRows = [
-    ...(propSections?.points || []),
-    ...(propSections?.rebounds || []),
-    ...(propSections?.assists || []),
-    ...(propSections?.pra || [])
-  ];
-
-  let strength = 0;
-  let observations = 0;
-
-  for (const row of allRows) {
-    const lineStrength = clamp((Number(row.line || 0)) * 0.0005, 0, 0.02);
-    const priceStrength = clamp((Math.abs(Number(row.price || 0) - 2) || 0) * 0.01, 0, 0.015);
-    strength += lineStrength + priceStrength;
-    observations += 1;
-  }
-
-  return {
-    adj: clamp((strength / Math.max(observations, 1)) * 0.4, 0, 0.01),
-    depth: observations
-  };
-}
-
-function buildNeutralInjuryStatus() {
-  return {
-    available: false,
-    homeInjuriesCount: 0,
-    awayInjuriesCount: 0,
-    lineupRowsCount: 0,
-    homePenalty: 0,
-    awayPenalty: 0,
-    homeStartersOut: 0,
-    awayStartersOut: 0,
-    homeStarterCertainty: 0,
-    awayStarterCertainty: 0,
-    sourceSelection: {
-      injuries: "not_enabled",
-      lineups: "not_enabled",
-      depth: "not_enabled"
-    },
-    homeInjuries: [],
-    awayInjuries: [],
-    lineups: []
-  };
-}
-
-async function getHistoricalSnapshot(dateIso) {
-  const cacheKey = `hist:${dateIso}`;
-  const hit = cacheGet(historicalCache, cacheKey);
-  if (hit) return hit;
-
-  const url = buildOddsUrl(`/v4/historical/sports/${SPORT_KEY}/odds`, {
-    apiKey: ODDS_API_KEY,
-    regions: REGIONS,
-    markets: FEATURED_MARKETS,
-    oddsFormat: ODDS_FORMAT,
-    date: dateIso
-  });
-
-  const data = await fetchJson(url);
-  cacheSet(historicalCache, cacheKey, data, HISTORICAL_TTL_MS);
-  return data;
-}
-
-async function buildHistoricalComparisons(homeTeam, awayTeam) {
-  const out = {};
-
-  for (const lookback of HISTORICAL_LOOKBACKS) {
-    const dateIso = toIso(Date.now() - lookback.ms);
-
-    try {
-      const snap = await getHistoricalSnapshot(dateIso);
-      const found = (snap?.data || snap || []).find(event => teamsMatch(event, homeTeam, awayTeam));
-
-      if (!found) {
-        out[lookback.label] = null;
-        continue;
-      }
-
-      const consensus = extractFeaturedConsensus(found);
-      if (!consensus) {
-        out[lookback.label] = null;
-        continue;
-      }
-
-      out[lookback.label] = {
-        homeMarketProb: roundToTwo(consensus.homeMarketProb),
-        awayMarketProb: roundToTwo(consensus.awayMarketProb),
-        spreadAdj: roundToTwo(consensus.spreadAdj),
-        totalAdj: roundToTwo(consensus.totalAdj),
-        totalConsensus: roundToTwo(consensus.totalConsensus),
-        disagreementPenalty: roundToTwo(consensus.disagreementPenalty)
-      };
-    } catch {
-      out[lookback.label] = null;
-    }
-  }
-
-  return out;
-}
-
-function formatClockFromSeconds(clockSec) {
-  if (typeof clockSec !== "number" || !Number.isFinite(clockSec)) return "-";
-  const mins = Math.floor(clockSec / 60);
-  const secs = Math.floor(clockSec % 60);
-  return `${mins}:${String(secs).padStart(2, "0")}`;
 }
 
 app.get("/", (req, res) => {
@@ -717,58 +895,35 @@ app.get("/odds", async (req, res) => {
       });
     }
 
-    const featured = await resolveFeaturedOdds({ gameId, homeTeam, awayTeam });
-    const currentConsensus = extractFeaturedConsensus(featured);
-
-    if (!currentConsensus) {
-      return res.status(500).json({ error: "Could not extract featured odds consensus" });
-    }
+    const featured = await resolveFeaturedOdds({
+      gameId,
+      homeTeam,
+      awayTeam
+    });
 
     const mode = buildMode(featured.commence_time);
-    const historicalComparisons = await buildHistoricalComparisons(featured.home_team, featured.away_team);
-    const props = await getEventPlayerPropsByResolvedEvent(featured.id);
-    const propSections = buildStructuredPropSections(props);
+    const propsPayload = await getEventPlayerPropsByResolvedEvent(featured.id);
+    const propSections = buildStructuredPropSections(propsPayload);
     const propSignal = buildPropSignal(propSections);
-    const injuryStatus = buildNeutralInjuryStatus();
+    const historicalComparisons = await buildHistoricalComparisons(
+      featured.home_team,
+      featured.away_team
+    );
 
-    let finalModel;
+    let finalModel = null;
     let liveScoreState = null;
 
     if (mode === "live") {
-      let liveState = {
-        gameId,
+      const liveState = await safeGetLiveState({
+        gameId: featured.id,
         homeTeam: featured.home_team,
-        awayTeam: featured.away_team,
-        period: 1,
-        clock: "12:00",
-        clockSec: 12 * 60,
-        homeScore: 0,
-        awayScore: 0,
-        plays: [],
-        recentPlays: [],
-        liveFound: false,
-        momentumAdj: 0,
-        pacePressureAdj: 0
-      };
-
-      try {
-        if (requireBallDontLieKey()) {
-          liveState = await getLiveTrackerData({
-            gameId,
-            homeTeam: featured.home_team,
-            awayTeam: featured.away_team
-          });
-        }
-      } catch (err) {
-        console.error("Live tracker failed, using neutral fallback:", err.message);
-      }
+        awayTeam: featured.away_team
+      });
 
       finalModel = buildEliteLiveModel({
         featuredOdds: featured,
         liveState,
-        pregameBaseline: {
-          homeMarketProb: currentConsensus.homeMarketProb
-        },
+        pregameBaseline: null,
         calibrationFn: safeApplyCalibration
       });
 
@@ -781,15 +936,7 @@ app.get("/odds", async (req, res) => {
         featuredOdds: featured,
         historicalComparisons,
         propSignal,
-        injurySummary: {
-          available: false,
-          lineups: [],
-          lineupsRowsCount: 0,
-          homePenalty: 0,
-          awayPenalty: 0,
-          homeLineupBoost: 0,
-          awayLineupBoost: 0
-        },
+        injurySummary: buildNeutralInjuryStatus(),
         calibrationFn: safeApplyCalibration
       });
     }
@@ -819,9 +966,9 @@ app.get("/odds", async (req, res) => {
       calibratedEdge: finalModel.calibratedEdge,
       sportsbookDecimal: finalModel.sportsbookDecimal,
       verdict: finalModel.verdict,
-      confidenceLabel: finalModel.confidence.label,
-      confidencePercent: finalModel.confidence.percent,
-      ...finalModel.modelDetails,
+      confidenceLabel: finalModel.confidence?.label || "Low",
+      confidencePercent: finalModel.confidence?.percent ?? null,
+      ...(finalModel.modelDetails || {}),
       ...(finalModel.featureSnapshot || {}),
       source: mode
     };
@@ -832,10 +979,18 @@ app.get("/odds", async (req, res) => {
       result: null
     });
 
+    const trueProbForUI =
+      typeof finalModel.calibratedTrueProbability === "number"
+        ? finalModel.calibratedTrueProbability
+        : finalModel.trueProbability;
+
     const mergedModelDetails = {
-      ...finalModel.modelDetails,
-      historicalComparisons
+      ...(finalModel.modelDetails || {}),
+      historicalComparisons,
+      propSignal
     };
+
+    const injurySummary = buildNeutralInjuryStatus();
 
     res.json({
       id: featured.id,
@@ -846,76 +1001,41 @@ app.get("/odds", async (req, res) => {
       pick,
       verdict: finalModel.verdict,
       confidence: {
-        label: finalModel.confidence.label,
-        percent: roundToTwo(finalModel.confidence.percent)
+        label: finalModel.confidence?.label || "Low",
+        percent: roundToTwo(finalModel.confidence?.percent ?? null)
       },
       noBetFilter: finalModel.noBetFilter || { blocked: false, reasons: [] },
       impliedProbability: roundToTwo(finalModel.impliedProbability),
       impliedPercentFromOdds: roundToTwo(finalModel.impliedProbability),
-      trueProbability: roundToTwo(finalModel.calibratedTrueProbability),
+      trueProbability: roundToTwo(trueProbForUI),
       calibratedTrueProbability: roundToTwo(finalModel.calibratedTrueProbability),
-      impliedProbabilityFormats: buildProbabilityFormats(finalModel.impliedProbability),
-      trueProbabilityFormats: buildProbabilityFormats(finalModel.calibratedTrueProbability),
+      impliedProbabilityFormats:
+        finalModel.impliedProbabilityFormats || buildProbabilityFormats(finalModel.impliedProbability),
+      trueProbabilityFormats:
+        finalModel.trueProbabilityFormats || buildProbabilityFormats(trueProbForUI),
       edge: roundToTwo(smoothedEdge),
       rawEdge: roundToTwo(finalModel.rawEdge),
       calibratedEdge: roundToTwo(finalModel.calibratedEdge),
-      oddsFormats: buildOddsFormatsFromDecimal(finalModel.sportsbookDecimal),
+      oddsFormats: finalModel.oddsFormats || buildOddsFormatsFromDecimal(finalModel.sportsbookDecimal),
       sportsbookOddsDecimal: roundToTwo(finalModel.sportsbookDecimal),
       stakeSuggestion: safeStakeSuggestion(finalModel.stakeSuggestion),
       learningSummary: safeLearningSummary(),
+      calibrationTable: safeCalibrationTable(),
       history: (edgeHistoryStore[edgeKey] || []).map(point => ({
         timestamp: point.timestamp,
         edge: roundToTwo(point.edge)
       })),
       modelDetails: mergedModelDetails,
-      bookmakerTable: finalModel.bookmakerTable,
+      bookmakerTable: finalModel.bookmakerTable || [],
       propSections,
-      injuryStatus,
-      scoreState: liveScoreState,
-      timestamp
+      injurySummary,
+      liveScoreState,
+      updatedAt: timestamp
     });
   } catch (error) {
-    console.error("/odds failed:", error);
-    res.status(500).json({ error: error.message });
-  }
-});
-
-app.get("/snapshots", (req, res) => {
-  const gameId = req.query.gameId;
-
-  if (!gameId) {
-    return res.status(400).json({ error: "Missing gameId query parameter" });
-  }
-
-  res.json({
-    gameId,
-    snapshots: (snapshotLogStore[gameId] || []).map(s => ({
-      ...s,
-      impliedProbability: roundToTwo(s.impliedProbability),
-      trueProbability: roundToTwo(s.trueProbability),
-      calibratedTrueProbability: roundToTwo(s.calibratedTrueProbability),
-      edge: roundToTwo(s.edge),
-      rawEdge: roundToTwo(s.rawEdge),
-      calibratedEdge: roundToTwo(s.calibratedEdge),
-      confidencePercent: roundToTwo(s.confidencePercent),
-      sportsbookDecimal: roundToTwo(s.sportsbookDecimal)
-    }))
-  });
-});
-
-app.get("/learning/summary", (req, res) => {
-  try {
-    res.json(safeLearningSummary());
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-app.get("/learning/calibration", (req, res) => {
-  try {
-    res.json({ calibration: safeCalibrationTable() });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
+    res.status(500).json({
+      error: error.message
+    });
   }
 });
 
@@ -925,23 +1045,26 @@ app.get("/model/review", (req, res) => {
     const review = buildModelReview(snapshots);
     res.json(review);
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    res.status(500).json({
+      error: error.message
+    });
   }
 });
 
 app.post("/learning/grade", (req, res) => {
   try {
-    const { gameId, finalWinner, finalHomeScore, finalAwayScore } = req.body || {};
+    const gameId = req.body?.gameId || "";
+    const winnerTeam = req.body?.winnerTeam || "";
 
-    if (!gameId || !finalWinner) {
-      return res.status(400).json({ error: "Missing gameId or finalWinner" });
+    if (!gameId || !winnerTeam) {
+      return res.status(400).json({
+        error: "Need gameId and winnerTeam"
+      });
     }
 
     const updated = safeUpdateGameResult({
       gameId,
-      finalWinner,
-      finalHomeScore,
-      finalAwayScore
+      winnerTeam
     });
 
     const calibration = safeBuildCalibrationTable();
@@ -952,10 +1075,12 @@ app.post("/learning/grade", (req, res) => {
       calibration
     });
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    res.status(500).json({
+      error: error.message
+    });
   }
 });
 
 app.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
+  console.log(`Server listening on port ${PORT}`);
 });
