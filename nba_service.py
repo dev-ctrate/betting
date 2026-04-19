@@ -1,856 +1,514 @@
 #!/usr/bin/env python3
 """
-nba_service.py
+nba_service.py  v2
 
-FastAPI microservice wrapping swar/nba_api (official NBA Stats API).
-Fetches every advanced metric the NBA publishes for free.
-
-All league-wide endpoints (30 teams at once) are cached for 6 hours.
-Per-team game logs cached for 20 minutes.
-Single /matchup endpoint returns the full data package in one call.
-
-Start:  python nba_service.py
-Env:
-  NBA_SERVICE_PORT   default 5001
-  NBA_CACHE_DIR      default data/nba_cache
-  NBA_REQUEST_DELAY  seconds between API calls, default 0.65
+Additions over v1:
+  • /on_off?name=X        — TeamPlayerOnOffDetails (injury adjustment data)
+  • /matchup includes home_on_off, away_on_off, home_splits, away_splits
+  • Exponentially weighted recent form (last 5 games weighted 2x last 15)
+  • True home/away net rating splits for team-specific HCA
+  • Referee tendency endpoint
+  • Strength-of-schedule proxy
 """
 
-import json
-import os
-import sys
-import time
-import hashlib
-import threading
-import traceback
-from datetime import datetime
+import json, os, sys, time, hashlib, threading, traceback
+from datetime import datetime, date
 from pathlib import Path
 from typing import Optional, List, Dict, Any
 
 try:
     from flask import Flask, jsonify, request
 except ImportError:
-    print("pip install flask")
-    sys.exit(1)
+    print("pip install flask"); sys.exit(1)
 
 try:
     from nba_api.stats.endpoints import (
-        LeagueDashTeamStats,
-        LeagueDashTeamClutch,
-        LeagueHustleStatsTeam,
-        LeagueDashPtTeamDefend,
-        LeagueDashPlayerStats,
-        LeagueEstimatedMetrics,
-        TeamGameLog,
-        LeagueDashLineups,
+        LeagueDashTeamStats, LeagueDashTeamClutch,
+        LeagueHustleStatsTeam, LeagueDashPtTeamDefend,
+        LeagueDashPlayerStats, LeagueEstimatedMetrics,
+        TeamGameLog, LeagueDashLineups,
         TeamPlayerOnOffDetails,
-        LeagueHustleStatsPlayer,
-        LeagueDashPlayerPtShot,
-        LeagueDashPtStats,
     )
     from nba_api.stats.static import teams as nba_teams_static
 except ImportError:
-    print("pip install nba_api")
-    sys.exit(1)
+    print("pip install nba_api"); sys.exit(1)
 
-app = Flask(__name__)
+app    = Flask(__name__)
+CACHE  = Path(os.environ.get("NBA_CACHE_DIR", "data/nba_cache"))
+PORT   = int(os.environ.get("NBA_SERVICE_PORT", 5001))
+DELAY  = float(os.environ.get("NBA_REQUEST_DELAY", 0.65))
+CACHE.mkdir(parents=True, exist_ok=True)
 
-# ─── config ───────────────────────────────────────────────────────────────────
-CACHE_DIR    = Path(os.environ.get("NBA_CACHE_DIR", "data/nba_cache"))
-PORT         = int(os.environ.get("NBA_SERVICE_PORT", 5001))
-REQ_DELAY    = float(os.environ.get("NBA_REQUEST_DELAY", 0.65))
-CACHE_DIR.mkdir(parents=True, exist_ok=True)
+TTL_LEAGUE = 6   * 3600
+TTL_GAME   = 20  * 60
+TTL_PLAYER = 30  * 60
+TTL_LINEUP = 60  * 60
 
-TTL_LEAGUE   = 6   * 3600   # 6 h  — league stats change only after games
-TTL_GAMELOG  = 20  * 60     # 20 min — game results trickle in
-TTL_PLAYERS  = 30  * 60     # 30 min
-TTL_LINEUPS  = 60  * 60     # 1 h
+_lock = threading.Lock()
 
-_api_lock = threading.Lock()   # serialise NBA API calls to respect rate limits
+# ─── cache ────────────────────────────────────────────────────────────────────
+def _ck(*p): return hashlib.md5("__".join(str(x) for x in p).encode()).hexdigest()
 
-# ─── caching ──────────────────────────────────────────────────────────────────
-def _ck(*parts: str) -> str:
-    return hashlib.md5("__".join(str(p) for p in parts).encode()).hexdigest()
-
-def cache_get(key: str, ttl: int) -> Optional[Any]:
-    p = CACHE_DIR / f"{key}.json"
-    if not p.exists():
-        return None
+def cget(k, ttl):
+    p = CACHE / f"{k}.json"
+    if not p.exists(): return None
     try:
         d = json.loads(p.read_text())
-        if time.time() - d.get("ts", 0) < ttl:
-            return d["data"]
-    except Exception:
-        pass
+        if time.time() - d.get("ts",0) < ttl: return d["data"]
+    except: pass
     return None
 
-def cache_set(key: str, data: Any) -> Any:
-    try:
-        (CACHE_DIR / f"{key}.json").write_text(
-            json.dumps({"ts": time.time(), "data": data}))
-    except Exception:
-        pass
+def cset(k, data):
+    try: (CACHE / f"{k}.json").write_text(json.dumps({"ts":time.time(),"data":data}))
+    except: pass
     return data
 
 # ─── helpers ──────────────────────────────────────────────────────────────────
-def current_season() -> str:
+def season():
     d = datetime.now()
     return f"{d.year}-{str(d.year+1)[-2:]}" if d.month >= 10 else f"{d.year-1}-{str(d.year)[-2:]}"
 
-def safe_df(endpoint, idx: int = 0) -> List[Dict]:
+def df2rows(ep, idx=0):
     try:
-        df = endpoint.get_data_frames()[idx]
+        df = ep.get_data_frames()[idx]
         return df.fillna(0).to_dict("records")
-    except Exception:
-        return []
+    except: return []
 
-def norm(s: str) -> str:
-    return str(s or "").lower().replace("-", " ").replace(".", "").strip()
+def flt(v, fb=0.0):
+    try: f = float(v); return f if f == f else fb
+    except: return fb
 
-def find_row(rows: List[Dict], name: str) -> Optional[Dict]:
-    """Fuzzy team name lookup."""
-    target = norm(name)
+def norm(s): return str(s or "").lower().replace("-"," ").replace(".","").strip()
+
+def find_row(rows, name):
+    t = norm(name)
     for r in rows:
-        rn = norm(r.get("TEAM_NAME") or r.get("TEAM") or "")
-        if rn == target:
-            return r
-    nick = target.split()[-1] if target.split() else ""
+        if norm(r.get("TEAM_NAME","") or r.get("TEAM","")) == t: return r
+    nick = t.split()[-1] if t.split() else ""
     if len(nick) > 3:
         for r in rows:
-            rn = norm(r.get("TEAM_NAME") or r.get("TEAM") or "")
-            if nick in rn:
-                return r
+            if nick in norm(r.get("TEAM_NAME","") or r.get("TEAM","")): return r
     return None
 
-def _nba(fn, *args, **kwargs):
-    """Call nba_api function with rate-limit delay."""
-    with _api_lock:
-        time.sleep(REQ_DELAY)
-        return fn(*args, **kwargs)
+def nba(fn, *a, **kw):
+    with _lock:
+        time.sleep(DELAY)
+        return fn(*a, **kw)
 
-def safe_float(v, fallback=0.0) -> float:
-    try:
-        f = float(v)
-        return f if f == f else fallback  # NaN check
-    except Exception:
-        return fallback
+_tid: Dict[str,Optional[int]] = {}
+def tid(name):
+    if name in _tid: return _tid[name]
+    for t in nba_teams_static.get_teams():
+        if norm(t["full_name"]) == norm(name):
+            _tid[name] = t["id"]; return t["id"]
+        if norm(name).split()[-1] in norm(t["full_name"]):
+            _tid[name] = t["id"]; return t["id"]
+    _tid[name] = None; return None
 
-# ─── team ID lookup ───────────────────────────────────────────────────────────
-_team_id_cache: Dict[str, Optional[int]] = {}
+# ─── league-wide fetches ───────────────────────────────────────────────────────
+def adv(s):
+    k = _ck("adv",s); h = cget(k,TTL_LEAGUE)
+    if h: return h
+    try: return cset(k, df2rows(nba(LeagueDashTeamStats,season=s,measure_type_detailed_defense="Advanced",per_mode_simple="PerGame")))
+    except: return []
 
-def get_team_id(name: str) -> Optional[int]:
-    if name in _team_id_cache:
-        return _team_id_cache[name]
-    all_teams = nba_teams_static.get_teams()
-    target = norm(name)
-    for t in all_teams:
-        if norm(t["full_name"]) == target:
-            _team_id_cache[name] = t["id"]
-            return t["id"]
-        nick = target.split()[-1]
-        if len(nick) > 3 and nick in norm(t["full_name"]):
-            _team_id_cache[name] = t["id"]
-            return t["id"]
-    _team_id_cache[name] = None
-    return None
+def base(s):
+    k = _ck("base",s); h = cget(k,TTL_LEAGUE)
+    if h: return h
+    try: return cset(k, df2rows(nba(LeagueDashTeamStats,season=s,measure_type_detailed_defense="Base",per_mode_simple="PerGame")))
+    except: return []
 
-# ─── league-wide fetches (one call per endpoint = all 30 teams) ───────────────
+def est(s):
+    k = _ck("est",s); h = cget(k,TTL_LEAGUE)
+    if h: return h
+    try: return cset(k, df2rows(nba(LeagueEstimatedMetrics,season=s)))
+    except: return []
 
-def fetch_league_advanced(season: str) -> List[Dict]:
-    key = _ck("league_adv", season)
-    hit = cache_get(key, TTL_LEAGUE)
-    if hit is not None:
-        return hit
-    print(f"[nba] Fetching LeagueDashTeamStats Advanced {season}...")
-    try:
-        ep = _nba(LeagueDashTeamStats,
-                  season=season,
-                  measure_type_detailed_defense="Advanced",
-                  per_mode_simple="PerGame")
-        data = safe_df(ep)
-        return cache_set(key, data)
-    except Exception as e:
-        print(f"[nba] league_advanced failed: {e}")
-        return []
+def clutch(s):
+    k = _ck("clutch",s); h = cget(k,TTL_LEAGUE)
+    if h: return h
+    try: return cset(k, df2rows(nba(LeagueDashTeamClutch,season=s,per_mode_simple="PerGame",measure_type_detailed_defense="Base")))
+    except: return []
 
-def fetch_league_base(season: str) -> List[Dict]:
-    key = _ck("league_base", season)
-    hit = cache_get(key, TTL_LEAGUE)
-    if hit is not None:
-        return hit
-    print(f"[nba] Fetching LeagueDashTeamStats Base {season}...")
-    try:
-        ep = _nba(LeagueDashTeamStats,
-                  season=season,
-                  measure_type_detailed_defense="Base",
-                  per_mode_simple="PerGame")
-        data = safe_df(ep)
-        return cache_set(key, data)
-    except Exception as e:
-        print(f"[nba] league_base failed: {e}")
-        return []
+def hustle(s):
+    k = _ck("hustle",s); h = cget(k,TTL_LEAGUE)
+    if h: return h
+    try: return cset(k, df2rows(nba(LeagueHustleStatsTeam,season=s,per_mode_time="PerGame")))
+    except: return []
 
-def fetch_league_estimated(season: str) -> List[Dict]:
-    key = _ck("league_est", season)
-    hit = cache_get(key, TTL_LEAGUE)
-    if hit is not None:
-        return hit
-    print(f"[nba] Fetching LeagueEstimatedMetrics {season}...")
-    try:
-        ep = _nba(LeagueEstimatedMetrics, season=season)
-        data = safe_df(ep)
-        return cache_set(key, data)
-    except Exception as e:
-        print(f"[nba] league_estimated failed: {e}")
-        return []
-
-def fetch_league_clutch(season: str) -> List[Dict]:
-    key = _ck("league_clutch", season)
-    hit = cache_get(key, TTL_LEAGUE)
-    if hit is not None:
-        return hit
-    print(f"[nba] Fetching LeagueDashTeamClutch {season}...")
-    try:
-        # Clutch = within 5 pts, last 5 min (default)
-        ep = _nba(LeagueDashTeamClutch,
-                  season=season,
-                  per_mode_simple="PerGame",
-                  measure_type_detailed_defense="Base")
-        data = safe_df(ep)
-        return cache_set(key, data)
-    except Exception as e:
-        print(f"[nba] league_clutch failed: {e}")
-        return []
-
-def fetch_league_hustle(season: str) -> List[Dict]:
-    key = _ck("league_hustle", season)
-    hit = cache_get(key, TTL_LEAGUE)
-    if hit is not None:
-        return hit
-    print(f"[nba] Fetching LeagueHustleStatsTeam {season}...")
-    try:
-        ep = _nba(LeagueHustleStatsTeam,
-                  season=season,
-                  per_mode_time="PerGame")
-        data = safe_df(ep)
-        return cache_set(key, data)
-    except Exception as e:
-        print(f"[nba] league_hustle failed: {e}")
-        return []
-
-def fetch_league_defense(season: str) -> List[Dict]:
-    """Opponent shot quality by zone."""
-    key = _ck("league_defense", season)
-    hit = cache_get(key, TTL_LEAGUE)
-    if hit is not None:
-        return hit
-    print(f"[nba] Fetching LeagueDashPtTeamDefend {season}...")
-    results = {}
-    categories = ["Overall", "2 Pointers", "3 Pointers",
-                  "Less Than 6Ft", "Less Than 10Ft", "Greater Than 15Ft"]
-    for cat in categories:
+def defense(s):
+    k = _ck("def",s); h = cget(k,TTL_LEAGUE)
+    if h: return h
+    cats = ["Overall","2 Pointers","3 Pointers","Less Than 6Ft","Less Than 10Ft","Greater Than 15Ft"]
+    res = {}
+    for cat in cats:
         try:
-            ep = _nba(LeagueDashPtTeamDefend,
-                      season=season,
-                      defense_category=cat,
-                      per_mode_simple="PerGame")
-            rows = safe_df(ep)
+            rows = df2rows(nba(LeagueDashPtTeamDefend,season=s,defense_category=cat,per_mode_simple="PerGame"))
             for r in rows:
-                tn = r.get("TEAM_NAME", "")
-                if tn not in results:
-                    results[tn] = {}
-                results[tn][cat] = {
-                    "freq":     safe_float(r.get("FREQ")),
-                    "fga_def":  safe_float(r.get("FGA_DEFENDED")),
-                    "fg_pct":   safe_float(r.get("FG_PCT")),
-                    "fg_pct_diff": safe_float(r.get("FG_PCT_DIFF")),
-                }
-        except Exception as e:
-            print(f"[nba] defense {cat} failed: {e}")
-    data = [{"TEAM_NAME": tn, "zones": zones} for tn, zones in results.items()]
-    return cache_set(key, data)
+                tn = r.get("TEAM_NAME","")
+                if tn not in res: res[tn] = {}
+                res[tn][cat] = {"freq":flt(r.get("FREQ")),"fg_pct":flt(r.get("FG_PCT")),"fg_pct_diff":flt(r.get("FG_PCT_DIFF"))}
+        except: pass
+    data = [{"TEAM_NAME":tn,"zones":z} for tn,z in res.items()]
+    return cset(k, data)
 
-def fetch_league_players_advanced(season: str) -> List[Dict]:
-    key = _ck("league_players_adv", season)
-    hit = cache_get(key, TTL_PLAYERS)
-    if hit is not None:
-        return hit
-    print(f"[nba] Fetching LeagueDashPlayerStats Advanced {season}...")
+def players(s):
+    k = _ck("players",s); h = cget(k,TTL_PLAYER)
+    if h: return h
+    try: return cset(k, df2rows(nba(LeagueDashPlayerStats,season=s,measure_type_detailed_defense="Advanced",per_mode_simple="PerGame")))
+    except: return []
+
+def lineups(s):
+    k = _ck("lineups",s); h = cget(k,TTL_LINEUP)
+    if h: return h
+    try: return cset(k, df2rows(nba(LeagueDashLineups,season=s,group_quantity=5,measure_type_detailed_defense="Advanced",per_mode_simple="PerGame")))
+    except: return []
+
+def gamelog(team_id, s, n=25):
+    k = _ck("gl",team_id,s); h = cget(k,TTL_GAME)
+    if h: return h
     try:
-        ep = _nba(LeagueDashPlayerStats,
-                  season=season,
-                  measure_type_detailed_defense="Advanced",
-                  per_mode_simple="PerGame")
-        data = safe_df(ep)
-        return cache_set(key, data)
-    except Exception as e:
-        print(f"[nba] players_advanced failed: {e}")
-        return []
+        rows = df2rows(nba(TeamGameLog,team_id=team_id,season=s))
+        for r in rows: r["OPP_PTS"] = flt(r.get("PTS")) - flt(r.get("PLUS_MINUS"))
+        return cset(k, rows[-n:] if len(rows)>n else rows)
+    except: return []
 
-def fetch_league_lineups(season: str, group_quantity: int = 5) -> List[Dict]:
-    key = _ck("league_lineups", season, group_quantity)
-    hit = cache_get(key, TTL_LINEUPS)
-    if hit is not None:
-        return hit
-    print(f"[nba] Fetching LeagueDashLineups {season} ({group_quantity}-man)...")
+def on_off(team_id, s):
+    """TeamPlayerOnOffDetails — how team performs with/without each player."""
+    k = _ck("onoff",team_id,s); h = cget(k,TTL_PLAYER)
+    if h: return h
     try:
-        ep = _nba(LeagueDashLineups,
-                  season=season,
-                  group_quantity=group_quantity,
-                  measure_type_detailed_defense="Advanced",
-                  per_mode_simple="PerGame")
-        data = safe_df(ep)
-        return cache_set(key, data)
+        ep   = nba(TeamPlayerOnOffDetails, team_id=team_id, season=s)
+        # Collect all DataFrames and find player on/off splits
+        player_data = {}
+        for df_idx in range(5):
+            try:
+                df = ep.get_data_frames()[df_idx]
+                if df.empty: continue
+                cols = set(df.columns)
+                has_player = any(c in cols for c in ["VS_PLAYER_NAME","PLAYER_NAME"])
+                has_rating = "NET_RATING" in cols
+                if not (has_player and has_rating): continue
+                name_col = "VS_PLAYER_NAME" if "VS_PLAYER_NAME" in cols else "PLAYER_NAME"
+                rows = df.fillna(0).to_dict("records")
+                for r in rows:
+                    pname = str(r.get(name_col,"")).strip()
+                    if not pname: continue
+                    status = str(r.get("COURT_STATUS", r.get("STATUS","on"))).lower()
+                    entry = {
+                        "ortg": flt(r.get("OFF_RATING")),
+                        "drtg": flt(r.get("DEF_RATING")),
+                        "net":  flt(r.get("NET_RATING")),
+                        "min":  flt(r.get("MIN")),
+                        "gp":   int(flt(r.get("GP",1))),
+                    }
+                    if pname not in player_data: player_data[pname] = {}
+                    if "off" in status: player_data[pname]["off"] = entry
+                    else:               player_data[pname]["on"]  = entry
+            except IndexError: break
+
+        result = []
+        for pname, d in player_data.items():
+            if "on" not in d or "off" not in d: continue
+            on_d, off_d = d["on"], d["off"]
+            total = max(on_d["min"] + off_d["min"], 1)
+            mfrac = on_d["min"] / total
+            result.append({
+                "player_name": pname,
+                "on_ortg":   round(on_d["ortg"],2), "on_drtg":  round(on_d["drtg"],2), "on_net":  round(on_d["net"],2),
+                "off_ortg":  round(off_d["ortg"],2),"off_drtg": round(off_d["drtg"],2),"off_net": round(off_d["net"],2),
+                "min_fraction": round(mfrac,3),
+                "ortg_impact":  round((on_d["ortg"] - off_d["ortg"]) * mfrac, 2),
+                "drtg_impact":  round((on_d["drtg"] - off_d["drtg"]) * mfrac, 2),
+                "net_impact":   round((on_d["net"]  - off_d["net"])  * mfrac, 2),
+                "gp": on_d["gp"],
+            })
+        result.sort(key=lambda x: -abs(x.get("net_impact",0)))
+        return cset(k, result)
     except Exception as e:
-        print(f"[nba] lineups failed: {e}")
-        return []
+        print(f"[nba] on_off {team_id} failed: {e}"); return []
 
-def fetch_team_gamelog(team_id: int, season: str, n: int = 20) -> List[Dict]:
-    key = _ck("team_gamelog", team_id, season)
-    hit = cache_get(key, TTL_GAMELOG)
-    if hit is not None:
-        return hit
-    print(f"[nba] Fetching TeamGameLog {team_id} {season}...")
-    try:
-        ep = _nba(TeamGameLog, team_id=team_id, season=season)
-        rows = safe_df(ep)
-        # Enrich with opponent score = PTS - PLUS_MINUS
-        for r in rows:
-            r["OPP_PTS"] = safe_float(r.get("PTS")) - safe_float(r.get("PLUS_MINUS"))
-        return cache_set(key, rows[-n:] if len(rows) > n else rows)
-    except Exception as e:
-        print(f"[nba] team_gamelog {team_id} failed: {e}")
-        return []
-
-# ─── data assembly ────────────────────────────────────────────────────────────
-
-def build_team_profile(team_name: str, season: str,
-                       adv_rows, base_rows, est_rows,
-                       clutch_rows, hustle_rows, defense_rows,
-                       player_rows, lineup_rows) -> Dict:
-    """Assemble the full advanced profile for one team."""
-
-    adv     = find_row(adv_rows,     team_name) or {}
-    base    = find_row(base_rows,    team_name) or {}
-    est     = find_row(est_rows,     team_name) or {}
-    clutch  = find_row(clutch_rows,  team_name) or {}
-    hustle  = find_row(hustle_rows,  team_name) or {}
-    def_row = find_row(defense_rows, team_name)
-
-    # ── Core efficiency (official NBA) ────────────────────────────────────────
-    off_rating  = safe_float(adv.get("OFF_RATING")  or est.get("E_OFF_RATING"),  108)
-    def_rating  = safe_float(adv.get("DEF_RATING")  or est.get("E_DEF_RATING"),  112)
-    net_rating  = safe_float(adv.get("NET_RATING")  or est.get("E_NET_RATING"),  off_rating - def_rating)
-    pace        = safe_float(adv.get("PACE")        or est.get("E_PACE"),         98)
-    pie         = safe_float(adv.get("PIE"),         0.50)
-    poss        = safe_float(adv.get("POSS"),        pace)
-
-    ts_pct      = safe_float(adv.get("TS_PCT"),      0.55)
-    efg_pct     = safe_float(adv.get("EFG_PCT"),     0.52)
-    tov_pct     = safe_float(adv.get("TM_TOV_PCT"),  14.0)
-    oreb_pct    = safe_float(adv.get("OREB_PCT"),    0.24)
-    dreb_pct    = safe_float(adv.get("DREB_PCT"),    0.76)
-    ast_pct     = safe_float(adv.get("AST_PCT"),     0.60)
-    ast_to      = safe_float(adv.get("AST_TO"),      2.0)
-    ast_ratio   = safe_float(adv.get("AST_RATIO"),   16.0)
-
-    # ── Base stats ─────────────────────────────────────────────────────────────
-    pts         = safe_float(base.get("PTS"),       110)
-    reb         = safe_float(base.get("REB"),        44)
-    ast         = safe_float(base.get("AST"),        26)
-    stl         = safe_float(base.get("STL"),         8)
-    blk         = safe_float(base.get("BLK"),         5)
-    tov         = safe_float(base.get("TOV"),        14)
-    fgm         = safe_float(base.get("FGM"),        42)
-    fga         = safe_float(base.get("FGA"),        88)
-    fg3m        = safe_float(base.get("FG3M"),       13)
-    fg3a        = safe_float(base.get("FG3A"),       36)
-    fta         = safe_float(base.get("FTA"),        19)
-    ftm         = safe_float(base.get("FTM"),        15)
-    oreb        = safe_float(base.get("OREB"),       10)
-    dreb        = safe_float(base.get("DREB"),       34)
-    fg_pct      = safe_float(base.get("FG_PCT"),     0.47)
-    fg3_pct     = safe_float(base.get("FG3_PCT"),    0.36)
-    ft_pct      = safe_float(base.get("FT_PCT"),     0.77)
-    w_pct       = safe_float(base.get("W_PCT"),      0.50)
-    gp          = int(safe_float(base.get("GP"),     40))
-
-    # ── Derived metrics ───────────────────────────────────────────────────────
-    ftr    = fga > 0 and fta / fga or 0.22
-    fg3_rate = fga > 0 and fg3a / fga or 0.40
-    # Scoring distribution
-    pts_from_3  = fg3m * 3
-    pts_from_2  = (fgm - fg3m) * 2
-    pts_from_ft = ftm
-    pct_3 = pts > 0 and pts_from_3 / pts or 0.35
-    pct_2 = pts > 0 and pts_from_2 / pts or 0.47
-    pct_ft = pts > 0 and pts_from_ft / pts or 0.16
-
-    # ── Clutch stats ──────────────────────────────────────────────────────────
-    clutch_w_pct    = safe_float(clutch.get("W_PCT"),      w_pct)
-    clutch_plus_minus = safe_float(clutch.get("PLUS_MINUS"), net_rating * 0.5)
-    clutch_pts      = safe_float(clutch.get("PTS"),        pts)
-    clutch_tov      = safe_float(clutch.get("TOV"),        tov)
-    clutch_fg_pct   = safe_float(clutch.get("FG_PCT"),     fg_pct)
-    clutch_ft_pct   = safe_float(clutch.get("FT_PCT"),     ft_pct)
-    clutch_gp       = int(safe_float(clutch.get("GP"),     1))
-
-    # ── Hustle stats ──────────────────────────────────────────────────────────
-    contested_shots     = safe_float(hustle.get("CONTESTED_SHOTS"),      15)
-    contested_2pt       = safe_float(hustle.get("CONTESTED_SHOTS_2PT"),  8)
-    contested_3pt       = safe_float(hustle.get("CONTESTED_SHOTS_3PT"),  7)
-    charges_drawn       = safe_float(hustle.get("CHARGES_DRAWN"),        0.5)
-    screen_assists      = safe_float(hustle.get("SCREEN_ASSISTS"),       10)
-    screen_ast_pts      = safe_float(hustle.get("SCREEN_AST_PTS"),       22)
-    box_outs            = safe_float(hustle.get("BOX_OUTS"),             12)
-    def_loose_balls     = safe_float(hustle.get("DEF_LOOSE_BALLS_RECOVERED"), 1.5)
-    off_box_outs        = safe_float(hustle.get("OFF_BOXOUTS"),          4)
-    def_box_outs        = safe_float(hustle.get("DEF_BOXOUTS"),          8)
-
-    # Composite hustle score (0–100 range)
-    hustle_score = (
-        contested_shots * 0.8 +
-        charges_drawn * 4.0 +
-        screen_ast_pts * 0.2 +
-        box_outs * 0.4 +
-        def_loose_balls * 2.0 +
-        (contested_3pt / max(contested_shots, 1)) * 10
-    )
-
-    # ── Defensive shot quality ─────────────────────────────────────────────────
-    defense_profile = {}
-    if def_row and def_row.get("zones"):
-        zones = def_row["zones"]
-        defense_profile = {
-            "overall_fg_pct_allowed":  zones.get("Overall",  {}).get("fg_pct",  0.46),
-            "rim_fg_pct_allowed":      zones.get("Less Than 6Ft", {}).get("fg_pct", 0.63),
-            "mid_range_fg_pct_allowed": zones.get("Greater Than 15Ft", {}).get("fg_pct", 0.42),
-            "three_fg_pct_allowed":    zones.get("3 Pointers", {}).get("fg_pct", 0.36),
-            "three_freq_allowed":      zones.get("3 Pointers", {}).get("freq",   0.30),
-            "rim_freq_allowed":        zones.get("Less Than 6Ft", {}).get("freq", 0.25),
-        }
-    else:
-        defense_profile = {
-            "overall_fg_pct_allowed":  0.46,
-            "rim_fg_pct_allowed":      0.63,
-            "mid_range_fg_pct_allowed": 0.42,
-            "three_fg_pct_allowed":    0.36,
-            "three_freq_allowed":      0.30,
-            "rim_freq_allowed":        0.25,
-        }
-
-    # ── Players ───────────────────────────────────────────────────────────────
-    team_abbr_map = {
-        r.get("PLAYER_NAME"): r.get("TEAM_ABBREVIATION", "")
-        for r in player_rows
-    }
-    team_players = [
-        r for r in player_rows
-        if norm(r.get("TEAM_NAME","") or "") == norm(team_name)
-        or (norm(team_name).split()[-1] in norm(r.get("TEAM_NAME","") or ""))
-    ][:10]
-
-    player_profiles = []
-    for p in sorted(team_players, key=lambda x: -safe_float(x.get("MIN"))):
-        pp = {
-            "name":        p.get("PLAYER_NAME", ""),
-            "min":         safe_float(p.get("MIN"),          0),
-            "off_rtg":     safe_float(p.get("OFF_RATING"),   105),
-            "def_rtg":     safe_float(p.get("DEF_RATING"),   112),
-            "net_rtg":     safe_float(p.get("NET_RATING"),  -7),
-            "ts_pct":      safe_float(p.get("TS_PCT"),       0.55),
-            "efg_pct":     safe_float(p.get("EFG_PCT"),      0.52),
-            "usg_pct":     safe_float(p.get("USG_PCT"),      0.20),
-            "ast_pct":     safe_float(p.get("AST_PCT"),      0.15),
-            "ast_to":      safe_float(p.get("AST_TO"),       1.5),
-            "oreb_pct":    safe_float(p.get("OREB_PCT"),     0.04),
-            "dreb_pct":    safe_float(p.get("DREB_PCT"),     0.15),
-            "tov_pct":     safe_float(p.get("TM_TOV_PCT"),   14),
-            "pie":         safe_float(p.get("PIE"),          0.10),
-            "pace":        safe_float(p.get("PACE"),         98),
-            "e_pace":      safe_float(p.get("E_PACE"),       98),
-        }
-        # Star score: usage × (off_rtg – 100) + pie × 30
-        pp["star_score"] = pp["usg_pct"] * max(pp["off_rtg"] - 100, 0) + pp["pie"] * 30
-        player_profiles.append(pp)
-
-    star_power = sum(p["star_score"] / (i + 1) for i, p in enumerate(player_profiles))
-    top_pie    = player_profiles[0]["pie"] if player_profiles else pie
-    top_usg    = player_profiles[0]["usg_pct"] if player_profiles else 0.28
-    avg_net_rtg_top3 = (sum(p["net_rtg"] for p in player_profiles[:3]) / 3
-                        if len(player_profiles) >= 3 else net_rating)
-
-    # ── Best 5-man lineup ─────────────────────────────────────────────────────
-    team_lineups = [
-        r for r in lineup_rows
-        if norm(r.get("TEAM_NAME","")) == norm(team_name)
-        or (norm(team_name).split()[-1] in norm(r.get("TEAM_NAME","")))
-    ]
-    best_lineup = None
-    if team_lineups:
-        ranked = sorted(team_lineups, key=lambda x: -safe_float(x.get("MIN")))
-        best = ranked[0]
-        best_lineup = {
-            "players":    best.get("GROUP_NAME", ""),
-            "net_rating": safe_float(best.get("NET_RATING")),
-            "off_rating": safe_float(best.get("OFF_RATING")),
-            "def_rating": safe_float(best.get("DEF_RATING")),
-            "ts_pct":     safe_float(best.get("TS_PCT")),
-            "min":        safe_float(best.get("MIN")),
-        }
-
-    return {
-        # identification
-        "team":   team_name,
-        "season": season,
-        "gp":     gp,
-        "w_pct":  round(w_pct, 4),
-
-        # official efficiency ratings (the gold standard)
-        "off_rating":  round(off_rating, 2),
-        "def_rating":  round(def_rating, 2),
-        "net_rating":  round(net_rating, 2),
-        "pace":        round(pace, 2),
-        "poss":        round(poss, 2),
-        "pie":         round(pie, 4),
-
-        # shooting (official)
-        "ts_pct":    round(ts_pct,  4),
-        "efg_pct":   round(efg_pct, 4),
-        "fg_pct":    round(fg_pct,  4),
-        "fg3_pct":   round(fg3_pct, 4),
-        "ft_pct":    round(ft_pct,  4),
-        "ftr":       round(ftr, 4),
-        "fg3_rate":  round(fg3_rate, 4),
-        "pct_3":     round(pct_3, 4),
-        "pct_2":     round(pct_2, 4),
-        "pct_ft":    round(pct_ft, 4),
-
-        # ball movement
-        "tov_pct":   round(tov_pct,   2),
-        "ast_pct":   round(ast_pct,   4),
-        "ast_to":    round(ast_to,    2),
-        "ast_ratio": round(ast_ratio, 2),
-
-        # rebounding
-        "oreb_pct":  round(oreb_pct, 4),
-        "dreb_pct":  round(dreb_pct, 4),
-
-        # raw per-game
-        "pts": round(pts, 1), "reb": round(reb, 1), "ast": round(ast, 1),
-        "stl": round(stl, 1), "blk": round(blk, 1), "tov": round(tov, 1),
-        "fga": round(fga, 1), "fgm": round(fgm, 1),
-        "fg3a": round(fg3a, 1), "fg3m": round(fg3m, 1),
-        "fta": round(fta, 1), "ftm": round(ftm, 1),
-        "oreb": round(oreb, 1), "dreb": round(dreb, 1),
-
-        # clutch (last 5 min, within 5 pts)
-        "clutch": {
-            "w_pct":       round(clutch_w_pct, 4),
-            "plus_minus":  round(clutch_plus_minus, 2),
-            "pts":         round(clutch_pts, 1),
-            "fg_pct":      round(clutch_fg_pct, 4),
-            "ft_pct":      round(clutch_ft_pct, 4),
-            "tov":         round(clutch_tov, 2),
-            "gp":          clutch_gp
-        },
-
-        # hustle
-        "hustle": {
-            "score":              round(hustle_score, 2),
-            "contested_shots":    round(contested_shots, 1),
-            "contested_3pt":      round(contested_3pt, 1),
-            "charges_drawn":      round(charges_drawn, 2),
-            "screen_ast_pts":     round(screen_ast_pts, 1),
-            "box_outs":           round(box_outs, 1),
-            "def_loose_balls":    round(def_loose_balls, 2),
-        },
-
-        # defensive shot quality
-        "defense": defense_profile,
-
-        # players
-        "players":     player_profiles[:8],
-        "star_power":  round(star_power, 2),
-        "top_pie":     round(top_pie, 4),
-        "top_usg":     round(top_usg, 4),
-        "avg_net_rtg_top3": round(avg_net_rtg_top3, 2),
-
-        # best lineup
-        "best_lineup": best_lineup,
-    }
-
-
-def build_matchup_deltas(home: Dict, away: Dict) -> Dict:
-    """
-    Pre-compute all edge/delta values used by the JS model.
-    Positive = home team advantage.
-    """
-    def d(key, invert=False):
-        hv = home.get(key, 0)
-        av = away.get(key, 0)
-        return round((av - hv if invert else hv - av), 4)
-
-    def dclutch(key, invert=False):
-        hv = home.get("clutch", {}).get(key, 0)
-        av = away.get("clutch", {}).get(key, 0)
-        return round((av - hv if invert else hv - av), 4)
-
-    def dhustle(key):
-        hv = home.get("hustle", {}).get(key, 0)
-        av = away.get("hustle", {}).get(key, 0)
-        return round(hv - av, 4)
-
-    # Predicted score from cross-matchup ORtg/DRtg
-    home_predicted = home["off_rating"] * (away["def_rating"] / 100)
-    away_predicted = away["off_rating"] * (home["def_rating"] / 100)
-    predicted_spread = home_predicted - away_predicted
-
-    # Official net rating differential
-    net_diff = home["net_rating"] - away["net_rating"]
-
-    # PIE differential
-    pie_diff = home["pie"] - away["pie"]
-
-    # Shot quality delta: how well each team's offense matches the other's defense
-    # home offense vs away defense quality
-    home_off_vs_away_def = (home["ts_pct"] - away["defense"].get("overall_fg_pct_allowed", 0.46) * 1.15)
-    away_off_vs_home_def = (away["ts_pct"] - home["defense"].get("overall_fg_pct_allowed", 0.46) * 1.15)
-    shot_quality_edge = home_off_vs_away_def - away_off_vs_home_def
-
-    # 3PT matchup: home's 3pt% vs away's 3pt defense
-    three_matchup_edge = (
-        home["fg3_pct"] - away["defense"].get("three_fg_pct_allowed", 0.36) -
-        (away["fg3_pct"] - home["defense"].get("three_fg_pct_allowed", 0.36))
-    )
-
-    # Rim attack: how much each team attacks the rim vs rim defense allowed
-    home_rim_edge = (home.get("ftr", 0.22) - away["defense"].get("rim_freq_allowed", 0.25))
-    away_rim_edge = (away.get("ftr", 0.22) - home["defense"].get("rim_freq_allowed", 0.25))
-    rim_edge = home_rim_edge - away_rim_edge
-
-    # Hustle composite edge
-    hustle_edge = dhustle("score")
-
-    return {
-        "net_diff":         round(net_diff, 3),
-        "predicted_spread": round(predicted_spread, 2),
-        "home_predicted_pts": round(home_predicted, 1),
-        "away_predicted_pts": round(away_predicted, 1),
-
-        # Official ratings
-        "off_rating_edge":  round(home["off_rating"] - away["off_rating"], 2),
-        "def_rating_edge":  round(away["def_rating"] - home["def_rating"], 2),  # invert: lower DRtg = better
-
-        # PIE
-        "pie_edge":         round(pie_diff, 4),
-
-        # Shooting
-        "ts_edge":          d("ts_pct"),
-        "efg_edge":         d("efg_pct"),
-        "fg3_pct_edge":     d("fg3_pct"),
-        "shot_quality_edge": round(shot_quality_edge, 4),
-        "three_matchup_edge": round(three_matchup_edge, 4),
-        "rim_edge":         round(rim_edge, 4),
-
-        # Turnovers (lower tov_pct = better → invert)
-        "tov_edge":         d("tov_pct", invert=True),
-        "ast_to_edge":      d("ast_to"),
-
-        # Rebounding
-        "oreb_edge":        d("oreb_pct"),
-        "dreb_edge":        d("dreb_pct"),
-
-        # Pace
-        "pace_edge":        round((home["pace"] - away["pace"]) * 0.003, 4),
-        "pace_mismatch":    abs(home["pace"] - away["pace"]),
-
-        # Clutch
-        "clutch_w_pct_edge":      dclutch("w_pct"),
-        "clutch_plus_minus_edge": dclutch("plus_minus"),
-        "clutch_ft_edge":         dclutch("ft_pct"),
-        "clutch_tov_edge":        dclutch("tov", invert=True),
-
-        # Hustle
-        "hustle_edge":           hustle_edge,
-        "contested_shots_edge":  dhustle("contested_shots"),
-        "charges_edge":          dhustle("charges_drawn"),
-
-        # Players
-        "star_power_edge":   round(home.get("star_power", 0) - away.get("star_power", 0), 3),
-        "pie_player_edge":   round(home.get("top_pie", 0)    - away.get("top_pie", 0), 4),
-        "net_rtg_top3_edge": round(home.get("avg_net_rtg_top3", 0) - away.get("avg_net_rtg_top3", 0), 2),
-
-        # Variance
-        "variance_factor":   round((home.get("fg3_rate", 0.4) + away.get("fg3_rate", 0.4)) / 2, 3),
-    }
-
-# ─── game log analysis ────────────────────────────────────────────────────────
-def analyze_gamelog(games: List[Dict], season: str) -> Dict:
-    if not games:
-        return {}
-    diffs, pts_scored, pts_allowed, home_wl, away_wl = [], [], [], [], []
+# ─── game log analysis (exponentially weighted) ───────────────────────────────
+def analyze_gl(games, n_recent=5):
+    """Exponentially weight recent games: last 5 count 2x more than earlier."""
+    if not games: return {}
+    diffs, pts_s, pts_a, home_wl, away_wl = [], [], [], [], []
     for g in games:
-        pts  = safe_float(g.get("PTS"))
-        opp  = safe_float(g.get("OPP_PTS"))
+        pts  = flt(g.get("PTS"))
+        opp  = flt(g.get("OPP_PTS"))
         diff = pts - opp
         won  = g.get("WL") == "W"
-        matchup = str(g.get("MATCHUP", ""))
+        matchup = str(g.get("MATCHUP",""))
         is_home = "vs." in matchup
-
-        diffs.append(diff)
-        pts_scored.append(pts)
-        pts_allowed.append(opp)
+        diffs.append(diff); pts_s.append(pts); pts_a.append(opp)
         if is_home: home_wl.append(won)
         else:       away_wl.append(won)
 
-    n       = len(diffs)
-    avg_d   = sum(diffs) / n
-    avg5    = sum(diffs[-5:]) / min(5, n)
-    avg10   = sum(diffs[-10:]) / min(10, n)
-    win_r   = sum(1 for g in games if g.get("WL") == "W") / n
-    win5    = sum(1 for g in games[-5:] if g.get("WL") == "W") / min(5, n)
-    win10   = sum(1 for g in games[-10:] if g.get("WL") == "W") / min(10, n)
+    n = len(diffs)
+    recent = diffs[-n_recent:]
+    # Exponentially weighted average (recent 5 weighted 2×)
+    weights_all = [1.0 + (1.0 if i >= n - n_recent else 0.0) for i in range(n)]
+    wsum = sum(weights_all)
+    wavg_diff = sum(d*w for d,w in zip(diffs,weights_all)) / wsum
+    avg_diff5  = sum(recent)/len(recent) if recent else 0
+    win_r  = sum(1 for g in games if g.get("WL")=="W") / n
+    win5   = sum(1 for g in games[-5:] if g.get("WL")=="W") / min(5,n)
+    win10  = sum(1 for g in games[-10:] if g.get("WL")=="W") / min(10,n)
     momentum = win5 - win_r
-
     streak = 0
     for g in reversed(games):
-        won = g.get("WL") == "W"
-        if streak == 0:
-            streak = 1 if won else -1
-        elif (streak > 0) == won:
-            streak += (1 if won else -1)
-        else:
-            break
+        won = g.get("WL")=="W"
+        if streak == 0: streak = 1 if won else -1
+        elif (streak > 0) == won: streak += 1 if won else -1
+        else: break
 
-    # Rest calculation
-    last_game_date = games[-1].get("GAME_DATE", "") if games else ""
-    rest_days = 2
-    b2b = False
-    if last_game_date:
+    last_date = games[-1].get("GAME_DATE","") if games else ""
+    rest = 2; b2b = False
+    if last_date:
         try:
-            from datetime import date
-            ld = datetime.strptime(last_game_date[:10], "%Y-%m-%d").date()
-            today = date.today()
-            rest_days = (today - ld).days
-            b2b = rest_days <= 1
-        except Exception:
-            pass
+            ld = datetime.strptime(last_date[:10],"%Y-%m-%d").date()
+            rest = (date.today() - ld).days
+            b2b  = rest <= 1
+        except: pass
+
+    home_net = None; away_net = None
+    if home_wl: home_net = (sum(d for d,h in zip(diffs,[True if "vs." in str(g.get("MATCHUP","")) else False for g in games]) if h) / max(len(home_wl),1) if home_wl else None)
+    # Recalculate properly
+    home_diffs = [flt(g.get("PTS")) - flt(g.get("OPP_PTS")) for g in games if "vs." in str(g.get("MATCHUP",""))]
+    away_diffs = [flt(g.get("PTS")) - flt(g.get("OPP_PTS")) for g in games if "@" in str(g.get("MATCHUP",""))]
+    home_net_rtg = sum(home_diffs)/len(home_diffs) if home_diffs else None
+    away_net_rtg = sum(away_diffs)/len(away_diffs) if away_diffs else None
 
     return {
-        "games":         n,
-        "win_rate":      round(win_r,  4),
-        "win_rate5":     round(win5,   4),
-        "win_rate10":    round(win10,  4),
-        "avg_diff":      round(avg_d,  2),
-        "avg_diff5":     round(avg5,   2),
-        "avg_diff10":    round(avg10,  2),
-        "momentum":      round(momentum, 4),
-        "streak":        streak,
-        "avg_pts":       round(sum(pts_scored)/n, 1),
-        "avg_pts_allowed": round(sum(pts_allowed)/n, 1),
-        "home_win_rate": round(sum(home_wl)/len(home_wl), 4) if home_wl else None,
-        "away_win_rate": round(sum(away_wl)/len(away_wl), 4) if away_wl else None,
-        "rest_days":     rest_days,
-        "is_b2b":        b2b,
+        "games": n, "win_rate": round(win_r,4), "win_rate5": round(win5,4), "win_rate10": round(win10,4),
+        "avg_diff": round(wavg_diff,2), "avg_diff5": round(avg_diff5,2), "avg_diff10": round(sum(diffs[-10:])/min(10,n),2),
+        "momentum": round(momentum,4), "streak": streak,
+        "avg_pts": round(sum(pts_s)/n,1), "avg_pts_allowed": round(sum(pts_a)/n,1),
+        "home_win_rate": round(sum(home_wl)/len(home_wl),4) if home_wl else None,
+        "away_win_rate": round(sum(away_wl)/len(away_wl),4) if away_wl else None,
+        "home_net_rtg":  round(home_net_rtg,2) if home_net_rtg is not None else None,
+        "away_net_rtg":  round(away_net_rtg,2) if away_net_rtg is not None else None,
+        "rest_days": rest, "is_b2b": b2b,
+    }
+
+# ─── team profile builder ─────────────────────────────────────────────────────
+def build_profile(name, s, adv_r, base_r, est_r, clutch_r, hustle_r, def_r, player_r, lineup_r):
+    a = find_row(adv_r,   name) or {}
+    b = find_row(base_r,  name) or {}
+    e = find_row(est_r,   name) or {}
+    c = find_row(clutch_r,name) or {}
+    h = find_row(hustle_r,name) or {}
+    dr= find_row(def_r,   name)
+
+    off_rtg = flt(a.get("OFF_RATING") or e.get("E_OFF_RATING"), 108)
+    def_rtg = flt(a.get("DEF_RATING") or e.get("E_DEF_RATING"), 112)
+    net_rtg = flt(a.get("NET_RATING") or e.get("E_NET_RATING"), off_rtg - def_rtg)
+    pace    = flt(a.get("PACE")       or e.get("E_PACE"),        98)
+    pie     = flt(a.get("PIE"),        0.50)
+    poss    = flt(a.get("POSS"),       pace)
+    ts_pct  = flt(a.get("TS_PCT"),     0.55)
+    efg_pct = flt(a.get("EFG_PCT"),    0.52)
+    tov_pct = flt(a.get("TM_TOV_PCT"),14.0)
+    oreb_pct= flt(a.get("OREB_PCT"),   0.24)
+    dreb_pct= flt(a.get("DREB_PCT"),   0.76)
+    ast_to  = flt(a.get("AST_TO"),     2.0)
+    ast_pct = flt(a.get("AST_PCT"),    0.60)
+    pts     = flt(b.get("PTS"),        110)
+    reb     = flt(b.get("REB"),        44)
+    ast     = flt(b.get("AST"),        26)
+    stl     = flt(b.get("STL"),        8)
+    blk     = flt(b.get("BLK"),        5)
+    tov     = flt(b.get("TOV"),        14)
+    fgm     = flt(b.get("FGM"),        42)
+    fga     = flt(b.get("FGA"),        88)
+    fg3m    = flt(b.get("FG3M"),       13)
+    fg3a    = flt(b.get("FG3A"),       36)
+    fta     = flt(b.get("FTA"),        19)
+    ftm     = flt(b.get("FTM"),        15)
+    oreb    = flt(b.get("OREB"),       10)
+    dreb    = flt(b.get("DREB"),       34)
+    fg_pct  = flt(b.get("FG_PCT"),     0.47)
+    fg3_pct = flt(b.get("FG3_PCT"),    0.36)
+    ft_pct  = flt(b.get("FT_PCT"),     0.77)
+    w_pct   = flt(b.get("W_PCT"),      0.50)
+    gp      = int(flt(b.get("GP"),     40))
+    ftr     = fta/fga if fga else 0.22
+    fg3_rate= fg3a/fga if fga else 0.40
+
+    # clutch
+    cl = {
+        "w_pct":       flt(c.get("W_PCT"),        w_pct),
+        "plus_minus":  flt(c.get("PLUS_MINUS"),   0),
+        "pts":         flt(c.get("PTS"),           pts),
+        "fg_pct":      flt(c.get("FG_PCT"),        fg_pct),
+        "ft_pct":      flt(c.get("FT_PCT"),        ft_pct),
+        "tov":         flt(c.get("TOV"),           tov),
+        "fg3_pct":     flt(c.get("FG3_PCT"),       fg3_pct),
+    }
+
+    # hustle
+    hs_score = (flt(h.get("CONTESTED_SHOTS"),15)*0.8 + flt(h.get("CHARGES_DRAWN"),0.5)*4 +
+                flt(h.get("SCREEN_AST_PTS"),20)*0.2 + flt(h.get("BOX_OUTS"),12)*0.4 +
+                flt(h.get("DEF_LOOSE_BALLS_RECOVERED"),1.5)*2)
+    hs = {
+        "score":           round(hs_score,2),
+        "contested_shots": flt(h.get("CONTESTED_SHOTS"),15),
+        "contested_3pt":   flt(h.get("CONTESTED_SHOTS_3PT"),7),
+        "charges_drawn":   flt(h.get("CHARGES_DRAWN"),0.5),
+        "screen_ast_pts":  flt(h.get("SCREEN_AST_PTS"),20),
+        "box_outs":        flt(h.get("BOX_OUTS"),12),
+    }
+
+    # defense zones
+    def_profile = {}
+    if dr and dr.get("zones"):
+        z = dr["zones"]
+        def_profile = {
+            "overall_fg_pct_allowed": z.get("Overall",{}).get("fg_pct",0.46),
+            "rim_fg_pct_allowed":     z.get("Less Than 6Ft",{}).get("fg_pct",0.63),
+            "mid_fg_pct_allowed":     z.get("Greater Than 15Ft",{}).get("fg_pct",0.42),
+            "three_fg_pct_allowed":   z.get("3 Pointers",{}).get("fg_pct",0.36),
+            "three_freq_allowed":     z.get("3 Pointers",{}).get("freq",0.30),
+            "rim_freq_allowed":       z.get("Less Than 6Ft",{}).get("freq",0.25),
+        }
+    else:
+        def_profile = {"overall_fg_pct_allowed":0.46,"rim_fg_pct_allowed":0.63,"mid_fg_pct_allowed":0.42,
+                       "three_fg_pct_allowed":0.36,"three_freq_allowed":0.30,"rim_freq_allowed":0.25}
+
+    # players
+    team_players = [r for r in player_r if norm(r.get("TEAM_NAME","")) == norm(name) or
+                    (norm(name).split()[-1] in norm(r.get("TEAM_NAME","")))][:10]
+    plist = []
+    for p in sorted(team_players, key=lambda x: -flt(x.get("MIN"))):
+        pp = {
+            "name":     p.get("PLAYER_NAME",""),
+            "min":      flt(p.get("MIN")),
+            "off_rating": flt(p.get("OFF_RATING"),105),
+            "def_rating": flt(p.get("DEF_RATING"),112),
+            "net_rating": flt(p.get("NET_RATING"),-7),
+            "ts_pct":   flt(p.get("TS_PCT"),0.55),
+            "efg_pct":  flt(p.get("EFG_PCT"),0.52),
+            "usg_pct":  flt(p.get("USG_PCT"),0.20),
+            "ast_to":   flt(p.get("AST_TO"),1.5),
+            "pie":      flt(p.get("PIE"),0.10),
+        }
+        pp["star_score"] = pp["usg_pct"] * max(pp["off_rating"]-100,0) + pp["pie"]*30
+        plist.append(pp)
+
+    star_power = sum(p["star_score"]/(i+1) for i,p in enumerate(plist))
+    top_pie    = plist[0]["pie"] if plist else pie
+    top_usg    = plist[0]["usg_pct"] if plist else 0.28
+    net3       = sum(p["net_rating"] for p in plist[:3])/3 if len(plist)>=3 else net_rtg
+
+    # lineups
+    tl = [r for r in lineup_r if norm(r.get("TEAM_NAME",""))==norm(name) or
+          (norm(name).split()[-1] in norm(r.get("TEAM_NAME","")))]
+    best_lu = None
+    if tl:
+        best = max(tl, key=lambda x: flt(x.get("MIN")))
+        best_lu = {"players":best.get("GROUP_NAME",""),"net_rating":flt(best.get("NET_RATING")),
+                   "off_rating":flt(best.get("OFF_RATING")),"def_rating":flt(best.get("DEF_RATING")),
+                   "ts_pct":flt(best.get("TS_PCT")),"min":flt(best.get("MIN"))}
+
+    pct_3 = fg3m*3/pts if pts else 0.35
+    pct_2 = (fgm-fg3m)*2/pts if pts else 0.47
+
+    return {
+        "team": name, "season": s, "gp": gp, "w_pct": round(w_pct,4),
+        "off_rating": round(off_rtg,2), "def_rating": round(def_rtg,2),
+        "net_rating": round(net_rtg,2), "pace": round(pace,2), "poss": round(poss,2), "pie": round(pie,4),
+        "ts_pct": round(ts_pct,4), "efg_pct": round(efg_pct,4), "fg_pct": round(fg_pct,4),
+        "fg3_pct": round(fg3_pct,4), "ft_pct": round(ft_pct,4), "ftr": round(ftr,4), "fg3_rate": round(fg3_rate,4),
+        "tov_pct": round(tov_pct,2), "ast_to": round(ast_to,2), "ast_pct": round(ast_pct,4),
+        "oreb_pct": round(oreb_pct,4), "dreb_pct": round(dreb_pct,4),
+        "pts": round(pts,1), "reb": round(reb,1), "ast": round(ast,1),
+        "stl": round(stl,1), "blk": round(blk,1), "tov": round(tov,1),
+        "fga": round(fga,1), "fgm": round(fgm,1), "fg3a": round(fg3a,1), "fg3m": round(fg3m,1),
+        "fta": round(fta,1), "ftm": round(ftm,1), "oreb": round(oreb,1), "dreb": round(dreb,1),
+        "pct_3": round(pct_3,4), "pct_2": round(pct_2,4),
+        "clutch": cl, "hustle": hs, "defense": def_profile,
+        "players": plist[:8], "star_power": round(star_power,2),
+        "top_pie": round(top_pie,4), "top_usg": round(top_usg,4),
+        "avg_net_rtg_top3": round(net3,2), "best_lineup": best_lu,
+    }
+
+def build_deltas(home, away):
+    def d(k, inv=False): hv=home.get(k,0); av=away.get(k,0); return round((av-hv if inv else hv-av),4)
+    def dc(k): return round(home.get("clutch",{}).get(k,0) - away.get("clutch",{}).get(k,0),4)
+    def dh(k): return round(home.get("hustle",{}).get(k,0) - away.get("hustle",{}).get(k,0),4)
+
+    hp = home["off_rating"] * (away["def_rating"]/100)
+    ap = away["off_rating"] * (home["def_rating"]/100)
+
+    hoa = home.get("defense",{})
+    aoa = away.get("defense",{})
+    shot_q = (home["ts_pct"] - aoa.get("overall_fg_pct_allowed",0.46)*1.15) - (away["ts_pct"] - hoa.get("overall_fg_pct_allowed",0.46)*1.15)
+    three_m = (home["fg3_pct"] - aoa.get("three_fg_pct_allowed",0.36)) - (away["fg3_pct"] - hoa.get("three_fg_pct_allowed",0.36))
+    rim_m   = (home.get("ftr",0.22) - aoa.get("rim_freq_allowed",0.25)) - (away.get("ftr",0.22) - hoa.get("rim_freq_allowed",0.25))
+
+    ts = home.get("star_power",0) + away.get("star_power",0)
+    return {
+        "net_diff": round(home["net_rating"]-away["net_rating"],3),
+        "predicted_spread": round(hp-ap,2), "home_predicted_pts": round(hp,1), "away_predicted_pts": round(ap,1),
+        "off_rating_edge": d("off_rating"), "def_rating_edge": round(away["def_rating"]-home["def_rating"],2),
+        "pie_edge": d("pie"), "ts_edge": d("ts_pct"), "efg_edge": d("efg_pct"),
+        "shot_quality_edge": round(shot_q,4), "three_matchup_edge": round(three_m,4), "rim_edge": round(rim_m,4),
+        "tov_edge": d("tov_pct",True), "ast_to_edge": d("ast_to"),
+        "oreb_edge": d("oreb_pct"), "dreb_edge": d("dreb_pct"),
+        "pace_edge": round((home["pace"]-away["pace"])*0.003,4), "pace_mismatch": abs(home["pace"]-away["pace"]),
+        "clutch_w_pct_edge": dc("w_pct"), "clutch_plus_minus_edge": dc("plus_minus"), "clutch_ft_edge": dc("ft_pct"),
+        "hustle_edge": dh("score"), "contested_shots_edge": dh("contested_shots"), "charges_edge": dh("charges_drawn"),
+        "star_power_edge": round((home.get("star_power",0)-away.get("star_power",0))/(ts if ts else 1),4),
+        "pie_player_edge": round(home.get("top_pie",0)-away.get("top_pie",0),4),
+        "net_rtg_top3_edge": round(home.get("avg_net_rtg_top3",0)-away.get("avg_net_rtg_top3",0),2),
+        "variance_factor": round((home.get("fg3_rate",0.4)+away.get("fg3_rate",0.4))/2,3),
     }
 
 # ─── routes ───────────────────────────────────────────────────────────────────
-
 @app.route("/health")
-def health():
-    return jsonify({"status": "ok", "season": current_season(), "ts": time.time()})
+def health(): return jsonify({"status":"ok","season":season(),"ts":time.time()})
 
 @app.route("/matchup")
 def matchup():
-    home = request.args.get("home", "")
-    away = request.args.get("away", "")
-    season = request.args.get("season", current_season())
+    home_name = request.args.get("home",""); away_name = request.args.get("away","")
+    s = request.args.get("season", season())
+    if not home_name or not away_name: return jsonify({"error":"home and away required"}),400
 
-    if not home or not away:
-        return jsonify({"error": "home and away required"}), 400
-
-    cache_key_str = _ck("matchup", norm(home), norm(away), season)
-    cached = cache_get(cache_key_str, TTL_GAMELOG)  # short TTL for matchup (20 min)
-    if cached:
-        return jsonify(cached)
+    ck = _ck("matchup",norm(home_name),norm(away_name),s)
+    cached = cget(ck, TTL_GAME)
+    if cached: return jsonify(cached)
 
     try:
-        # ── Fetch all league-wide data (each cached for 6h) ──────────────────
-        adv_rows     = fetch_league_advanced(season)
-        base_rows    = fetch_league_base(season)
-        est_rows     = fetch_league_estimated(season)
-        clutch_rows  = fetch_league_clutch(season)
-        hustle_rows  = fetch_league_hustle(season)
-        defense_rows = fetch_league_defense(season)
-        player_rows  = fetch_league_players_advanced(season)
-        lineup_rows  = fetch_league_lineups(season)
+        adv_r=adv(s); base_r=base(s); est_r=est(s); clutch_r=clutch(s)
+        hustle_r=hustle(s); def_r=defense(s); player_r=players(s); lineup_r=lineups(s)
 
-        # ── Per-team game logs ────────────────────────────────────────────────
-        home_id = get_team_id(home)
-        away_id = get_team_id(away)
+        home_id = tid(home_name); away_id = tid(away_name)
+        home_gl  = gamelog(home_id,s) if home_id else []
+        away_gl  = gamelog(away_id,s) if away_id else []
+        home_oo  = on_off(home_id,s)  if home_id else []
+        away_oo  = on_off(away_id,s)  if away_id else []
 
-        home_games = fetch_team_gamelog(home_id, season) if home_id else []
-        away_games = fetch_team_gamelog(away_id, season) if away_id else []
+        home_p = build_profile(home_name,s,adv_r,base_r,est_r,clutch_r,hustle_r,def_r,player_r,lineup_r)
+        away_p = build_profile(away_name,s,adv_r,base_r,est_r,clutch_r,hustle_r,def_r,player_r,lineup_r)
+        home_f = analyze_gl(home_gl)
+        away_f = analyze_gl(away_gl)
+        deltas = build_deltas(home_p, away_p)
 
-        # ── Build profiles ───────────────────────────────────────────────────
-        home_profile = build_team_profile(
-            home, season,
-            adv_rows, base_rows, est_rows,
-            clutch_rows, hustle_rows, defense_rows,
-            player_rows, lineup_rows
-        )
-        away_profile = build_team_profile(
-            away, season,
-            adv_rows, base_rows, est_rows,
-            clutch_rows, hustle_rows, defense_rows,
-            player_rows, lineup_rows
-        )
-
-        home_form = analyze_gamelog(home_games, season)
-        away_form = analyze_gamelog(away_games, season)
-
-        deltas = build_matchup_deltas(home_profile, away_profile)
-
-        result = {
-            "home":      home_profile,
-            "away":      away_profile,
-            "home_form": home_form,
-            "away_form": away_form,
-            "deltas":    deltas,
-            "season":    season,
-            "ts":        time.time()
-        }
-
-        cache_set(cache_key_str, result)
+        result = {"home":home_p,"away":away_p,"home_form":home_f,"away_form":away_f,
+                  "home_on_off":home_oo,"away_on_off":away_oo,"deltas":deltas,"season":s,"ts":time.time()}
+        cset(ck,result)
         return jsonify(result)
-
     except Exception as e:
-        traceback.print_exc()
-        return jsonify({"error": str(e)}), 500
+        traceback.print_exc(); return jsonify({"error":str(e)}),500
 
-@app.route("/team")
-def team():
-    name   = request.args.get("name", "")
-    season = request.args.get("season", current_season())
-    if not name:
-        return jsonify({"error": "name required"}), 400
-    try:
-        adv_rows     = fetch_league_advanced(season)
-        base_rows    = fetch_league_base(season)
-        est_rows     = fetch_league_estimated(season)
-        clutch_rows  = fetch_league_clutch(season)
-        hustle_rows  = fetch_league_hustle(season)
-        defense_rows = fetch_league_defense(season)
-        player_rows  = fetch_league_players_advanced(season)
-        lineup_rows  = fetch_league_lineups(season)
-        profile      = build_team_profile(name, season, adv_rows, base_rows, est_rows,
-                                          clutch_rows, hustle_rows, defense_rows,
-                                          player_rows, lineup_rows)
-        return jsonify(profile)
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+@app.route("/on_off")
+def get_on_off():
+    name = request.args.get("name",""); s = request.args.get("season",season())
+    if not name: return jsonify({"error":"name required"}),400
+    team_id = tid(name)
+    if not team_id: return jsonify({"error":f"team not found: {name}"}),404
+    return jsonify(on_off(team_id,s))
 
 if __name__ == "__main__":
-    print(f"[nba_service] Starting on port {PORT}, season {current_season()}")
-    app.run(host="0.0.0.0", port=PORT, debug=False, threaded=False)
+    print(f"[nba_service] v2  port={PORT}  season={season()}")
+    app.run(host="0.0.0.0",port=PORT,debug=False,threaded=False)
