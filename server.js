@@ -6,27 +6,26 @@ const { buildEliteLiveModel }    = require("./live_model");
 const { getLiveTrackerData }     = require("./live_tracker");
 const { buildElitePregameModel } = require("./pregame_model");
 const { buildModelReview }       = require("./model_review");
-const {
-  computeIndependentWinProb,
-  computeEdge
-} = require("./stats_model");
+const { computeIndependentWinProb, computeEdge } = require("./stats_model");
+
+// ── NEW: AI learning components ───────────────────────────────────────────────
+const { startAutoGradeScheduler }                     = require("./auto_grader");
+const { loadLearnedWeights, applyLearnedWeights, DEFAULT_WEIGHTS } = require("./weight_learner");
 
 const app  = express();
 const PORT = process.env.PORT || 3000;
 
-const ODDS_API_KEY        = process.env.ODDS_API_KEY        || "";
-const BALLDONTLIE_API_KEY = process.env.BALLDONTLIE_API_KEY || "";
+const ODDS_API_KEY         = process.env.ODDS_API_KEY        || "";
+const BALLDONTLIE_API_KEY  = process.env.BALLDONTLIE_API_KEY || "";
 const FANTASYNERDS_API_KEY = process.env.FANTASYNERDS_API_KEY || "";
 
-const SPORT_KEY        = "basketball_nba";
-const REGIONS          = "us";
-const ODDS_FORMAT      = "decimal";
-const FEATURED_MARKETS = "h2h,spreads,totals";
+const SPORT_KEY           = "basketball_nba";
+const REGIONS             = "us";
+const ODDS_FORMAT         = "decimal";
+const FEATURED_MARKETS    = "h2h,spreads,totals";
 const PLAYER_PROP_MARKETS = [
-  "player_points",
-  "player_rebounds",
-  "player_assists",
-  "player_points_rebounds_assists"
+  "player_points", "player_rebounds",
+  "player_assists", "player_points_rebounds_assists"
 ].join(",");
 
 const HISTORICAL_LOOKBACKS = [
@@ -45,11 +44,12 @@ const HISTORICAL_TTL_MS = 30 * 60 * 1000;
 const SIDEINFO_TTL_MS   = 10 * 60 * 1000;
 const SNAPSHOT_RETENTION = 500;
 
-// ─── blend weights: how much to trust stats model vs market ──────────────────
-// 0 = pure market, 1 = pure stats model
-// At 0.45 the independent model has meaningful influence while the
-// market's information still anchors the estimate.
-const STATS_MODEL_BLEND = 0.45;
+// ── learned weights: loaded once at startup, refreshed every 30 min ───────────
+let learnedWeights = loadLearnedWeights();
+setInterval(() => {
+  learnedWeights = loadLearnedWeights();
+  console.log("[server] Reloaded learned weights.");
+}, 30 * 60 * 1000);
 
 const TEAM_ALIASES = {
   "Atlanta Hawks": ["hawks","atl","atlanta"],
@@ -85,11 +85,10 @@ const TEAM_ALIASES = {
 };
 
 app.use(express.json());
+process.on("unhandledRejection", reason => console.error("UNHANDLED REJECTION:", reason));
+process.on("uncaughtException",  err    => console.error("UNCAUGHT EXCEPTION:",  err));
 
-process.on("unhandledRejection", reason => { console.error("UNHANDLED REJECTION:", reason); });
-process.on("uncaughtException",  err    => { console.error("UNCAUGHT EXCEPTION:",  err);    });
-
-// ─── math helpers ─────────────────────────────────────────────────────────────
+// ─── math helpers ──────────────────────────────────────────────────────────────
 function clamp(x, min, max) { return Math.max(min, Math.min(max, x)); }
 function roundToTwo(num) {
   if (typeof num !== "number" || !Number.isFinite(num)) return null;
@@ -114,9 +113,8 @@ function weightedAverage(pairs) {
 }
 function noVigTwoWayProb(priceA, priceB) {
   if (typeof priceA !== "number" || !Number.isFinite(priceA) || priceA <= 1 ||
-      typeof priceB !== "number" || !Number.isFinite(priceB) || priceB <= 1) {
+      typeof priceB !== "number" || !Number.isFinite(priceB) || priceB <= 1)
     return { a: 0.5, b: 0.5 };
-  }
   const rawA = 1 / priceA, rawB = 1 / priceB, total = rawA + rawB;
   return { a: rawA / total, b: rawB / total };
 }
@@ -134,7 +132,8 @@ function probabilityToDecimal(p) {
 }
 function probabilityToAmerican(p) { return decimalToAmerican(probabilityToDecimal(p)); }
 function buildOddsFormatsFromDecimal(d) {
-  if (typeof d !== "number" || !Number.isFinite(d) || d <= 1) return { decimal: null, american: null, impliedPercent: null };
+  if (typeof d !== "number" || !Number.isFinite(d) || d <= 1)
+    return { decimal: null, american: null, impliedPercent: null };
   return { decimal: roundToTwo(d), american: decimalToAmerican(d), impliedPercent: roundToTwo(1 / d) };
 }
 function buildProbabilityFormats(p) { return { percent: roundToTwo(p), american: probabilityToAmerican(p) }; }
@@ -144,7 +143,7 @@ function getBookWeight(bookKey) {
   return 1.0;
 }
 
-// ─── cache helpers ─────────────────────────────────────────────────────────────
+// ─── cache ─────────────────────────────────────────────────────────────────────
 function cacheGet(map, key) {
   const hit = map.get(key);
   if (!hit) return null;
@@ -153,7 +152,7 @@ function cacheGet(map, key) {
 }
 function cacheSet(map, key, value, ttl) { map.set(key, { value, expiresAt: Date.now() + ttl }); }
 
-// ─── fetch ────────────────────────────────────────────────────────────────────
+// ─── fetch ─────────────────────────────────────────────────────────────────────
 async function fetchJson(url, options = {}) {
   const controller = new AbortController();
   const timeout    = setTimeout(() => controller.abort(), 12000);
@@ -170,9 +169,9 @@ function buildOddsUrl(pathname, params) {
   const sp = new URLSearchParams(params);
   return `https://api.the-odds-api.com${pathname}?${sp.toString()}`;
 }
-function requireOddsKey()         { return !!ODDS_API_KEY; }
-function requireBallDontLieKey()  { return !!BALLDONTLIE_API_KEY; }
-function requireFantasyNerdsKey() { return !!FANTASYNERDS_API_KEY; }
+const requireOddsKey        = () => !!ODDS_API_KEY;
+const requireBallDontLieKey = () => !!BALLDONTLIE_API_KEY;
+const requireFantasyNerdsKey = () => !!FANTASYNERDS_API_KEY;
 function toIso(ms)     { return new Date(ms).toISOString(); }
 function todayYmd()    { return new Date().toISOString().slice(0, 10); }
 function buildMode(t)  { return Date.now() >= new Date(t).getTime() ? "live" : "pregame"; }
@@ -181,7 +180,7 @@ function formatClockFromSeconds(s) {
   return `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, "0")}`;
 }
 
-// ─── team name helpers ────────────────────────────────────────────────────────
+// ─── team name helpers ─────────────────────────────────────────────────────────
 function normalizeTeamName(name) {
   return String(name || "").toLowerCase().replace(/[^a-z0-9 ]/g, "").replace(/\s+/g, " ").trim();
 }
@@ -202,7 +201,7 @@ function teamNameLooseMatch(src, name) {
 }
 function rowContainsTeam(row, name) { return teamNameLooseMatch(JSON.stringify(row), name); }
 
-// ─── edge / snapshot helpers ──────────────────────────────────────────────────
+// ─── edge / snapshot helpers ───────────────────────────────────────────────────
 function trimEdgeHistory(gameId) {
   const cutoff = Date.now() - 15 * 60 * 1000;
   edgeHistoryStore[gameId] = (edgeHistoryStore[gameId] || []).filter(
@@ -227,37 +226,21 @@ function logSnapshot(gameId, snap) {
     snapshotLogStore[gameId] = snapshotLogStore[gameId].slice(-SNAPSHOT_RETENTION);
 }
 
-// ─── learning wrappers ────────────────────────────────────────────────────────
-const safeLearningSummary    = () => typeof learning.getLearningSummary === "function"    ? learning.getLearningSummary()    : {};
-const safeCalibrationTable   = () => typeof learning.getCalibrationTable === "function"   ? learning.getCalibrationTable()   : {};
-const safeBuildCalibration   = () => typeof learning.buildCalibrationTable === "function" ? learning.buildCalibrationTable() : {};
-const safeRecordSnapshot     = s  => { if (typeof learning.recordSnapshot === "function") learning.recordSnapshot(s); };
-const safeGetSnapshots       = () => typeof learning.getSnapshots === "function"          ? learning.getSnapshots()          : [];
-const safeUpdateGameResult   = p  => typeof learning.updateGameResult === "function"      ? learning.updateGameResult(p)     : 0;
-const safeApplyCalibration   = p  => typeof learning.applyCalibration === "function"      ? learning.applyCalibration(p)     : p;
+// ─── learning wrappers ─────────────────────────────────────────────────────────
+const safeLearningSummary  = () => typeof learning.getLearningSummary  === "function" ? learning.getLearningSummary()    : {};
+const safeCalibrationTable = () => typeof learning.getCalibrationTable === "function" ? learning.getCalibrationTable()   : {};
+const safeBuildCalibration = () => typeof learning.buildCalibrationTable === "function" ? learning.buildCalibrationTable() : {};
+const safeRecordSnapshot   = s  => { if (typeof learning.recordSnapshot === "function") learning.recordSnapshot(s); };
+const safeGetSnapshots     = () => typeof learning.getSnapshots === "function" ? learning.getSnapshots() : [];
+const safeUpdateGameResult = p  => typeof learning.updateGameResult === "function" ? learning.updateGameResult(p) : 0;
+const safeApplyCalibration = p  => typeof learning.applyCalibration  === "function" ? learning.applyCalibration(p) : p;
 function safeStakeSuggestion(raw) {
   const text = String(raw || "No bet");
   const map  = { "No bet": 0, "0.5u": 0.5, "1u": 1, "1.5u": 1.5 };
   return { tier: text, fraction: Object.prototype.hasOwnProperty.call(map, text) ? map[text] : 0 };
 }
 
-// ─── independent model blending ───────────────────────────────────────────────
-/**
- * Blend the market-based model probability with the independent stats model.
- *
- * marketProb  – no-vig market implied prob for the pick side
- * statsProb   – our independent model prob for the HOME team
- * pickSide    – "home" | "away"
- *
- * Returns blended probability for the pick side.
- */
-function blendModelWithStats(marketProb, statsHomeProb, pickSide) {
-  const statsPickProb = pickSide === "home" ? statsHomeProb : 1 - statsHomeProb;
-  const blended = marketProb * (1 - STATS_MODEL_BLEND) + statsPickProb * STATS_MODEL_BLEND;
-  return clamp(blended, 0.01, 0.99);
-}
-
-// ─── Odds API helpers ─────────────────────────────────────────────────────────
+// ─── Odds API helpers ──────────────────────────────────────────────────────────
 async function getUpcomingEvents() {
   const key = "events";
   const hit = cacheGet(currentCache, key);
@@ -271,7 +254,9 @@ async function getCurrentFeaturedBoard() {
   const key = "featured-board";
   const hit = cacheGet(currentCache, key);
   if (hit) return hit;
-  const url  = buildOddsUrl(`/v4/sports/${SPORT_KEY}/odds`, { apiKey: ODDS_API_KEY, regions: REGIONS, markets: FEATURED_MARKETS, oddsFormat: ODDS_FORMAT });
+  const url  = buildOddsUrl(`/v4/sports/${SPORT_KEY}/odds`, {
+    apiKey: ODDS_API_KEY, regions: REGIONS, markets: FEATURED_MARKETS, oddsFormat: ODDS_FORMAT
+  });
   const data = await fetchJson(url);
   cacheSet(currentCache, key, data, CURRENT_TTL_MS);
   return data;
@@ -282,7 +267,9 @@ async function resolveFeaturedOdds({ gameId, homeTeam, awayTeam }) {
       const key = `featured:${gameId}`;
       const hit = cacheGet(currentCache, key);
       if (hit && hit.home_team) return hit;
-      const url  = buildOddsUrl(`/v4/sports/${SPORT_KEY}/events/${gameId}/odds`, { apiKey: ODDS_API_KEY, regions: REGIONS, markets: FEATURED_MARKETS, oddsFormat: ODDS_FORMAT });
+      const url  = buildOddsUrl(`/v4/sports/${SPORT_KEY}/events/${gameId}/odds`, {
+        apiKey: ODDS_API_KEY, regions: REGIONS, markets: FEATURED_MARKETS, oddsFormat: ODDS_FORMAT
+      });
       const data = await fetchJson(url);
       cacheSet(currentCache, key, data, CURRENT_TTL_MS);
       if (data?.home_team) return data;
@@ -291,7 +278,7 @@ async function resolveFeaturedOdds({ gameId, homeTeam, awayTeam }) {
       if (!m.includes("INVALID_EVENT_ID") && !m.includes("422")) throw err;
     }
   }
-  if (!homeTeam || !awayTeam) throw new Error("Could not resolve odds event. Missing homeTeam/awayTeam fallback.");
+  if (!homeTeam || !awayTeam) throw new Error("Could not resolve odds event. Missing homeTeam/awayTeam.");
   const board   = await getCurrentFeaturedBoard();
   const matched = (board || []).find(e => teamsMatch(e, homeTeam, awayTeam));
   if (!matched) throw new Error(`Could not find Odds API event for ${awayTeam} @ ${homeTeam}`);
@@ -301,36 +288,40 @@ async function getHistoricalSnapshot(dateIso) {
   const key = `hist:${dateIso}`;
   const hit = cacheGet(historicalCache, key);
   if (hit) return hit;
-  const url  = buildOddsUrl(`/v4/historical/sports/${SPORT_KEY}/odds`, { apiKey: ODDS_API_KEY, regions: REGIONS, markets: FEATURED_MARKETS, oddsFormat: ODDS_FORMAT, date: dateIso });
+  const url  = buildOddsUrl(`/v4/historical/sports/${SPORT_KEY}/odds`, {
+    apiKey: ODDS_API_KEY, regions: REGIONS, markets: FEATURED_MARKETS, oddsFormat: ODDS_FORMAT, date: dateIso
+  });
   const data = await fetchJson(url);
   cacheSet(historicalCache, key, data, HISTORICAL_TTL_MS);
   return data;
 }
-async function getEventPlayerPropsByResolvedEvent(eventId) {
+async function getEventPlayerProps(eventId) {
   if (!eventId) return { bookmakers: [] };
   const key = `props:${eventId}`;
   const hit = cacheGet(currentCache, key);
   if (hit) return hit;
-  const url = buildOddsUrl(`/v4/sports/${SPORT_KEY}/events/${eventId}/odds`, { apiKey: ODDS_API_KEY, regions: REGIONS, markets: PLAYER_PROP_MARKETS, oddsFormat: ODDS_FORMAT });
+  const url = buildOddsUrl(`/v4/sports/${SPORT_KEY}/events/${eventId}/odds`, {
+    apiKey: ODDS_API_KEY, regions: REGIONS, markets: PLAYER_PROP_MARKETS, oddsFormat: ODDS_FORMAT
+  });
   try {
     const data = await fetchJson(url);
     cacheSet(currentCache, key, data, CURRENT_TTL_MS);
     return data;
   } catch (err) {
-    console.error("getEventPlayerPropsByResolvedEvent failed:", err.message);
+    console.error("getEventPlayerProps failed:", err.message);
     return { bookmakers: [] };
   }
 }
 
-// ─── consensus extraction ─────────────────────────────────────────────────────
-function findMarket(bookmaker, key) { return bookmaker?.markets?.find(m => m.key === key) || null; }
+// ─── consensus extraction ──────────────────────────────────────────────────────
+function findMarket(bm, key) { return bm?.markets?.find(m => m.key === key) || null; }
 function extractFeaturedConsensus(eventOdds) {
   const homeProbPairs = [], awayProbPairs = [], homeProbRaw = [], awayProbRaw = [];
   const spreadSignals = [], totalSignals  = [], books = [];
 
   for (const bm of eventOdds?.bookmakers || []) {
-    const weight = getBookWeight(bm.key || "");
-    const h2h    = findMarket(bm, "h2h");
+    const weight  = getBookWeight(bm.key || "");
+    const h2h     = findMarket(bm, "h2h");
     const spreads = findMarket(bm, "spreads");
     const totals  = findMarket(bm, "totals");
     let bHP = null, bAP = null, bHS = null, bAS = null, bT = null;
@@ -346,23 +337,31 @@ function extractFeaturedConsensus(eventOdds) {
       }
     }
     if (spreads?.outcomes?.length >= 2) {
-      const hs = spreads.outcomes.find(o => o.name === eventOdds.home_team);
+      const hs  = spreads.outcomes.find(o => o.name === eventOdds.home_team);
       const as_ = spreads.outcomes.find(o => o.name === eventOdds.away_team);
-      if (hs && typeof hs.point === "number") { bHS = hs.point; spreadSignals.push({ value: clamp((-hs.point) * 0.0105, -0.10, 0.10), weight }); }
+      if (hs && typeof hs.point === "number") {
+        bHS = hs.point;
+        spreadSignals.push({ value: clamp((-hs.point) * 0.0105, -0.10, 0.10), weight });
+      }
       if (as_ && typeof as_.point === "number") bAS = as_.point;
     }
     if (totals?.outcomes?.length >= 2) {
       const ov = totals.outcomes.find(o => o.name === "Over");
       if (ov && typeof ov.point === "number") { bT = ov.point; totalSignals.push({ value: ov.point, weight }); }
     }
-    books.push({ book: bm.title || bm.key || "book", homePrice: roundToTwo(bHP), awayPrice: roundToTwo(bAP), homeSpread: roundToTwo(bHS), awaySpread: roundToTwo(bAS), total: roundToTwo(bT), homeAmerican: decimalToAmerican(bHP), awayAmerican: decimalToAmerican(bAP) });
+    books.push({
+      book: bm.title || bm.key || "book",
+      homePrice: roundToTwo(bHP), awayPrice: roundToTwo(bAP),
+      homeSpread: roundToTwo(bHS), awaySpread: roundToTwo(bAS), total: roundToTwo(bT),
+      homeAmerican: decimalToAmerican(bHP), awayAmerican: decimalToAmerican(bAP)
+    });
   }
   if (!homeProbPairs.length) return null;
 
-  const homeMarketProb  = weightedAverage(homeProbPairs);
-  const awayMarketProb  = weightedAverage(awayProbPairs);
-  const spreadAdj       = weightedAverage(spreadSignals) || 0;
-  const totalConsensus  = weightedAverage(totalSignals)  || 0;
+  const homeMarketProb = weightedAverage(homeProbPairs);
+  const awayMarketProb = weightedAverage(awayProbPairs);
+  const spreadAdj      = weightedAverage(spreadSignals) || 0;
+  const totalConsensus = weightedAverage(totalSignals)  || 0;
   let totalAdj = 0;
   if (totalConsensus < 220) totalAdj = 0.005;
   else if (totalConsensus > 236) totalAdj = -0.005;
@@ -392,51 +391,56 @@ async function buildHistoricalComparisons(homeTeam, awayTeam) {
       const found = (snap?.data || snap || []).find(e => teamsMatch(e, homeTeam, awayTeam));
       if (!found) { out[lb.label] = null; continue; }
       const c = extractFeaturedConsensus(found);
-      if (!c) { out[lb.label] = null; continue; }
-      out[lb.label] = { homeMarketProb: roundToTwo(c.homeMarketProb), awayMarketProb: roundToTwo(c.awayMarketProb), spreadAdj: roundToTwo(c.spreadAdj), totalAdj: roundToTwo(c.totalAdj), totalConsensus: roundToTwo(c.totalConsensus), disagreementPenalty: roundToTwo(c.disagreementPenalty) };
+      if (!c)  { out[lb.label] = null; continue; }
+      out[lb.label] = {
+        homeMarketProb: roundToTwo(c.homeMarketProb), awayMarketProb: roundToTwo(c.awayMarketProb),
+        spreadAdj: roundToTwo(c.spreadAdj), totalAdj: roundToTwo(c.totalAdj),
+        totalConsensus: roundToTwo(c.totalConsensus), disagreementPenalty: roundToTwo(c.disagreementPenalty)
+      };
     } catch { out[lb.label] = null; }
   }
   return out;
 }
 
-// ─── props ────────────────────────────────────────────────────────────────────
+// ─── props ─────────────────────────────────────────────────────────────────────
 function groupPlayerPropMarkets(propsEventOdds) {
   const g = {};
-  for (const bm of propsEventOdds?.bookmakers || []) {
+  for (const bm of propsEventOdds?.bookmakers || [])
     for (const mkt of bm.markets || []) {
       if (!g[mkt.key]) g[mkt.key] = [];
-      for (const o of mkt.outcomes || []) g[mkt.key].push({ book: bm.key, player: o.description || "", side: o.name || "", point: o.point ?? null, price: o.price ?? null });
+      for (const o of mkt.outcomes || [])
+        g[mkt.key].push({ book: bm.key, player: o.description || "", side: o.name || "", point: o.point ?? null, price: o.price ?? null });
     }
-  }
   return g;
-}
-function decidePropSide(row) {
-  if (typeof row.hitProbability !== "number" || !Number.isFinite(row.hitProbability)) return null;
-  return row.hitProbability > 0.5 ? { pick: "over", probability: row.hitProbability } : { pick: "under", probability: 1 - row.hitProbability };
 }
 function buildStructuredPropSections(propsEventOdds) {
   const gm = groupPlayerPropMarkets(propsEventOdds);
-  const marketMap = { player_points: "points", player_assists: "assists", player_rebounds: "rebounds", player_points_rebounds_assists: "pra" };
-  const sections  = { points: [], assists: [], rebounds: [], pra: [] };
+  const marketMap = {
+    player_points: "points", player_assists: "assists",
+    player_rebounds: "rebounds", player_points_rebounds_assists: "pra"
+  };
+  const sections = { points: [], assists: [], rebounds: [], pra: [] };
   for (const [mk, dk] of Object.entries(marketMap)) {
-    const outcomes = gm[mk] || {};
-    const grouped  = {};
+    const grouped = {};
     for (const o of gm[mk] || []) {
       const key = `${o.player}__${o.point}`;
       if (!grouped[key]) grouped[key] = { player: o.player, point: o.point, overPrices: [], underPrices: [] };
       if ((o.side || "").toLowerCase() === "over"  && typeof o.price === "number") grouped[key].overPrices.push(o.price);
       if ((o.side || "").toLowerCase() === "under" && typeof o.price === "number") grouped[key].underPrices.push(o.price);
     }
-    sections[dk] = Object.values(grouped)
-      .map(item => {
-        const avgOver  = average(item.overPrices), avgUnder = average(item.underPrices);
-        let hitProb = null;
-        if (typeof avgOver === "number" && typeof avgUnder === "number") hitProb = noVigTwoWayProb(avgOver, avgUnder).a;
-        else if (typeof avgOver === "number") hitProb = decimalToImpliedPercent(avgOver);
-        const dec = decidePropSide({ hitProbability: hitProb });
-        return { player: item.player, line: roundToTwo(item.point), overDecimal: roundToTwo(avgOver), overAmerican: decimalToAmerican(avgOver), hitProbability: roundToTwo(hitProb), coverage: item.overPrices.length + item.underPrices.length, pick: dec?.pick || null, pickProbability: roundToTwo(dec?.probability) };
-      })
-      .filter(r => r.player && typeof r.line === "number")
+    sections[dk] = Object.values(grouped).map(item => {
+      const avgOver = average(item.overPrices), avgUnder = average(item.underPrices);
+      let hitProb = null;
+      if (typeof avgOver === "number" && typeof avgUnder === "number") hitProb = noVigTwoWayProb(avgOver, avgUnder).a;
+      else if (typeof avgOver === "number") hitProb = decimalToImpliedPercent(avgOver);
+      const dec = hitProb != null ? (hitProb > 0.5 ? { pick: "over", probability: hitProb } : { pick: "under", probability: 1 - hitProb }) : null;
+      return {
+        player: item.player, line: roundToTwo(item.point),
+        overDecimal: roundToTwo(avgOver), overAmerican: decimalToAmerican(avgOver),
+        hitProbability: roundToTwo(hitProb), coverage: item.overPrices.length + item.underPrices.length,
+        pick: dec?.pick || null, pickProbability: roundToTwo(dec?.probability)
+      };
+    }).filter(r => r.player && typeof r.line === "number")
       .sort((a, b) => (b.coverage - a.coverage) || ((b.pickProbability || 0) - (a.pickProbability || 0)))
       .slice(0, 12);
   }
@@ -453,10 +457,7 @@ function buildPropSignal(ps) {
   return { adj: clamp((strength/Math.max(obs,1))*0.4,0,0.01), depth: obs };
 }
 
-// ─── injury / lineup helpers ──────────────────────────────────────────────────
-function buildNeutralInjuryStatus() {
-  return { available: false, homeInjuriesCount: 0, awayInjuriesCount: 0, lineupRowsCount: 0, homePenalty: 0, awayPenalty: 0, homeStartersOut: 0, awayStartersOut: 0, homeStarterCertainty: 0, awayStarterCertainty: 0, sourceSelection: { injuries: "not_enabled", lineups: "not_enabled", depth: "not_enabled" }, homeInjuries: [], awayInjuries: [], lineups: [] };
-}
+// ─── injury / lineup ───────────────────────────────────────────────────────────
 function normalizeRows(payload) {
   if (Array.isArray(payload)) return payload;
   if (Array.isArray(payload?.Data)) return payload.Data;
@@ -466,35 +467,35 @@ function normalizeRows(payload) {
   if (Array.isArray(payload?.depthcharts)) return payload.depthcharts;
   return [];
 }
-function buildBallDontLieHeaders() { return { Authorization: BALLDONTLIE_API_KEY }; }
-function normalizeBdlRows(p) { return Array.isArray(p) ? p : Array.isArray(p?.data) ? p.data : []; }
+function buildBdlHeaders() { return { Authorization: BALLDONTLIE_API_KEY }; }
+function normBdl(p) { return Array.isArray(p) ? p : Array.isArray(p?.data) ? p.data : []; }
 
-async function getBallDontLieInjuries() {
+async function getBdlInjuries() {
   if (!requireBallDontLieKey()) return { available: false, rows: [], source: "none" };
   const key = "bdl:injuries";
   const hit = cacheGet(sideInfoCache, key);
   if (hit) return hit;
   try {
-    const raw = await fetchJson("https://api.balldontlie.io/v1/player_injuries?per_page=100", { headers: buildBallDontLieHeaders() });
-    const val = { available: true, rows: normalizeBdlRows(raw), source: "balldontlie" };
+    const raw = await fetchJson("https://api.balldontlie.io/v1/player_injuries?per_page=100", { headers: buildBdlHeaders() });
+    const val = { available: true, rows: normBdl(raw), source: "balldontlie" };
     cacheSet(sideInfoCache, key, val, SIDEINFO_TTL_MS);
     return val;
-  } catch (err) { console.error("getBallDontLieInjuries failed:", err.message); return { available: false, rows: [], source: "none" }; }
+  } catch (err) { console.error("getBdlInjuries:", err.message); return { available: false, rows: [], source: "none" }; }
 }
-async function getBallDontLieLineups(dateStr = "") {
+async function getBdlLineups(dateStr = "") {
   if (!requireBallDontLieKey()) return { available: false, rows: [], source: "none" };
   const d = dateStr || todayYmd();
   const key = `bdl:lineups:${d}`;
   const hit = cacheGet(sideInfoCache, key);
   if (hit) return hit;
   try {
-    const raw = await fetchJson(`https://api.balldontlie.io/v1/lineups?dates[]=${encodeURIComponent(d)}&per_page=100`, { headers: buildBallDontLieHeaders() });
-    const val = { available: true, rows: normalizeBdlRows(raw), source: "balldontlie" };
+    const raw = await fetchJson(`https://api.balldontlie.io/v1/lineups?dates[]=${encodeURIComponent(d)}&per_page=100`, { headers: buildBdlHeaders() });
+    const val = { available: true, rows: normBdl(raw), source: "balldontlie" };
     cacheSet(sideInfoCache, key, val, SIDEINFO_TTL_MS);
     return val;
-  } catch (err) { console.error("getBallDontLieLineups failed:", err.message); return { available: false, rows: [], source: "none" }; }
+  } catch (err) { console.error("getBdlLineups:", err.message); return { available: false, rows: [], source: "none" }; }
 }
-async function getFantasyNerdsInjuries() {
+async function getFnInjuries() {
   if (!requireFantasyNerdsKey()) return { available: false, rows: [], source: "none" };
   const key = "fn:injuries";
   const hit = cacheGet(sideInfoCache, key);
@@ -504,9 +505,9 @@ async function getFantasyNerdsInjuries() {
     const val = { available: true, rows: normalizeRows(raw), source: "fantasynerds" };
     cacheSet(sideInfoCache, key, val, SIDEINFO_TTL_MS);
     return val;
-  } catch (err) { console.error("getFantasyNerdsInjuries failed:", err.message); return { available: false, rows: [], source: "none" }; }
+  } catch (err) { console.error("getFnInjuries:", err.message); return { available: false, rows: [], source: "none" }; }
 }
-async function getFantasyNerdsLineups(dateStr = "") {
+async function getFnLineups(dateStr = "") {
   if (!requireFantasyNerdsKey()) return { available: false, rows: [], source: "none" };
   const key = `fn:lineups:${dateStr || "today"}`;
   const hit = cacheGet(sideInfoCache, key);
@@ -516,9 +517,9 @@ async function getFantasyNerdsLineups(dateStr = "") {
     const val = { available: true, rows: normalizeRows(raw), source: "fantasynerds" };
     cacheSet(sideInfoCache, key, val, SIDEINFO_TTL_MS);
     return val;
-  } catch (err) { console.error("getFantasyNerdsLineups failed:", err.message); return { available: false, rows: [], source: "none" }; }
+  } catch (err) { console.error("getFnLineups:", err.message); return { available: false, rows: [], source: "none" }; }
 }
-async function getFantasyNerdsDepthCharts() {
+async function getFnDepthCharts() {
   if (!requireFantasyNerdsKey()) return { available: false, rows: [], source: "none" };
   const key = "fn:depthcharts";
   const hit = cacheGet(sideInfoCache, key);
@@ -528,25 +529,26 @@ async function getFantasyNerdsDepthCharts() {
     const val = { available: true, rows: normalizeRows(raw), source: "fantasynerds" };
     cacheSet(sideInfoCache, key, val, SIDEINFO_TTL_MS);
     return val;
-  } catch (err) { console.error("getFantasyNerdsDepthCharts failed:", err.message); return { available: false, rows: [], source: "none" }; }
+  } catch (err) { console.error("getFnDepthCharts:", err.message); return { available: false, rows: [], source: "none" }; }
 }
 async function getBestInjuries() {
-  const bdl = await getBallDontLieInjuries().catch(() => ({ available: false, rows: [] }));
+  const bdl = await getBdlInjuries().catch(() => ({ available: false, rows: [] }));
   if (bdl.available && bdl.rows.length) return bdl;
-  return await getFantasyNerdsInjuries().catch(() => ({ available: false, rows: [], source: "none" }));
+  return await getFnInjuries().catch(() => ({ available: false, rows: [], source: "none" }));
 }
 async function getBestLineups(dateStr = "") {
-  const bdl = await getBallDontLieLineups(dateStr).catch(() => ({ available: false, rows: [] }));
+  const bdl = await getBdlLineups(dateStr).catch(() => ({ available: false, rows: [] }));
   if (bdl.available && bdl.rows.length) return bdl;
-  return await getFantasyNerdsLineups(dateStr).catch(() => ({ available: false, rows: [], source: "none" }));
+  return await getFnLineups(dateStr).catch(() => ({ available: false, rows: [], source: "none" }));
 }
 async function getBestDepthCharts() {
-  return await getFantasyNerdsDepthCharts().catch(() => ({ available: false, rows: [], source: "none" }));
+  return await getFnDepthCharts().catch(() => ({ available: false, rows: [], source: "none" }));
 }
 
 function extractPlayerName(obj) {
   if (!obj) return "";
-  for (const k of ["PlayerName","playerName","name","Name","player","full_name","playername"]) if (typeof obj[k] === "string") return obj[k];
+  for (const k of ["PlayerName","playerName","name","Name","player","full_name","playername"])
+    if (typeof obj[k] === "string") return obj[k];
   if (obj.player && typeof obj.player === "object") {
     const full = `${obj.player.first_name||""} ${obj.player.last_name||""}`.trim();
     if (full) return full;
@@ -578,15 +580,14 @@ function depthRoleValue(row) {
   return 0.45;
 }
 function buildPlayerValueMap(ps) {
-  const map = {}, weights = { points: 1.0, assists: 0.9, rebounds: 0.8, pra: 1.2 };
-  for (const [sn, rows] of Object.entries(ps)) {
+  const map = {}, w = { points: 1.0, assists: 0.9, rebounds: 0.8, pra: 1.2 };
+  for (const [sn, rows] of Object.entries(ps))
     for (const r of rows || []) {
       const player = (r.player || "").toLowerCase().trim();
       if (!player) continue;
-      const score = (clamp((r.line||0)*0.01,0,0.6) + clamp((r.pickProbability||r.hitProbability||0.5)-0.5,0,0.25) + clamp((r.coverage||0)*0.015,0,0.15)) * (weights[sn]||1);
+      const score = (clamp((r.line||0)*0.01,0,0.6) + clamp((r.pickProbability||r.hitProbability||0.5)-0.5,0,0.25) + clamp((r.coverage||0)*0.015,0,0.15)) * (w[sn]||1);
       map[player] = (map[player] || 0) + score;
     }
-  }
   return map;
 }
 function findBestPlayerValue(name, map) {
@@ -595,7 +596,8 @@ function findBestPlayerValue(name, map) {
   if (map[key]) return map[key];
   const parts = key.split(" ").filter(Boolean);
   let best = 0;
-  for (const [c, v] of Object.entries(map)) if (parts.filter(p => c.includes(p)).length >= Math.min(2, parts.length)) best = Math.max(best, v);
+  for (const [c, v] of Object.entries(map))
+    if (parts.filter(p => c.includes(p)).length >= Math.min(2, parts.length)) best = Math.max(best, v);
   return best;
 }
 function summarizeInjuryLineup(homeTeam, awayTeam, injRows, linRows, depRows, ps) {
@@ -637,28 +639,47 @@ function summarizeInjuryLineup(homeTeam, awayTeam, injRows, linRows, depRows, ps
 
 async function safeGetLiveState({ gameId, homeTeam, awayTeam }) {
   try {
-    return await getLiveTrackerData({ gameId, homeTeam, awayTeam }) || { liveFound: false, homeScore: 0, awayScore: 0, period: 1, clockSec: 12*60, clock: "12:00" };
+    return await getLiveTrackerData({ gameId, homeTeam, awayTeam }) ||
+      { liveFound: false, homeScore: 0, awayScore: 0, period: 1, clockSec: 12*60, clock: "12:00" };
   } catch (err) {
     console.error("getLiveTrackerData failed:", err.message);
     return { liveFound: false, homeScore: 0, awayScore: 0, period: 1, clockSec: 12*60, clock: "12:00" };
   }
 }
 
-// ─── routes ───────────────────────────────────────────────────────────────────
-app.get("/", (req, res) => { res.sendFile(path.join(__dirname, "index.html")); });
+// ─── routes ────────────────────────────────────────────────────────────────────
+app.get("/", (req, res) => res.sendFile(path.join(__dirname, "index.html")));
 
 app.get("/health", (req, res) => {
-  res.json({ status: "ok", oddsApiKeyAdded: requireOddsKey(), fantasyNerdsKeyAdded: requireFantasyNerdsKey(), ballDontLieKeyAdded: requireBallDontLieKey(), mode: requireOddsKey() ? "live" : "mock", timestamp: new Date().toISOString() });
+  const summary = safeLearningSummary();
+  res.json({
+    status: "ok",
+    oddsApiKeyAdded: requireOddsKey(),
+    fantasyNerdsKeyAdded: requireFantasyNerdsKey(),
+    ballDontLieKeyAdded: requireBallDontLieKey(),
+    mode: requireOddsKey() ? "live" : "mock",
+    learning: {
+      totalSnapshots: summary.totalSnapshots || 0,
+      gradedSnapshots: summary.gradedSnapshots || 0,
+      overallWinRate: summary.overallWinRate != null ? Math.round(summary.overallWinRate * 1000) / 10 + "%" : "n/a"
+    },
+    learnedWeightsActive: JSON.stringify(learnedWeights) !== JSON.stringify(DEFAULT_WEIGHTS),
+    timestamp: new Date().toISOString()
+  });
 });
 
 app.get("/games", async (req, res) => {
   try {
     if (!requireOddsKey()) return res.status(400).json({ error: "Missing ODDS_API_KEY", games: [] });
-    const events = await getUpcomingEvents();
-    const now    = Date.now(), next24h = now + 24*60*60*1000;
-    const games  = (events || [])
+    const events  = await getUpcomingEvents();
+    const now     = Date.now(), next24h = now + 24 * 60 * 60 * 1000;
+    const games   = (events || [])
       .filter(e => new Date(e.commence_time).getTime() <= next24h)
-      .map(e => ({ id: e.id, label: `${e.away_team} @ ${e.home_team}`, homeTeam: e.home_team, awayTeam: e.away_team, commenceTime: e.commence_time, mode: buildMode(e.commence_time) }));
+      .map(e => ({
+        id: e.id, label: `${e.away_team} @ ${e.home_team}`,
+        homeTeam: e.home_team, awayTeam: e.away_team,
+        commenceTime: e.commence_time, mode: buildMode(e.commence_time)
+      }));
     res.json({ games });
   } catch (err) { res.status(500).json({ error: err.message, games: [] }); }
 });
@@ -670,33 +691,29 @@ app.get("/odds", async (req, res) => {
     const gameId   = req.query.gameId   || "";
     const homeTeam = req.query.homeTeam || "";
     const awayTeam = req.query.awayTeam || "";
-    if (!gameId && (!homeTeam || !awayTeam)) return res.status(400).json({ error: "Need either gameId or both homeTeam and awayTeam" });
+    if (!gameId && (!homeTeam || !awayTeam))
+      return res.status(400).json({ error: "Need gameId or homeTeam+awayTeam" });
 
-    // ── fetch all data concurrently ──────────────────────────────────────────
     const featured = await resolveFeaturedOdds({ gameId, homeTeam, awayTeam });
     const mode     = buildMode(featured.commence_time);
-
     const lineupDate = (featured.commence_time || "").slice(0, 10) || todayYmd();
 
-    const [
-      props,
-      historicalComparisons,
-      sideInfoResults,
-      liveStateRaw
-    ] = await Promise.all([
-      getEventPlayerPropsByResolvedEvent(featured.id),
+    // ── fetch everything concurrently ────────────────────────────────────────
+    const [props, historicalComparisons, sideInfo, liveStateRaw] = await Promise.all([
+      getEventPlayerProps(featured.id),
       buildHistoricalComparisons(featured.home_team, featured.away_team),
       Promise.allSettled([getBestInjuries(), getBestLineups(lineupDate), getBestDepthCharts()]),
-      mode === "live" ? safeGetLiveState({ gameId: featured.id, homeTeam: featured.home_team, awayTeam: featured.away_team }) : Promise.resolve(null)
+      mode === "live"
+        ? safeGetLiveState({ gameId: featured.id, homeTeam: featured.home_team, awayTeam: featured.away_team })
+        : Promise.resolve(null)
     ]);
 
-    const injuriesInfo = sideInfoResults[0].status === "fulfilled" ? sideInfoResults[0].value : { available: false, rows: [], source: "none" };
-    const lineupsInfo  = sideInfoResults[1].status === "fulfilled" ? sideInfoResults[1].value : { available: false, rows: [], source: "none" };
-    const depthInfo    = sideInfoResults[2].status === "fulfilled" ? sideInfoResults[2].value : { available: false, rows: [], source: "none" };
+    const injuriesInfo = sideInfo[0].status === "fulfilled" ? sideInfo[0].value : { available: false, rows: [], source: "none" };
+    const lineupsInfo  = sideInfo[1].status === "fulfilled" ? sideInfo[1].value : { available: false, rows: [], source: "none" };
+    const depthInfo    = sideInfo[2].status === "fulfilled" ? sideInfo[2].value : { available: false, rows: [], source: "none" };
 
-    const propSections = buildStructuredPropSections(props);
-    const propSignal   = buildPropSignal(propSections);
-
+    const propSections  = buildStructuredPropSections(props);
+    const propSignal    = buildPropSignal(propSections);
     const injurySummary = summarizeInjuryLineup(
       featured.home_team, featured.away_team,
       injuriesInfo.rows || [], lineupsInfo.rows || [], depthInfo.rows || [],
@@ -704,196 +721,156 @@ app.get("/odds", async (req, res) => {
     );
 
     // ── independent stats model ──────────────────────────────────────────────
-    // Run concurrently with market model; if it fails we gracefully degrade
     let statsResult = null;
     try {
       statsResult = await computeIndependentWinProb(
-        featured.home_team,
-        featured.away_team,
-        liveStateRaw
+        featured.home_team, featured.away_team, liveStateRaw
       );
     } catch (err) {
-      console.error("[stats_model] computeIndependentWinProb failed:", err.message);
+      console.error("[stats_model] failed:", err.message);
     }
 
-    // ── market model (existing) ──────────────────────────────────────────────
-    let marketModel;
-    let liveScoreState = null;
-
+    // ── market model ─────────────────────────────────────────────────────────
+    let marketModel, liveScoreState = null;
     if (mode === "live") {
       marketModel = buildEliteLiveModel({
-        featuredOdds:     featured,
-        liveState:        liveStateRaw,
-        pregameBaseline:  statsResult ? { homeMarketProb: statsResult.homeWinProb } : null,
-        calibrationFn:    safeApplyCalibration
+        featuredOdds: featured, liveState: liveStateRaw,
+        pregameBaseline: statsResult ? { homeMarketProb: statsResult.homeWinProb } : null,
+        calibrationFn: safeApplyCalibration
       });
       liveScoreState = { ...marketModel.scoreState, formattedClock: formatClockFromSeconds(marketModel.scoreState?.clockSec) };
     } else {
       marketModel = buildElitePregameModel({
-        featuredOdds:         featured,
-        historicalComparisons,
-        propSignal,
-        injurySummary,
+        featuredOdds: featured, historicalComparisons, propSignal, injurySummary,
         calibrationFn: safeApplyCalibration
       });
     }
 
-    // ── blend market + stats ──────────────────────────────────────────────────
-    // Determine pick side from the market model (it knows spreads, totals, etc.)
+    // ── AI: apply learned weights to compute blended true probability ─────────
+    // This replaces the hardcoded 55/45 blend with weights learned from
+    // thousands of graded historical snapshots.
     const pickSide = marketModel.pickSide;
     const pickTeam = marketModel.pickTeam;
-
-    // Market-based implied prob (no-vig, for the pick side)
     const marketImpliedProb = marketModel.impliedProbability;
 
-    // Blended true probability
-    let blendedTrueProb;
-    if (statsResult) {
-      blendedTrueProb = blendModelWithStats(
-        marketModel.trueProbability,
-        statsResult.homeWinProb,
-        pickSide
-      );
-    } else {
-      blendedTrueProb = marketModel.trueProbability;
-    }
+    const learnedTrueProb = applyLearnedWeights({
+      marketProb:   marketImpliedProb,
+      pickSide,
+      modelDetails: marketModel.modelDetails,
+      statsHomeProb: statsResult ? statsResult.homeWinProb : null,
+      weights:      learnedWeights
+    });
 
-    // Apply calibration to blended prob
-    const calibratedBlendedProb = safeApplyCalibration(blendedTrueProb);
-    const blendedEdge           = calibratedBlendedProb - marketImpliedProb;
+    const calibratedProb = safeApplyCalibration(learnedTrueProb);
+    const finalEdge      = calibratedProb - marketImpliedProb;
 
-    // ── edge from PURE stats model (the truly independent signal) ────────────
+    // ── stats-model-only edge (pure independent signal) ───────────────────────
     let statsEdgeResult = null;
     if (statsResult) {
       const statsPickProb = pickSide === "home" ? statsResult.homeWinProb : 1 - statsResult.homeWinProb;
       statsEdgeResult = computeEdge(statsPickProb, marketImpliedProb);
     }
 
-    // ── final verdict uses blended edge ──────────────────────────────────────
-    function buildFinalVerdict(edge, noBetFilter) {
+    // ── verdict using learned edge ────────────────────────────────────────────
+    function buildFinalVerdict(edge, noBetFilter, confidence) {
       if (noBetFilter?.blocked) return "Avoid";
-      if (edge >= 0.045 && (marketModel.confidence?.percent || 0) >= 0.62) return "Bet now";
+      if (edge >= 0.045 && (confidence?.percent || 0) >= 0.62) return "Bet now";
       if (edge >= 0.02) return "Watch";
       return "Avoid";
     }
-    const finalVerdict = buildFinalVerdict(blendedEdge, marketModel.noBetFilter);
+    const finalVerdict = buildFinalVerdict(finalEdge, marketModel.noBetFilter, marketModel.confidence);
 
-    // ── snapshot & edge history ───────────────────────────────────────────────
-    const timestamp = new Date().toISOString();
-    const pick      = `${pickTeam} to win`;
-    const edgeKey   = featured.id || gameId || `${featured.home_team}_${featured.away_team}`;
-    const smoothedEdge = addEdgeHistory(edgeKey, blendedEdge, timestamp);
+    // ── snapshot & edge history ────────────────────────────────────────────────
+    const timestamp  = new Date().toISOString();
+    const pick       = `${pickTeam} to win`;
+    const edgeKey    = featured.id || gameId || `${featured.home_team}_${featured.away_team}`;
+    const smoothedEdge = addEdgeHistory(edgeKey, finalEdge, timestamp);
 
     const snapshot = {
-      id: `${edgeKey}_${timestamp}`,
-      gameId: edgeKey,
+      id:           `${edgeKey}_${timestamp}`,
+      gameId:       edgeKey,
       timestamp,
-      commenceTime:    featured.commence_time,
-      homeTeam:        featured.home_team,
-      awayTeam:        featured.away_team,
+      commenceTime: featured.commence_time,
+      homeTeam:     featured.home_team,
+      awayTeam:     featured.away_team,
       mode,
       pickSide,
       pickTeam,
       pick,
-      impliedProbability:         roundToTwo(marketImpliedProb),
-      trueProbability:            roundToTwo(blendedTrueProb),
-      calibratedProbability:      roundToTwo(calibratedBlendedProb),
-      calibratedTrueProbability:  roundToTwo(calibratedBlendedProb),
-      rawEdge:                    roundToTwo(blendedEdge),
-      edge:                       roundToTwo(smoothedEdge),
-      calibratedEdge:             roundToTwo(blendedEdge),
-      sportsbookDecimal:          roundToTwo(marketModel.sportsbookDecimal),
-      verdict:                    finalVerdict,
-      confidenceLabel:            marketModel.confidence?.label || "Low",
-      confidencePercent:          marketModel.confidence?.percent ?? null,
+      impliedProbability:        roundToTwo(marketImpliedProb),
+      trueProbability:           roundToTwo(learnedTrueProb),
+      calibratedProbability:     roundToTwo(calibratedProb),
+      calibratedTrueProbability: roundToTwo(calibratedProb),
+      rawEdge:                   roundToTwo(finalEdge),
+      edge:                      roundToTwo(smoothedEdge),
+      calibratedEdge:            roundToTwo(finalEdge),
+      sportsbookDecimal:         roundToTwo(marketModel.sportsbookDecimal),
+      verdict:                   finalVerdict,
+      confidenceLabel:           marketModel.confidence?.label || "Low",
+      confidencePercent:         marketModel.confidence?.percent ?? null,
+      // Feature values used for weight learning (keep all for future training)
+      statsModelHomeProb:  statsResult ? roundToTwo(statsResult.homeWinProb) : null,
       ...(marketModel.modelDetails   || {}),
       ...(marketModel.featureSnapshot || {}),
-      statsModelHomeProb:         statsResult ? roundToTwo(statsResult.homeWinProb) : null,
       source: mode
     };
 
     logSnapshot(edgeKey, snapshot);
     safeRecordSnapshot({ ...snapshot, result: null });
 
-    // ── response ─────────────────────────────────────────────────────────────
-    const trueProbForUI = calibratedBlendedProb;
-
+    // ── response ──────────────────────────────────────────────────────────────
     res.json({
-      id:              featured.id,
-      homeTeam:        featured.home_team,
-      awayTeam:        featured.away_team,
-      commenceTime:    featured.commence_time,
-      gameMode:        mode,
-      pick,
-      verdict:         finalVerdict,
-      confidence: {
-        label:   marketModel.confidence?.label || "Low",
-        percent: roundToTwo(marketModel.confidence?.percent ?? null)
-      },
+      id: featured.id, homeTeam: featured.home_team, awayTeam: featured.away_team,
+      commenceTime: featured.commence_time, gameMode: mode, pick,
+      verdict: finalVerdict,
+      confidence: { label: marketModel.confidence?.label || "Low", percent: roundToTwo(marketModel.confidence?.percent ?? null) },
       noBetFilter: marketModel.noBetFilter || { blocked: false, reasons: [] },
 
-      // ── probabilities ─────────────────────────────────────────────────────
-      impliedProbability:         roundToTwo(marketImpliedProb),
-      impliedPercentFromOdds:     roundToTwo(marketImpliedProb),
-      trueProbability:            roundToTwo(trueProbForUI),
-      calibratedTrueProbability:  roundToTwo(calibratedBlendedProb),
-      impliedProbabilityFormats:  marketModel.impliedProbabilityFormats || buildProbabilityFormats(marketImpliedProb),
-      trueProbabilityFormats:     marketModel.trueProbabilityFormats    || buildProbabilityFormats(trueProbForUI),
+      impliedProbability:        roundToTwo(marketImpliedProb),
+      trueProbability:           roundToTwo(learnedTrueProb),
+      calibratedTrueProbability: roundToTwo(calibratedProb),
+      impliedProbabilityFormats: buildProbabilityFormats(marketImpliedProb),
+      trueProbabilityFormats:    buildProbabilityFormats(calibratedProb),
 
-      // ── edges ─────────────────────────────────────────────────────────────
       edge:           roundToTwo(smoothedEdge),
-      rawEdge:        roundToTwo(blendedEdge),
-      calibratedEdge: roundToTwo(blendedEdge),
+      rawEdge:        roundToTwo(finalEdge),
+      calibratedEdge: roundToTwo(finalEdge),
 
-      // ── independent model output (for display) ────────────────────────────
-      independentModel: statsResult ? {
-        homeWinProb:    roundToTwo(statsResult.homeWinProb),
-        awayWinProb:    roundToTwo(1 - statsResult.homeWinProb),
-        pregameProb:    roundToTwo(statsResult.pregameHomeProb),
-        pickSideProb:   roundToTwo(pickSide === "home" ? statsResult.homeWinProb : 1 - statsResult.homeWinProb),
-        statsEdge:      statsEdgeResult ? roundToTwo(statsEdgeResult.edge) : null,
-        statsVerdict:   statsEdgeResult?.verdict || null,
-        signals:        statsResult.signals,
-        meta:           statsResult.meta,
-        blendWeight:    STATS_MODEL_BLEND
-      } : null,
+      // What the learned model is actually doing
+      aiModel: {
+        activeWeights:      learnedWeights,
+        usingLearnedWeights: JSON.stringify(learnedWeights) !== JSON.stringify(DEFAULT_WEIGHTS),
+        statsBlendWeight:   roundToTwo(learnedWeights.statsBlend),
+        statsEdge:          statsEdgeResult ? roundToTwo(statsEdgeResult.edge)    : null,
+        statsVerdict:       statsEdgeResult ? statsEdgeResult.verdict             : null,
+        statsHomeWinProb:   statsResult     ? roundToTwo(statsResult.homeWinProb) : null,
+        statsSignals:       statsResult     ? statsResult.signals                 : null
+      },
 
-      // ── odds formats ──────────────────────────────────────────────────────
-      oddsFormats:           marketModel.oddsFormats || buildOddsFormatsFromDecimal(marketModel.sportsbookDecimal),
-      sportsbookOddsDecimal: roundToTwo(marketModel.sportsbookDecimal),
-      stakeSuggestion:       safeStakeSuggestion(marketModel.stakeSuggestion),
+      oddsFormats:     buildOddsFormatsFromDecimal(marketModel.sportsbookDecimal),
+      stakeSuggestion: safeStakeSuggestion(marketModel.stakeSuggestion),
 
-      // ── learning ─────────────────────────────────────────────────────────
       learningSummary:  safeLearningSummary(),
       calibrationTable: safeCalibrationTable(),
       history: (edgeHistoryStore[edgeKey] || []).map(p => ({ timestamp: p.timestamp, edge: roundToTwo(p.edge) })),
 
-      // ── details ───────────────────────────────────────────────────────────
-      modelDetails: {
-        ...(marketModel.modelDetails || {}),
-        historicalComparisons,
-        propSignal
-      },
+      modelDetails: { ...(marketModel.modelDetails || {}), historicalComparisons, propSignal },
       bookmakerTable: marketModel.bookmakerTable || [],
       propSections,
       injuryStatus: {
-        available:             injurySummary.available,
-        homeInjuriesCount:     injurySummary.homeInjuriesCount,
-        awayInjuriesCount:     injurySummary.awayInjuriesCount,
-        lineupRowsCount:       injurySummary.lineupRowsCount,
-        homePenalty:           roundToTwo(injurySummary.homePenalty),
-        awayPenalty:           roundToTwo(injurySummary.awayPenalty),
-        homeStartersOut:       injurySummary.homeStartersOut,
-        awayStartersOut:       injurySummary.awayStartersOut,
-        homeStarterCertainty:  roundToTwo(injurySummary.homeStarterCertainty),
-        awayStarterCertainty:  roundToTwo(injurySummary.awayStarterCertainty),
+        available: injurySummary.available,
+        homeInjuriesCount: injurySummary.homeInjuriesCount, awayInjuriesCount: injurySummary.awayInjuriesCount,
+        lineupRowsCount: injurySummary.lineupRowsCount,
+        homePenalty: roundToTwo(injurySummary.homePenalty), awayPenalty: roundToTwo(injurySummary.awayPenalty),
+        homeStartersOut: injurySummary.homeStartersOut,     awayStartersOut: injurySummary.awayStartersOut,
+        homeStarterCertainty: roundToTwo(injurySummary.homeStarterCertainty),
+        awayStarterCertainty: roundToTwo(injurySummary.awayStarterCertainty),
         sourceSelection: { injuries: injuriesInfo.source || "none", lineups: lineupsInfo.source || "none", depth: depthInfo.source || "none" },
-        homeInjuries: injurySummary.homeInjuries,
-        awayInjuries: injurySummary.awayInjuries,
-        lineups:      injurySummary.lineups
+        homeInjuries: injurySummary.homeInjuries, awayInjuries: injurySummary.awayInjuries,
+        lineups: injurySummary.lineups
       },
       scoreState: liveScoreState,
-      updatedAt:  timestamp
+      updatedAt: timestamp
     });
 
   } catch (err) {
@@ -905,11 +882,48 @@ app.get("/odds", async (req, res) => {
 app.get("/snapshots", (req, res) => {
   const gameId = req.query.gameId;
   if (!gameId) return res.status(400).json({ error: "Missing gameId" });
-  res.json({ gameId, snapshots: (snapshotLogStore[gameId] || []).map(s => ({ ...s, impliedProbability: roundToTwo(s.impliedProbability), trueProbability: roundToTwo(s.trueProbability), edge: roundToTwo(s.edge), calibratedEdge: roundToTwo(s.calibratedEdge) })) });
+  res.json({
+    gameId,
+    snapshots: (snapshotLogStore[gameId] || []).map(s => ({
+      ...s,
+      impliedProbability: roundToTwo(s.impliedProbability),
+      trueProbability:    roundToTwo(s.trueProbability),
+      edge:               roundToTwo(s.edge),
+      calibratedEdge:     roundToTwo(s.calibratedEdge)
+    }))
+  });
 });
 
-app.get("/learning/summary",      (req, res) => { try { res.json(safeLearningSummary()); }   catch (e) { res.status(500).json({ error: e.message }); } });
-app.get("/learning/calibration",  (req, res) => { try { res.json({ calibration: safeCalibrationTable() }); } catch (e) { res.status(500).json({ error: e.message }); } });
+app.get("/learning/summary",     (req, res) => { try { res.json(safeLearningSummary()); } catch (e) { res.status(500).json({ error: e.message }); } });
+app.get("/learning/calibration", (req, res) => { try { res.json({ calibration: safeCalibrationTable() }); } catch (e) { res.status(500).json({ error: e.message }); } });
+
+// NEW: expose current learned weights + diagnostics
+app.get("/learning/weights", (req, res) => {
+  try {
+    const fs   = require("fs");
+    const wf   = path.join(__dirname, "data", "learned_weights.json");
+    const meta = fs.existsSync(wf) ? JSON.parse(fs.readFileSync(wf, "utf8")).meta || {} : {};
+    res.json({
+      weights:             learnedWeights,
+      defaults:            DEFAULT_WEIGHTS,
+      deviations:          Object.fromEntries(
+        Object.entries(learnedWeights).map(([k, v]) => [k, roundToTwo(v - (DEFAULT_WEIGHTS[k] || 0))])
+      ),
+      usingLearnedWeights: JSON.stringify(learnedWeights) !== JSON.stringify(DEFAULT_WEIGHTS),
+      meta
+    });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// NEW: manually trigger a grading + learning pass
+app.post("/learning/run", async (req, res) => {
+  try {
+    const { gradeAllUngraded } = require("./auto_grader");
+    const result = await gradeAllUngraded();
+    learnedWeights = loadLearnedWeights();  // reload after potential update
+    res.json({ ...result, weightsReloaded: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
 
 app.get("/model/review", (req, res) => {
   try { res.json(buildModelReview(safeGetSnapshots())); }
@@ -923,8 +937,20 @@ app.post("/learning/grade", (req, res) => {
     if (!["home","away"].includes(finalWinner)) return res.status(400).json({ error: 'finalWinner must be "home" or "away"' });
     const updated     = safeUpdateGameResult({ gameId, finalWinner, finalHomeScore, finalAwayScore });
     const calibration = safeBuildCalibration();
+    learnedWeights    = loadLearnedWeights();
     res.json({ updatedSnapshots: updated, calibrationBuckets: Object.keys(calibration).length, learningSummary: safeLearningSummary() });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-app.listen(PORT, () => { console.log(`Server running on port ${PORT}`); });
+// ─── start ─────────────────────────────────────────────────────────────────────
+app.listen(PORT, () => {
+  console.log(`Server running on port ${PORT}`);
+  console.log(`Learned weights active: ${JSON.stringify(learnedWeights) !== JSON.stringify(DEFAULT_WEIGHTS)}`);
+
+  // Start the automated grading + learning loop
+  if (requireBallDontLieKey()) {
+    startAutoGradeScheduler(60 * 60 * 1000);  // grade every hour
+  } else {
+    console.warn("[server] BALLDONTLIE_API_KEY not set — auto-grader disabled.");
+  }
+});
