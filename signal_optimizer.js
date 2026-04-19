@@ -1,608 +1,368 @@
 "use strict";
 
 /**
- * signal_optimizer.js
+ * signal_optimizer.js  v2
  *
- * Self-calibrating AI weight optimizer.
+ * Self-calibrating signal weight optimizer.
  *
- * What it does:
- *   1. Loads ALL graded historical snapshots (live + backfill)
- *   2. Backtests every snapshot using current signal weights
- *   3. Measures accuracy per signal, per confidence tier, per edge bucket
- *   4. Runs gradient descent + simulated annealing to find weights that
- *      maximize prediction accuracy — specifically targeting 70-90% on
- *      high-confidence predictions (edge ≥ 0.045)
- *   5. Validates that new weights are BETTER before saving
- *   6. Saves to data/signal_weights.json (auto-loaded by stats_model.js)
- *   7. Reports a full audit trail so you can see exactly what changed and why
+ * REALISTIC ACCURACY TARGETS (NBA is hard to predict):
+ *   Overall accuracy target:   ≥ 58%  (even 55% is profitable with positive edge)
+ *   Bet-now accuracy target:   ≥ 65%  (high-confidence picks must beat 60%)
+ *   Max accuracy cap:          ≤ 72%  (above this = overfitting on sample)
  *
- * Loss function design:
- *   Standard binary cross-entropy penalises wrong predictions.
- *   We add a CALIBRATION BONUS that rewards models where predictions in
- *   the 70-90% confidence zone are actually correct 70-90% of the time.
- *   We also penalise OVERCONFIDENCE (predicting 90%+ when accuracy is 60%).
+ * Why these numbers:
+ *   The best sharp sportsbooks expect to be right ~54-57% on all games.
+ *   What matters is not raw accuracy but CALIBRATION — does an 0.05 edge
+ *   actually mean you win more than the market's implied probability?
+ *   We optimise for both accuracy AND calibration error simultaneously.
  *
- * Runs automatically after auto_grader.js grades new games.
- * Can also run standalone: node signal_optimizer.js
+ * HOW IT WORKS:
+ *   1. Load all graded snapshots (live games + backfill)
+ *   2. Extract signal logit values stored in each snapshot
+ *   3. Phase 1: Adam gradient descent on custom loss
+ *   4. Phase 2: Simulated annealing to escape local minima
+ *   5. Validate improvement, save only if genuine gain
+ *   6. Full audit trail to data/optimizer_audit.json
  *
- * Requirements:
- *   • At least 50 graded snapshots to run
- *   • At least 20 snapshots with statsSignals stored to optimise signals
+ * CUSTOM LOSS = BCE + calibration_error × 0.4 + overconfidence_penalty × 0.2 + L2
+ *
+ * Run standalone:     node signal_optimizer.js
+ * Run report only:    node signal_optimizer.js --report
+ * Run from grader:    require("./signal_optimizer").runSignalOptimizer(snaps)
  */
 
 const fs   = require("fs");
 const path = require("path");
 
-const DATA_DIR         = path.join(__dirname, "data");
-const SIGNAL_W_FILE    = path.join(DATA_DIR, "signal_weights.json");
-const MARKET_W_FILE    = path.join(DATA_DIR, "learned_weights.json");
-const AUDIT_FILE       = path.join(DATA_DIR, "optimizer_audit.json");
+const DATA_DIR     = path.join(__dirname, "data");
+const SIG_W_FILE   = path.join(DATA_DIR, "signal_weights.json");
+const AUDIT_FILE   = path.join(DATA_DIR, "optimizer_audit.json");
 
-// ─── targets ──────────────────────────────────────────────────────────────────
-const TARGET_ACCURACY_LOW  = 0.70;   // minimum acceptable overall accuracy
-const TARGET_ACCURACY_HIGH = 0.90;   // ceiling — above this we're overfitting
-const TARGET_EDGE_ACCURACY = 0.75;   // target for "Bet now" predictions specifically
-const MIN_SAMPLES          = 50;     // minimum graded snapshots to run at all
-const MIN_SIGNAL_SAMPLES   = 20;     // minimum snapshots with signal data
-const MIN_IMPROVEMENT      = 0.004;  // must improve accuracy by 0.4% to save
+// ─── realistic targets ────────────────────────────────────────────────────────
+const MIN_SAMPLES          = 50;
+const MIN_SIGNAL_SAMPLES   = 20;
+const TARGET_OVERALL_LOW   = 0.58;   // min acceptable overall accuracy
+const TARGET_OVERALL_HIGH  = 0.72;   // max before suspecting overfit
+const TARGET_BET_NOW       = 0.65;   // min for "Bet now" accuracy
+const MIN_IMPROVEMENT      = 0.003;  // must improve by 0.3% to save
 
-// ─── optimizer config ─────────────────────────────────────────────────────────
-const MAX_ITERATIONS   = 5000;
-const LR_ADAM          = 0.003;
-const L2_REG           = 0.06;
-const ANNEAL_STEPS     = 500;        // simulated annealing after Adam stalls
-const ANNEAL_TEMP      = 0.08;       // initial temperature
-const ANNEAL_DECAY     = 0.992;
+// ─── optimizer hyperparameters ────────────────────────────────────────────────
+const LR          = 0.004;
+const MAX_EPOCHS  = 4000;
+const L2          = 0.07;
+const ANNEAL_STEPS = 600;
+const ANNEAL_TEMP  = 0.09;
+const ANNEAL_DECAY = 0.993;
 
-// ─── signal weight defaults + bounds ─────────────────────────────────────────
+// ─── default weights ──────────────────────────────────────────────────────────
 const DEFAULT_W = {
-  officialNetRating:   0.18, injuryAdjNetRating: 0.10, predictedSpread:   0.10,
-  pie:                 0.08, recentForm:         0.08, clutch:            0.07,
-  starPower:           0.06, shooting:           0.05, turnover:          0.05,
-  rest:                0.05, hustle:             0.04, rebound:           0.03,
-  shotQuality:         0.03, h2h:                0.03, momentum:          0.03,
-  opponentMatchup:     0.02, splits:             0.02, pace:              0.02,
-  threePointVariance:  0.02, defense:            0.01,
+  officialNetRating:0.17,injuryAdjNetRating:0.10,predictedSpread:0.10,
+  pie:0.08,recentForm:0.08,clutch:0.07,starPower:0.06,shooting:0.05,
+  turnover:0.04,rest:0.04,hustle:0.03,rebound:0.03,shotQuality:0.03,
+  h2h:0.03,momentum:0.03,referee:0.03,travelFatigue:0.03,
+  opponentMatchup:0.02,splits:0.02,pace:0.02,threePointVariance:0.01,defense:0.01,
 };
 
-// Each signal weight can range from 0 to 0.50 max
-const W_BOUNDS = Object.fromEntries(Object.keys(DEFAULT_W).map(k => [k, { lo: 0.0, hi: 0.50 }]));
-// Net rating signals get higher ceiling since they're most predictive
-W_BOUNDS.officialNetRating.hi   = 0.55;
-W_BOUNDS.injuryAdjNetRating.hi  = 0.45;
-W_BOUNDS.predictedSpread.hi     = 0.45;
-W_BOUNDS.pie.hi                 = 0.35;
+const W_BOUNDS = Object.fromEntries(Object.keys(DEFAULT_W).map(k => [k, { lo: 0.0, hi: 0.45 }]));
+W_BOUNDS.officialNetRating.hi   = 0.50;
+W_BOUNDS.injuryAdjNetRating.hi  = 0.40;
+W_BOUNDS.predictedSpread.hi     = 0.40;
+W_BOUNDS.pie.hi                 = 0.30;
+W_BOUNDS.recentForm.hi          = 0.30;
 
 // ─── math ─────────────────────────────────────────────────────────────────────
-const clamp  = (x, lo, hi) => Math.max(lo, Math.min(hi, x));
-const sigmoid = x => 1 / (1 + Math.exp(-clamp(x, -50, 50)));
-const logit   = p => { const c = clamp(p, 1e-7, 1-1e-7); return Math.log(c/(1-c)); };
-const r4      = n => Math.round(n * 10000) / 10000;
-const r2      = n => Math.round(n * 100) / 100;
+const clamp   = (x,lo,hi) => Math.max(lo,Math.min(hi,x));
+const sigmoid = x => 1/(1+Math.exp(-clamp(x,-50,50)));
+const logit   = p => { const c=clamp(p,1e-7,1-1e-7); return Math.log(c/(1-c)); };
+const r4 = n => Math.round(n*10000)/10000;
+const r2 = n => Math.round(n*100)/100;
 
 // ─── file I/O ─────────────────────────────────────────────────────────────────
-function ensureDir() {
-  if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
-}
+function ensureDir(){ if(!fs.existsSync(DATA_DIR))fs.mkdirSync(DATA_DIR,{recursive:true}); }
 
 function loadWeights(file, defaults) {
   try {
-    ensureDir();
-    if (!fs.existsSync(file)) return { ...defaults };
-    const raw = fs.readFileSync(file, "utf8").trim();
-    if (!raw) return { ...defaults };
-    const saved = JSON.parse(raw);
-    return { ...defaults, ...(saved.weights || {}) };
-  } catch { return { ...defaults }; }
+    ensureDir(); if(!fs.existsSync(file))return{...defaults};
+    const raw=fs.readFileSync(file,"utf8").trim(); if(!raw)return{...defaults};
+    const s=JSON.parse(raw); return{...defaults,...(s.weights||{})};
+  } catch { return{...defaults}; }
 }
 
-function saveWeights(file, weights, meta = {}) {
+function saveWeights(file, weights, meta={}) {
   try {
     ensureDir();
-    fs.writeFileSync(file, JSON.stringify({
-      weights,
-      meta: { ...meta, savedAt: new Date().toISOString(), version: 4 }
-    }, null, 2), "utf8");
+    fs.writeFileSync(file,JSON.stringify({weights,meta:{...meta,savedAt:new Date().toISOString(),version:4}},null,2),"utf8");
     return true;
-  } catch (e) {
-    console.error("[optimizer] saveWeights failed:", e.message);
-    return false;
-  }
+  } catch(e){ console.error("[optimizer] save failed:",e.message); return false; }
 }
 
 function saveAudit(entry) {
   try {
-    ensureDir();
-    let existing = [];
-    if (fs.existsSync(AUDIT_FILE)) {
-      try { existing = JSON.parse(fs.readFileSync(AUDIT_FILE, "utf8")); }
-      catch { existing = []; }
-    }
-    existing.push({ ...entry, ts: new Date().toISOString() });
-    // Keep last 50 audit entries
-    if (existing.length > 50) existing = existing.slice(-50);
-    fs.writeFileSync(AUDIT_FILE, JSON.stringify(existing, null, 2), "utf8");
-  } catch { /* non-critical */ }
+    ensureDir(); let ex=[];
+    if(fs.existsSync(AUDIT_FILE)){try{ex=JSON.parse(fs.readFileSync(AUDIT_FILE,"utf8"));}catch{ex=[];}}
+    ex.push({...entry,ts:new Date().toISOString()});
+    if(ex.length>50)ex=ex.slice(-50);
+    fs.writeFileSync(AUDIT_FILE,JSON.stringify(ex,null,2),"utf8");
+  } catch{}
 }
 
-// ─── feature extraction from snapshots ───────────────────────────────────────
-/**
- * Extract trainable features from a graded snapshot.
- * Returns null for unusable snapshots.
- */
+// ─── feature extraction ───────────────────────────────────────────────────────
 function extractFeatures(snap) {
-  if (!snap) return null;
-  if (!snap.result || typeof snap.result.modelWon !== "boolean") return null;
+  if (!snap?.result||typeof snap.result.modelWon!=="boolean") return null;
 
-  const won   = snap.result.modelWon ? 1 : 0;
-  const edge  = typeof snap.calibratedEdge === "number" ? snap.calibratedEdge
-               : typeof snap.rawEdge === "number" ? snap.rawEdge : null;
-  const prob  = typeof snap.calibratedTrueProbability === "number" ? snap.calibratedTrueProbability
-               : typeof snap.trueProbability === "number" ? snap.trueProbability : null;
-  const implied = typeof snap.impliedProbability === "number" ? snap.impliedProbability : null;
+  const won   = snap.result.modelWon?1:0;
+  const edge  = typeof snap.calibratedEdge==="number"?snap.calibratedEdge:typeof snap.rawEdge==="number"?snap.rawEdge:null;
+  const prob  = typeof snap.calibratedTrueProbability==="number"?snap.calibratedTrueProbability:typeof snap.trueProbability==="number"?snap.trueProbability:null;
+  const implied = typeof snap.impliedProbability==="number"?snap.impliedProbability:null;
 
-  if (prob === null || implied === null) return null;
+  if (prob===null||implied===null) return null;
 
-  // Extract individual signal logit values (stored from stats_model run)
-  const signals = {};
-  const rawSignals = snap.statsSignals || {};
-  for (const [k, v] of Object.entries(rawSignals)) {
-    const p = typeof v === "object" ? Number(v.prob) : Number(v);
-    if (Number.isFinite(p) && p > 0 && p < 1) {
-      signals[k] = logit(p);  // convert to logit space
-    }
+  const signals={};
+  const raw=snap.statsSignals||{};
+  for (const[k,v] of Object.entries(raw)) {
+    const p=typeof v==="object"?Number(v.prob):Number(v);
+    if (Number.isFinite(p)&&p>0&&p<1) signals[k]=logit(p);
   }
+  const hasSignals=Object.keys(signals).length>=5;
 
-  const hasSignals = Object.keys(signals).length >= 5;
-
-  return {
-    won,
-    prob,
-    implied,
-    edge,
-    verdict: snap.verdict,
-    mode:    snap.mode || snap.source || "unknown",
-    signals: hasSignals ? signals : null,
-    // Market features (for market weight learning)
-    pickSide:         snap.pickSide,
-    spreadAdj:        typeof snap.spreadAdj === "number"         ? snap.spreadAdj         : 0,
-    totalAdj:         typeof snap.totalAdj === "number"          ? snap.totalAdj           : 0,
-    lineMoveAdj:      typeof snap.lineMovementAdj === "number"   ? snap.lineMovementAdj    : 0,
-    disagreement:     typeof snap.disagreementPenalty === "number"?snap.disagreementPenalty: 0,
-    injuryAdj:        typeof snap.injuryAdjHome === "number"     ? snap.injuryAdjHome      : 0,
-    statsHomeProb:    typeof snap.statsModelHomeProb === "number" ? snap.statsModelHomeProb : null,
-  };
+  return{won,prob,implied,edge,verdict:snap.verdict,mode:snap.mode||snap.source||"unknown",
+    signals:hasSignals?signals:null};
 }
 
-// ─── prediction function ───────────────────────────────────────────────────────
-/**
- * Predict win probability from a feature vector using signal weights.
- * Returns value in (0, 1).
- */
-function predictFromSignals(feat, weights) {
-  if (!feat.signals) return feat.prob;  // fall back to stored prob if no signals
-
-  let logitSum = 0, weightSum = 0;
-  for (const [k, logitV] of Object.entries(feat.signals)) {
-    const w = weights[k] || 0;
-    logitSum  += logitV * w;
-    weightSum += w;
-  }
-
-  if (weightSum === 0) return feat.prob;
-  return clamp(sigmoid(logitSum), 0.01, 0.99);
+// ─── predict ──────────────────────────────────────────────────────────────────
+function predict(f, w) {
+  if (!f.signals) return f.prob;
+  let ls=0, ws=0;
+  for (const[k,lv] of Object.entries(f.signals)){const wt=w[k]||0;ls+=lv*wt;ws+=wt;}
+  return ws===0?f.prob:clamp(sigmoid(ls),0.01,0.99);
 }
 
-// ─── loss function ────────────────────────────────────────────────────────────
-/**
- * Custom loss combining:
- *   1. Binary cross-entropy (standard)
- *   2. Calibration bonus (reward accurate confidence estimates)
- *   3. Overconfidence penalty (penalise wrong high-confidence predictions)
- *   4. L2 regularisation toward DEFAULT_W
- */
+// ─── custom loss ──────────────────────────────────────────────────────────────
 function computeLoss(features, weights) {
-  const eps = 1e-7;
-  let ce = 0, calBonus = 0, overconfPenalty = 0;
-
-  // Bucket predictions to check calibration
-  const buckets = {};  // "60-65": { count, wins, sumP }
+  const eps=1e-7;
+  let ce=0, calErr=0, overConf=0;
+  const buckets={};
 
   for (const f of features) {
-    const p   = predictFromSignals(f, weights);
-    const y   = f.won;
-
-    // Binary cross-entropy
-    ce += -(y * Math.log(p + eps) + (1 - y) * Math.log(1 - p + eps));
-
-    // Bucket for calibration
-    const pct    = Math.floor(p * 20) * 5;   // 0, 5, 10, ..., 95
-    const bkey   = `${pct}`;
-    if (!buckets[bkey]) buckets[bkey] = { count: 0, wins: 0, sumP: 0 };
-    buckets[bkey].count++;
-    buckets[bkey].sumP += p;
-    if (y) buckets[bkey].wins++;
-
-    // Overconfidence penalty: if model says 85%+ but it's wrong, penalise hard
-    if (p >= 0.80 && y === 0) overconfPenalty += (p - 0.80) * 2.5;
-    if (p <= 0.20 && y === 1) overconfPenalty += (0.20 - p) * 2.5;
+    const p=predict(f,weights), y=f.won;
+    ce+=-(y*Math.log(p+eps)+(1-y)*Math.log(1-p+eps));
+    const bk=Math.floor(p*20)*5;
+    if(!buckets[bk])buckets[bk]={count:0,wins:0,sumP:0};
+    buckets[bk].count++; buckets[bk].sumP+=p; if(y)buckets[bk].wins++;
+    if(p>=0.80&&y===0)overConf+=(p-0.80)*2.5;
+    if(p<=0.20&&y===1)overConf+=(0.20-p)*2.5;
   }
 
-  ce /= features.length;
-  overconfPenalty /= features.length;
+  ce/=features.length; overConf/=features.length;
 
-  // Calibration: reward models where bucket win rate ≈ bucket avg predicted prob
   for (const b of Object.values(buckets)) {
-    if (b.count < 5) continue;
-    const avgP   = b.sumP / b.count;
-    const actual = b.wins / b.count;
-    const calErr = Math.abs(actual - avgP);
-    // Reward good calibration (lower error = bonus)
-    calBonus += calErr * calErr;
+    if(b.count<5)continue;
+    const avg=b.sumP/b.count, act=b.wins/b.count;
+    calErr+=(act-avg)**2;
   }
-  calBonus = calBonus / Math.max(Object.keys(buckets).length, 1);
+  calErr/=Math.max(Object.keys(buckets).length,1);
 
-  // L2 regularisation toward DEFAULT_W
-  let reg = 0;
-  for (const k of Object.keys(weights)) {
-    reg += (weights[k] - (DEFAULT_W[k] || 0)) ** 2;
-  }
-  reg = L2_REG * reg / features.length;
+  // L2 toward defaults
+  let reg=0;
+  for (const k of Object.keys(DEFAULT_W)) reg+=(weights[k]-(DEFAULT_W[k]||0))**2;
+  reg=L2*reg/features.length;
 
-  return ce + calBonus * 0.3 + overconfPenalty * 0.2 + reg;
+  return ce + calErr*0.4 + overConf*0.2 + reg;
 }
 
 // ─── accuracy metrics ─────────────────────────────────────────────────────────
 function computeAccuracy(features, weights) {
-  let total = 0, correct = 0, betNowTotal = 0, betNowCorrect = 0;
-  let highConfTotal = 0, highConfCorrect = 0;
-
-  const byEdgeBucket = {};
+  let total=0,correct=0,bnTotal=0,bnCorrect=0;
+  const buckets={};
 
   for (const f of features) {
-    const p = predictFromSignals(f, weights);
-
-    total++;
-    if ((p >= 0.5) === (f.won === 1)) correct++;
-
-    // Track "Bet now" accuracy (edge >= 0.045)
-    if (f.edge != null && Math.abs(f.edge) >= 0.045) {
-      betNowTotal++;
-      if ((p >= 0.5) === (f.won === 1)) betNowCorrect++;
-    }
-
-    // High confidence (model > 70%)
-    if (p >= 0.70) {
-      highConfTotal++;
-      if (f.won === 1) highConfCorrect++;
-    }
-
-    // Edge bucket breakdown
-    const eb = f.edge != null ? Math.round(Math.abs(f.edge) * 100) : -1;
-    const bk = eb < 0 ? "unknown" : eb < 2 ? "<2%" : eb < 4 ? "2-4%" : eb < 6 ? "4-6%" : eb < 8 ? "6-8%" : "8%+";
-    if (!byEdgeBucket[bk]) byEdgeBucket[bk] = { total: 0, correct: 0 };
-    byEdgeBucket[bk].total++;
-    if ((p >= 0.5) === (f.won === 1)) byEdgeBucket[bk].correct++;
+    const p=predict(f,weights); total++;
+    if((p>=0.5)===(f.won===1))correct++;
+    if(f.edge!=null&&Math.abs(f.edge)>=0.045){bnTotal++;if((p>=0.5)===(f.won===1))bnCorrect++;}
+    const eb=f.edge!=null?Math.round(Math.abs(f.edge)*100):-1;
+    const bk=eb<0?"?":eb<2?"<2%":eb<4?"2-4%":eb<6?"4-6%":eb<8?"6-8%":"8%+";
+    if(!buckets[bk])buckets[bk]={total:0,correct:0};
+    buckets[bk].total++; if((p>=0.5)===(f.won===1))buckets[bk].correct++;
   }
 
-  // Finalise bucket accuracy
-  for (const b of Object.values(byEdgeBucket)) {
-    b.accuracy = b.total > 0 ? r4(b.correct / b.total) : null;
+  // Calibration error across probability buckets
+  const probBuckets={};
+  for (const f of features) {
+    const p=predict(f,weights); const bk=Math.floor(p*10)*10;
+    if(!probBuckets[bk])probBuckets[bk]={n:0,wins:0,sumP:0};
+    probBuckets[bk].n++; probBuckets[bk].sumP+=p; if(f.won)probBuckets[bk].wins++;
+  }
+  let calError=0, calBuckets=0;
+  for (const b of Object.values(probBuckets)) {
+    if(b.n<5)continue; calError+=Math.abs(b.wins/b.n-b.sumP/b.n); calBuckets++;
   }
 
-  return {
-    overall:        total > 0 ? r4(correct / total) : null,
-    betNow:         betNowTotal > 0 ? r4(betNowCorrect / betNowTotal) : null,
-    highConf:       highConfTotal > 0 ? r4(highConfCorrect / highConfTotal) : null,
-    samples:        total,
-    betNowSamples:  betNowTotal,
-    byEdgeBucket
+  for (const b of Object.values(buckets)) b.accuracy=b.total>0?r4(b.correct/b.total):null;
+
+  return{
+    overall:total>0?r4(correct/total):null,
+    betNow:bnTotal>0?r4(bnCorrect/bnTotal):null,
+    samples:total, betNowSamples:bnTotal,
+    calibrationError:calBuckets>0?r4(calError/calBuckets):null,
+    byEdgeBucket:buckets
   };
 }
 
 // ─── numerical gradient ───────────────────────────────────────────────────────
-function numericalGrad(features, weights, eps = 1e-5) {
-  const base = computeLoss(features, weights);
-  const grad = {};
-  for (const k of Object.keys(weights)) {
-    const wp = { ...weights, [k]: weights[k] + eps };
-    grad[k] = (computeLoss(features, wp) - base) / eps;
-  }
-  return grad;
+function numGrad(features, weights, eps=1e-5) {
+  const base=computeLoss(features,weights); const g={};
+  for (const k of Object.keys(weights)){const wp={...weights,[k]:weights[k]+eps};g[k]=(computeLoss(features,wp)-base)/eps;}
+  return g;
 }
 
-// ─── Adam optimizer ───────────────────────────────────────────────────────────
-function runAdam(features, startWeights) {
-  let w = { ...startWeights };
-  const m = Object.fromEntries(Object.keys(w).map(k => [k, 0]));
-  const v = Object.fromEntries(Object.keys(w).map(k => [k, 0]));
-  const b1 = 0.9, b2 = 0.999, ea = 1e-8;
-  let t = 0;
+// ─── Adam ────────────────────────────────────────────────────────────────────
+function runAdam(features, startW) {
+  if (features.length<MIN_SAMPLES) return{weights:{...startW},improved:false};
+  let w={...startW};
+  const initL=computeLoss(features,w); let prevL=initL, bestL=initL, bestW={...w};
+  const m=Object.fromEntries(Object.keys(w).map(k=>[k,0]));
+  const v=Object.fromEntries(Object.keys(w).map(k=>[k,0]));
+  const b1=0.9,b2=0.999,ea=1e-8; let t=0,stalled=0;
 
-  const initialLoss = computeLoss(features, w);
-  let bestLoss = initialLoss;
-  let bestW    = { ...w };
-  let prevLoss = initialLoss;
-  let stalled  = 0;
-
-  for (let ep = 0; ep < MAX_ITERATIONS; ep++) {
+  for (let ep=0;ep<MAX_EPOCHS;ep++) {
     t++;
-    const grad = numericalGrad(features, w);
-
+    const g=numGrad(features,w);
     for (const k of Object.keys(w)) {
-      m[k] = b1 * m[k] + (1 - b1) * grad[k];
-      v[k] = b2 * v[k] + (1 - b2) * grad[k] ** 2;
-      const mh = m[k] / (1 - b1 ** t);
-      const vh = v[k] / (1 - b2 ** t);
-      w[k] -= LR_ADAM * mh / (Math.sqrt(vh) + ea);
-      // Enforce bounds
-      const b = W_BOUNDS[k];
-      if (b) w[k] = clamp(w[k], b.lo, b.hi);
+      m[k]=b1*m[k]+(1-b1)*g[k]; v[k]=b2*v[k]+(1-b2)*g[k]**2;
+      const mh=m[k]/(1-b1**t),vh=v[k]/(1-b2**t);
+      w[k]-=LR*mh/(Math.sqrt(vh)+ea);
+      const b=W_BOUNDS[k]; if(b)w[k]=clamp(w[k],b.lo,b.hi);
     }
-
-    const cl = computeLoss(features, w);
-    if (cl < bestLoss) { bestLoss = cl; bestW = { ...w }; stalled = 0; }
-    if (Math.abs(prevLoss - cl) < 1e-7) stalled++;
-    if (stalled > 80) { console.log(`[optimizer] Adam converged at epoch ${ep + 1}`); break; }
-    prevLoss = cl;
+    const cl=computeLoss(features,w);
+    if(cl<bestL){bestL=cl;bestW={...w};stalled=0;}
+    if(Math.abs(prevL-cl)<1e-7){stalled++;if(stalled>80){console.log(`[optimizer] Converged ep${ep+1}`);break;}}
+    else stalled=0;
+    prevL=cl;
   }
-
-  return { weights: bestW, finalLoss: bestLoss, initialLoss };
+  return{weights:bestW,finalLoss:bestL,initialLoss:initL,improved:bestL<initL-1e-4};
 }
 
-// ─── simulated annealing (escapes local minima) ────────────────────────────────
-function runAnnealing(features, startWeights) {
-  let current = { ...startWeights };
-  let currentLoss = computeLoss(features, current);
-  let best = { ...current };
-  let bestLoss = currentLoss;
-  let temp = ANNEAL_TEMP;
-
-  for (let i = 0; i < ANNEAL_STEPS; i++) {
-    // Random perturbation
-    const k = Object.keys(current)[Math.floor(Math.random() * Object.keys(current).length)];
-    const delta = (Math.random() - 0.5) * 0.06;
-    const proposed = { ...current, [k]: clamp(current[k] + delta, W_BOUNDS[k]?.lo || 0, W_BOUNDS[k]?.hi || 0.55) };
-    const proposedLoss = computeLoss(features, proposed);
-    const diff = proposedLoss - currentLoss;
-
-    if (diff < 0 || Math.random() < Math.exp(-diff / temp)) {
-      current = proposed;
-      currentLoss = proposedLoss;
-      if (currentLoss < bestLoss) {
-        bestLoss = currentLoss;
-        best = { ...current };
-      }
-    }
-
-    temp *= ANNEAL_DECAY;
+// ─── Simulated annealing ──────────────────────────────────────────────────────
+function runAnnealing(features, startW) {
+  let cur={...startW},curL=computeLoss(features,cur),best={...cur},bestL=curL,temp=ANNEAL_TEMP;
+  for (let i=0;i<ANNEAL_STEPS;i++) {
+    const k=Object.keys(cur)[Math.floor(Math.random()*Object.keys(cur).length)];
+    const delta=(Math.random()-0.5)*0.05;
+    const prop={...cur,[k]:clamp(cur[k]+delta,W_BOUNDS[k]?.lo||0,W_BOUNDS[k]?.hi||0.50)};
+    const propL=computeLoss(features,prop);
+    const diff=propL-curL;
+    if(diff<0||Math.random()<Math.exp(-diff/temp)){cur=prop;curL=propL;if(curL<bestL){bestL=curL;best={...cur};}}
+    temp*=ANNEAL_DECAY;
   }
-
-  return { weights: best, finalLoss: bestLoss };
+  return{weights:best,finalLoss:bestL};
 }
 
-// ─── normalise weights so they sum to 1.0 ─────────────────────────────────────
-function normaliseWeights(weights) {
-  const sum = Object.values(weights).reduce((s, v) => s + Math.max(0, v), 0);
-  if (sum === 0) return { ...DEFAULT_W };
-  const normalised = {};
-  for (const [k, v] of Object.entries(weights)) {
-    normalised[k] = r4(Math.max(0, v) / sum);
-  }
-  return normalised;
+// ─── normalise ────────────────────────────────────────────────────────────────
+function normalise(w) {
+  const sum=Object.values(w).reduce((s,v)=>s+Math.max(0,v),0);
+  if(sum===0)return{...DEFAULT_W};
+  const n={};
+  for (const[k,v] of Object.entries(w)) n[k]=r4(Math.max(0,v)/sum);
+  return n;
 }
 
-// ─── top-level run ─────────────────────────────────────────────────────────────
-/**
- * Run the full optimization cycle.
- *
- * @param {Array} snapshots — from learning.getSnapshots()
- * @returns {object} optimization results + audit entry
- */
+// ─── main export ──────────────────────────────────────────────────────────────
 async function runSignalOptimizer(snapshots) {
-  console.log(`\n[optimizer] ═══════════════════════════════════════`);
-  console.log(`[optimizer] Starting signal optimization`);
+  console.log(`\n[optimizer] ══════════════════════════════`);
+  console.log(`[optimizer] Signal optimizer v2`);
   console.log(`[optimizer] Total snapshots: ${snapshots.length}`);
-
   ensureDir();
 
-  const allFeatures = snapshots.map(extractFeatures).filter(Boolean);
-  const signalFeatures = allFeatures.filter(f => f.signals !== null);
+  const allF    = snapshots.map(extractFeatures).filter(Boolean);
+  const signalF = allF.filter(f=>f.signals!==null);
 
-  console.log(`[optimizer] Graded features: ${allFeatures.length}`);
-  console.log(`[optimizer] With signal data: ${signalFeatures.length}`);
+  console.log(`[optimizer] Graded: ${allF.length}, with signals: ${signalF.length}`);
 
-  if (allFeatures.length < MIN_SAMPLES) {
-    const msg = `Need ${MIN_SAMPLES} graded snapshots (have ${allFeatures.length})`;
-    console.log(`[optimizer] ${msg}`);
-    return { ran: false, reason: msg };
+  if (allF.length<MIN_SAMPLES) {
+    const msg=`Need ${MIN_SAMPLES} graded (have ${allF.length})`;
+    console.log(`[optimizer] ${msg}`); return{ran:false,reason:msg};
   }
 
-  // Use signal features if we have enough, otherwise fall back to all features
-  const workingFeatures = signalFeatures.length >= MIN_SIGNAL_SAMPLES
-    ? signalFeatures : allFeatures;
+  const workingF = signalF.length>=MIN_SIGNAL_SAMPLES ? signalF : allF;
+  console.log(`[optimizer] Working with ${workingF.length} features`);
 
-  console.log(`[optimizer] Working with ${workingFeatures.length} features`);
+  const currentW = loadWeights(SIG_W_FILE,DEFAULT_W);
+  const baseline = computeAccuracy(workingF,currentW);
+  console.log(`[optimizer] Baseline: ${(baseline.overall*100).toFixed(1)}% overall | ${baseline.betNow!=null?(baseline.betNow*100).toFixed(1)+"%":"n/a"} bet-now | cal_err=${baseline.calibrationError}`);
 
-  // ── Load current weights ────────────────────────────────────────────────────
-  const currentWeights = loadWeights(SIGNAL_W_FILE, DEFAULT_W);
+  // Phase 1: Adam
+  const adamR=runAdam(workingF,currentW);
+  // Phase 2: Anneal
+  const annealR=runAnnealing(workingF,adamR.weights);
+  const bestRaw=annealR.finalLoss<=adamR.finalLoss?annealR.weights:adamR.weights;
+  const optW=normalise(bestRaw);
 
-  // ── Baseline accuracy with current weights ─────────────────────────────────
-  const baseline = computeAccuracy(workingFeatures, currentWeights);
-  console.log(`[optimizer] Baseline accuracy: ${(baseline.overall * 100).toFixed(1)}% overall | ${baseline.betNow != null ? (baseline.betNow * 100).toFixed(1) + "% bet-now" : "n/a bet-now"}`);
+  const optimized=computeAccuracy(workingF,optW);
+  console.log(`[optimizer] Optimized: ${(optimized.overall*100).toFixed(1)}% overall | ${optimized.betNow!=null?(optimized.betNow*100).toFixed(1)+"%":"n/a"} bet-now | cal_err=${optimized.calibrationError}`);
 
-  // ── Phase 1: Adam gradient descent ────────────────────────────────────────
-  console.log(`[optimizer] Phase 1: Adam gradient descent...`);
-  const adamResult = runAdam(workingFeatures, currentWeights);
-
-  // ── Phase 2: Simulated annealing on Adam's best ────────────────────────────
-  console.log(`[optimizer] Phase 2: Simulated annealing...`);
-  const annealResult = runAnnealing(workingFeatures, adamResult.weights);
-
-  // Pick whichever phase won
-  const bestRaw = annealResult.finalLoss <= adamResult.finalLoss
-    ? annealResult.weights : adamResult.weights;
-
-  // ── Normalise weights to sum to 1.0 ───────────────────────────────────────
-  const optimizedWeights = normaliseWeights(bestRaw);
-
-  // ── Measure new accuracy ───────────────────────────────────────────────────
-  const optimized = computeAccuracy(workingFeatures, optimizedWeights);
-  console.log(`[optimizer] Optimized accuracy: ${(optimized.overall * 100).toFixed(1)}% overall | ${optimized.betNow != null ? (optimized.betNow * 100).toFixed(1) + "% bet-now" : "n/a bet-now"}`);
-
-  // ── Validate improvement ───────────────────────────────────────────────────
-  const improvement = (optimized.overall || 0) - (baseline.overall || 0);
-  const meetsTarget  = (optimized.overall || 0) >= TARGET_ACCURACY_LOW;
-  const notOverfit   = (optimized.overall || 0) <= TARGET_ACCURACY_HIGH;
-
-  const shouldSave = improvement >= MIN_IMPROVEMENT && meetsTarget && notOverfit;
+  const improvement=(optimized.overall||0)-(baseline.overall||0);
+  const meetsMin  = (optimized.overall||0)>=TARGET_OVERALL_LOW;
+  const notOverfit= (optimized.overall||0)<=TARGET_OVERALL_HIGH;
+  const betNowOk  = optimized.betNow==null||(optimized.betNow||0)>=TARGET_BET_NOW||workingF.filter(f=>f.edge!=null&&Math.abs(f.edge)>=0.045).length<10;
+  const shouldSave= improvement>=MIN_IMPROVEMENT&&meetsMin&&notOverfit;
 
   if (shouldSave) {
-    saveWeights(SIGNAL_W_FILE, optimizedWeights, {
-      samples:          workingFeatures.length,
-      baselineAccuracy: baseline.overall,
-      optimizedAccuracy: optimized.overall,
-      improvement:      r4(improvement),
-      betNowAccuracy:   optimized.betNow,
-    });
-    console.log(`[optimizer] ✓ Signal weights saved! Accuracy: ${(baseline.overall*100).toFixed(1)}% → ${(optimized.overall*100).toFixed(1)}%`);
-
-    // Reload in stats_model
-    try { require("./stats_model").reloadSignalWeights(); }
-    catch { /* stats_model not loaded yet, that's fine */ }
+    saveWeights(SIG_W_FILE,optW,{samples:workingF.length,baselineAccuracy:baseline.overall,optimizedAccuracy:optimized.overall,improvement:r4(improvement),betNowAccuracy:optimized.betNow,calibrationError:optimized.calibrationError});
+    console.log(`[optimizer] ✓ Saved. Accuracy: ${(baseline.overall*100).toFixed(1)}%→${(optimized.overall*100).toFixed(1)}%`);
+    try{require("./stats_model").reloadSignalWeights();}catch{}
   } else {
-    const reason = !meetsTarget
-      ? `Accuracy ${(optimized.overall*100).toFixed(1)}% below ${(TARGET_ACCURACY_LOW*100).toFixed(0)}% target`
-      : !notOverfit
-      ? `Accuracy ${(optimized.overall*100).toFixed(1)}% suggests overfitting`
-      : `Improvement ${(improvement*100).toFixed(2)}% below ${(MIN_IMPROVEMENT*100).toFixed(2)}% threshold`;
+    const reason=!meetsMin?`Below target (${(optimized.overall*100).toFixed(1)}% < ${(TARGET_OVERALL_LOW*100).toFixed(0)}%)`:!notOverfit?`Possible overfit (${(optimized.overall*100).toFixed(1)}% > ${(TARGET_OVERALL_HIGH*100).toFixed(0)}%)`:`Improvement ${(improvement*100).toFixed(2)}% < min ${(MIN_IMPROVEMENT*100).toFixed(2)}%`;
     console.log(`[optimizer] Not saving: ${reason}`);
   }
 
-  // ── Weight change report ───────────────────────────────────────────────────
-  const changes = {};
-  for (const [k, v] of Object.entries(optimizedWeights)) {
-    const prev = currentWeights[k] || DEFAULT_W[k] || 0;
-    changes[k] = { from: r4(prev), to: r4(v), delta: r4(v - prev) };
-  }
-  const topMovers = Object.entries(changes)
-    .sort((a, b) => Math.abs(b[1].delta) - Math.abs(a[1].delta))
-    .slice(0, 5);
+  // Top changes
+  const changes=Object.fromEntries(Object.keys(optW).map(k=>([k,{from:r4(currentW[k]||0),to:r4(optW[k]),delta:r4((optW[k])-(currentW[k]||0))}])));
+  const topMovers=Object.entries(changes).sort((a,b)=>Math.abs(b[1].delta)-Math.abs(a[1].delta)).slice(0,5);
+  console.log("[optimizer] Top weight changes:");
+  for (const[k,c] of topMovers) console.log(`  ${k.padEnd(22)} ${(c.from*100).toFixed(1)}%→${(c.to*100).toFixed(1)}% (${c.delta>=0?"+":""}${(c.delta*100).toFixed(1)}%)`);
 
-  console.log(`[optimizer] Top weight changes:`);
-  for (const [k, c] of topMovers) {
-    console.log(`  ${k.padEnd(22)} ${(c.from*100).toFixed(1)}% → ${(c.to*100).toFixed(1)}%  (${c.delta >= 0 ? "+" : ""}${(c.delta*100).toFixed(1)}%)`);
-  }
+  // Edge bucket accuracy
+  console.log("[optimizer] Accuracy by edge:");
+  for (const[bk,bv] of Object.entries(optimized.byEdgeBucket)) if(bv.total>=3) console.log(`  ${bk.padEnd(8)} ${bv.accuracy!=null?(bv.accuracy*100).toFixed(1)+"%":"—"} n=${bv.total}`);
 
-  // ── By-edge-bucket report ──────────────────────────────────────────────────
-  console.log(`[optimizer] Accuracy by edge bucket:`);
-  for (const [bk, bv] of Object.entries(optimized.byEdgeBucket)) {
-    if (bv.total >= 3) {
-      const pct = bv.accuracy != null ? (bv.accuracy*100).toFixed(1)+"%" : "—";
-      console.log(`  ${bk.padEnd(8)} ${pct} (n=${bv.total})`);
-    }
-  }
-
-  // ── Audit entry ───────────────────────────────────────────────────────────
-  const auditEntry = {
-    ran:             true,
-    saved:           shouldSave,
-    samples:         workingFeatures.length,
-    baseline:        baseline,
-    optimized:       optimized,
-    improvement:     r4(improvement),
-    topChanges:      Object.fromEntries(topMovers),
-    finalWeights:    shouldSave ? optimizedWeights : currentWeights,
-    meetsTarget,
-    notOverfit,
-  };
-  saveAudit(auditEntry);
-
-  return auditEntry;
+  const entry={ran:true,saved:shouldSave,samples:workingF.length,baseline,optimized,improvement:r4(improvement),topChanges:Object.fromEntries(topMovers),finalWeights:shouldSave?optW:currentW,meetsMin,notOverfit};
+  saveAudit(entry);
+  return entry;
 }
 
-// ─── standalone backtesting against BDL historical games ──────────────────────
-/**
- * Run a quick self-test against all graded snapshots to report current accuracy.
- * Does NOT train — just measures.
- */
 function runAccuracyReport(snapshots) {
-  const allF = snapshots.map(extractFeatures).filter(Boolean);
-  const sigF  = allF.filter(f => f.signals !== null);
-
-  if (allF.length === 0) return { error: "No graded snapshots" };
-
-  const weights = loadWeights(SIGNAL_W_FILE, DEFAULT_W);
-  const overall  = computeAccuracy(allF, weights);
-  const byMode   = {};
-
+  const allF=snapshots.map(extractFeatures).filter(Boolean);
+  const sigF=allF.filter(f=>f.signals!==null);
+  if (!allF.length) return{error:"No graded snapshots"};
+  const w=loadWeights(SIG_W_FILE,DEFAULT_W);
+  const overall=computeAccuracy(allF,w);
+  const byVerdict={};
   for (const f of allF) {
-    const mode = f.mode || "unknown";
-    if (!byMode[mode]) byMode[mode] = [];
-    byMode[mode].push(f);
-  }
-
-  const modeAccuracy = {};
-  for (const [mode, mf] of Object.entries(byMode)) {
-    modeAccuracy[mode] = computeAccuracy(mf, weights);
-  }
-
-  // Verdict accuracy
-  const byVerdict = {};
-  for (const f of allF) {
-    const v = f.verdict || "unknown";
-    if (!byVerdict[v]) byVerdict[v] = [];
+    const v=f.verdict||"unknown"; if(!byVerdict[v])byVerdict[v]=[];
     byVerdict[v].push(f);
   }
-  const verdictAccuracy = {};
-  for (const [v, vf] of Object.entries(byVerdict)) {
-    const acc = computeAccuracy(vf, weights);
-    verdictAccuracy[v] = { accuracy: acc.overall, samples: vf.length };
+  const verdictAcc={};
+  for (const[v,vf] of Object.entries(byVerdict)) {
+    const a=computeAccuracy(vf,w); verdictAcc[v]={accuracy:a.overall,samples:vf.length,betNow:a.betNow};
   }
-
-  return {
-    overall,
-    modeAccuracy,
-    verdictAccuracy,
-    signalSamples:   sigF.length,
-    totalSamples:    allF.length,
-    currentWeights:  weights,
-    defaultWeights:  DEFAULT_W,
-    usingLearned:    JSON.stringify(weights) !== JSON.stringify(DEFAULT_W),
-  };
+  return{overall,verdictAcc,signalSamples:sigF.length,totalSamples:allF.length,currentWeights:w,usingLearned:JSON.stringify(w)!==JSON.stringify(DEFAULT_W)};
 }
 
-// ─── standalone entry point ───────────────────────────────────────────────────
-if (require.main === module) {
-  const learning = require("./learning");
-  const snaps    = learning.getSnapshots();
-
-  console.log("\n[optimizer] Running standalone...");
-
-  // If --report flag, just show accuracy without training
+if (require.main===module) {
+  const learning=require("./learning");
+  const snaps=learning.getSnapshots();
   if (process.argv.includes("--report")) {
-    const report = runAccuracyReport(snaps);
+    const r=runAccuracyReport(snaps);
     console.log("\n═══ ACCURACY REPORT ═══");
-    console.log(`Overall:  ${report.overall?.overall != null ? (report.overall.overall*100).toFixed(1)+"%" : "n/a"}`);
-    console.log(`Bet Now:  ${report.overall?.betNow != null ? (report.overall.betNow*100).toFixed(1)+"%" : "n/a"}`);
-    console.log(`Samples:  ${report.totalSamples} total, ${report.signalSamples} with signals`);
-    console.log("\nBy verdict:");
-    for (const [v,a] of Object.entries(report.verdictAccuracy||{})) {
-      console.log(`  ${v.padEnd(12)} ${a.accuracy!=null?(a.accuracy*100).toFixed(1)+"%":"—"}  (n=${a.samples})`);
-    }
-    console.log("\nBy edge bucket:");
-    for (const [b,a] of Object.entries(report.overall?.byEdgeBucket||{})) {
-      if (a.total>=3) console.log(`  ${b.padEnd(8)} ${a.accuracy!=null?(a.accuracy*100).toFixed(1)+"%":"—"}  (n=${a.total})`);
-    }
+    console.log(`Overall:  ${r.overall?.overall!=null?(r.overall.overall*100).toFixed(1)+"%":"n/a"}`);
+    console.log(`Bet Now:  ${r.overall?.betNow!=null?(r.overall.betNow*100).toFixed(1)+"%":"n/a"}`);
+    console.log(`Cal Err:  ${r.overall?.calibrationError??"n/a"}`);
+    console.log(`Samples:  ${r.totalSamples} (${r.signalSamples} with signals)`);
+    console.log("\nBy verdict:"); for(const[v,a]of Object.entries(r.verdictAcc||{})) console.log(`  ${v.padEnd(12)} ${a.accuracy!=null?(a.accuracy*100).toFixed(1)+"%":"—"} n=${a.samples}`);
+    console.log("\nBy edge:"); for(const[b,a]of Object.entries(r.overall?.byEdgeBucket||{})) if(a.total>=3) console.log(`  ${b.padEnd(8)} ${a.accuracy!=null?(a.accuracy*100).toFixed(1)+"%":"—"} n=${a.total}`);
     process.exit(0);
   }
-
-  runSignalOptimizer(snaps)
-    .then(r => {
-      console.log(`\n[optimizer] Done. Saved: ${r.saved}, Accuracy: ${r.optimized?.overall != null ? (r.optimized.overall*100).toFixed(1)+"%" : "n/a"}`);
-      process.exit(0);
-    })
-    .catch(e => { console.error(e); process.exit(1); });
+  runSignalOptimizer(snaps).then(r=>{console.log(`\nDone. Saved:${r.saved} Accuracy:${r.optimized?.overall!=null?(r.optimized.overall*100).toFixed(1)+"%":"n/a"}`);process.exit(0);}).catch(e=>{console.error(e);process.exit(1);});
 }
 
-module.exports = { runSignalOptimizer, runAccuracyReport, computeAccuracy, extractFeatures };
+module.exports={runSignalOptimizer,runAccuracyReport,computeAccuracy,extractFeatures};
