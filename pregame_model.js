@@ -1,436 +1,205 @@
-function clamp(x, min, max) {
-  return Math.max(min, Math.min(max, x));
+"use strict";
+
+/**
+ * pregame_model.js — Pre-game market probability model
+ * Extracts consensus from sportsbook odds and applies adjustments.
+ */
+
+const clamp   = (x, lo, hi) => Math.max(lo, Math.min(hi, x));
+const r2      = n => typeof n === "number" && Number.isFinite(n) ? Math.round(n * 100) / 100 : null;
+
+function noVig(a, b) {
+  if (!a || !b || a <= 1 || b <= 1) return { a: 0.5, b: 0.5 };
+  const ra = 1 / a, rb = 1 / b, t = ra + rb;
+  return { a: ra / t, b: rb / t };
 }
 
-function roundToTwo(num) {
-  if (typeof num !== "number" || !Number.isFinite(num)) return null;
-  return Math.round(num * 100) / 100;
-}
-
-function average(values) {
-  if (!Array.isArray(values) || !values.length) return null;
-  const nums = values.filter(v => typeof v === "number" && Number.isFinite(v));
-  if (!nums.length) return null;
-  return nums.reduce((a, b) => a + b, 0) / nums.length;
-}
-
-function variance(values) {
-  if (!Array.isArray(values) || !values.length) return 0;
-  const avg = average(values);
-  if (avg == null) return 0;
-  const nums = values.filter(v => typeof v === "number" && Number.isFinite(v));
-  if (!nums.length) return 0;
-  return nums.reduce((sum, v) => sum + (v - avg) ** 2, 0) / nums.length;
-}
-
-function weightedAverage(pairs) {
-  if (!pairs.length) return null;
-  let num = 0;
-  let den = 0;
-  for (const pair of pairs) {
-    num += pair.value * pair.weight;
-    den += pair.weight;
-  }
-  return den === 0 ? null : num / den;
-}
-
-function noVigTwoWayProb(priceA, priceB) {
-  if (
-    typeof priceA !== "number" || !Number.isFinite(priceA) || priceA <= 1 ||
-    typeof priceB !== "number" || !Number.isFinite(priceB) || priceB <= 1
-  ) {
-    return { a: 0.5, b: 0.5 };
-  }
-
-  const rawA = 1 / priceA;
-  const rawB = 1 / priceB;
-  const total = rawA + rawB;
-
-  return {
-    a: rawA / total,
-    b: rawB / total
-  };
-}
-
-function decimalToAmerican(decimalOdds) {
-  if (typeof decimalOdds !== "number" || !Number.isFinite(decimalOdds) || decimalOdds <= 1) {
-    return null;
-  }
-  if (decimalOdds >= 2) return Math.round((decimalOdds - 1) * 100);
-  return Math.round(-100 / (decimalOdds - 1));
-}
-
-function probabilityToDecimal(probability) {
-  if (
-    typeof probability !== "number" ||
-    !Number.isFinite(probability) ||
-    probability <= 0 ||
-    probability >= 1
-  ) {
-    return null;
-  }
-  return 1 / probability;
-}
-
-function probabilityToAmerican(probability) {
-  const decimal = probabilityToDecimal(probability);
-  return decimalToAmerican(decimal);
-}
-
-function buildOddsFormatsFromDecimal(decimalOdds) {
-  if (typeof decimalOdds !== "number" || !Number.isFinite(decimalOdds) || decimalOdds <= 1) {
-    return {
-      decimal: null,
-      american: null,
-      impliedPercent: null
-    };
-  }
-
-  const implied = 1 / decimalOdds;
-  return {
-    decimal: roundToTwo(decimalOdds),
-    american: decimalToAmerican(decimalOdds),
-    impliedPercent: roundToTwo(implied)
-  };
-}
-
-function buildProbabilityFormats(probability) {
-  return {
-    percent: roundToTwo(probability),
-    american: probabilityToAmerican(probability)
-  };
-}
-
-function getBookWeight(bookKey) {
-  const sharpBooks = ["pinnacle", "circasports", "matchbook"];
-  const strongBooks = ["draftkings", "fanduel", "betmgm", "betrivers"];
-
-  if (sharpBooks.includes(bookKey)) return 1.4;
-  if (strongBooks.includes(bookKey)) return 1.15;
+function bookWeight(key) {
+  if (["pinnacle","circasports","matchbook"].includes(key)) return 1.4;
+  if (["draftkings","fanduel","betmgm","betrivers"].includes(key)) return 1.15;
   return 1.0;
 }
 
-function findMarket(bookmaker, marketKey) {
-  return bookmaker?.markets?.find(m => m.key === marketKey) || null;
+function wAvg(pairs) {
+  if (!pairs.length) return null;
+  let n = 0, d = 0;
+  for (const p of pairs) { n += p.value * p.weight; d += p.weight; }
+  return d === 0 ? null : n / d;
 }
 
-function extractPregameConsensus(eventOdds) {
-  const homeProbPairs = [];
-  const awayProbPairs = [];
-  const homeProbRaw = [];
-  const awayProbRaw = [];
-  const spreadSignals = [];
-  const totalSignals = [];
+function avg(arr) {
+  const ns = (arr || []).filter(v => typeof v === "number" && Number.isFinite(v));
+  return ns.length ? ns.reduce((s, v) => s + v, 0) / ns.length : null;
+}
+
+function variance(values) {
+  const ns = (values || []).filter(v => typeof v === "number" && Number.isFinite(v));
+  if (!ns.length) return 0;
+  const m = avg(ns);
+  return avg(ns.map(v => (v - m) ** 2)) || 0;
+}
+
+function decimalToAmerican(d) {
+  if (typeof d !== "number" || !Number.isFinite(d) || d <= 1) return null;
+  return d >= 2 ? Math.round((d - 1) * 100) : Math.round(-100 / (d - 1));
+}
+
+function buildElitePregameModel({ featuredOdds, historicalComparisons, propSignal, injurySummary, calibrationFn }) {
+  const cal = typeof calibrationFn === "function" ? calibrationFn : p => p;
+
+  const homeProbPairs = [], awayProbPairs = [];
+  const homeProbRaw  = [], awayProbRaw  = [];
+  const spreadSignals = [], totalSignals = [];
   const books = [];
 
-  for (const bookmaker of eventOdds?.bookmakers || []) {
-    const weight = getBookWeight(bookmaker.key || "");
-    const h2h = findMarket(bookmaker, "h2h");
-    const spreads = findMarket(bookmaker, "spreads");
-    const totals = findMarket(bookmaker, "totals");
-
-    let homePrice = null;
-    let awayPrice = null;
-    let homeSpread = null;
-    let awaySpread = null;
-    let total = null;
+  for (const bm of featuredOdds?.bookmakers || []) {
+    const w   = bookWeight(bm.key || "");
+    const h2h = bm.markets?.find(m => m.key === "h2h");
+    const sp  = bm.markets?.find(m => m.key === "spreads");
+    const tot = bm.markets?.find(m => m.key === "totals");
+    let bHP = null, bAP = null, bHS = null, bAS = null, bT = null;
 
     if (h2h?.outcomes?.length >= 2) {
-      const homeOutcome = h2h.outcomes.find(o => o.name === eventOdds.home_team);
-      const awayOutcome = h2h.outcomes.find(o => o.name === eventOdds.away_team);
-
-      if (homeOutcome && awayOutcome) {
-        homePrice = homeOutcome.price;
-        awayPrice = awayOutcome.price;
-
-        const nv = noVigTwoWayProb(homeOutcome.price, awayOutcome.price);
-        homeProbPairs.push({ value: nv.a, weight });
-        awayProbPairs.push({ value: nv.b, weight });
+      const ho = h2h.outcomes.find(o => o.name === featuredOdds.home_team);
+      const ao = h2h.outcomes.find(o => o.name === featuredOdds.away_team);
+      if (ho && ao && ho.price > 1 && ao.price > 1) {
+        bHP = ho.price; bAP = ao.price;
+        const nv = noVig(ho.price, ao.price);
+        homeProbPairs.push({ value: nv.a, weight: w });
+        awayProbPairs.push({ value: nv.b, weight: w });
         homeProbRaw.push(nv.a);
         awayProbRaw.push(nv.b);
       }
     }
-
-    if (spreads?.outcomes?.length >= 2) {
-      const homeSpreadOutcome = spreads.outcomes.find(o => o.name === eventOdds.home_team);
-      const awaySpreadOutcome = spreads.outcomes.find(o => o.name === eventOdds.away_team);
-
-      if (homeSpreadOutcome && typeof homeSpreadOutcome.point === "number") {
-        homeSpread = homeSpreadOutcome.point;
-        spreadSignals.push({
-          value: clamp((-homeSpreadOutcome.point) * 0.0105, -0.10, 0.10),
-          weight
-        });
+    if (sp?.outcomes?.length >= 2) {
+      const hs = sp.outcomes.find(o => o.name === featuredOdds.home_team);
+      const as_ = sp.outcomes.find(o => o.name === featuredOdds.away_team);
+      if (hs && typeof hs.point === "number") {
+        bHS = hs.point;
+        spreadSignals.push({ value: clamp((-hs.point) * 0.0105, -0.10, 0.10), weight: w });
       }
-
-      if (awaySpreadOutcome && typeof awaySpreadOutcome.point === "number") {
-        awaySpread = awaySpreadOutcome.point;
+      if (as_ && typeof as_.point === "number") bAS = as_.point;
+    }
+    if (tot?.outcomes?.length >= 2) {
+      const ov = tot.outcomes.find(o => o.name === "Over");
+      if (ov && typeof ov.point === "number") {
+        bT = ov.point;
+        totalSignals.push({ value: ov.point, weight: w });
       }
     }
-
-    if (totals?.outcomes?.length >= 2) {
-      const over = totals.outcomes.find(o => o.name === "Over");
-      if (over && typeof over.point === "number") {
-        total = over.point;
-        totalSignals.push({ value: over.point, weight });
-      }
-    }
-
     books.push({
-      book: bookmaker.key,
-      homePrice,
-      awayPrice,
-      homeSpread,
-      awaySpread,
-      total,
-      homeDecimal: homePrice,
-      homeAmerican: decimalToAmerican(homePrice),
-      awayDecimal: awayPrice,
-      awayAmerican: decimalToAmerican(awayPrice)
+      book: bm.title || bm.key || "book",
+      homePrice: r2(bHP), awayPrice: r2(bAP),
+      homeAmerican: decimalToAmerican(bHP), awayAmerican: decimalToAmerican(bAP),
+      homeSpread: r2(bHS), awaySpread: r2(bAS),
+      total: r2(bT),
     });
   }
 
-  if (!homeProbPairs.length || !awayProbPairs.length) return null;
+  if (!homeProbPairs.length) {
+    // No bookmakers — can't build model
+    return {
+      pickSide: "home", pickTeam: featuredOdds?.home_team || "Home",
+      impliedProbability: 0.5, trueProbability: 0.5,
+      sportsbookDecimal: null, edge: 0,
+      confidence: { label: "Low", percent: 0.5 },
+      noBetFilter: { blocked: true, reasons: ["No bookmaker data"] },
+      stakeSuggestion: "No bet",
+      scoreState: null,
+      modelDetails: {}, bookmakerTable: [],
+    };
+  }
 
-  const homeMarketProb = weightedAverage(homeProbPairs);
-  const awayMarketProb = weightedAverage(awayProbPairs);
-  const spreadAdj = weightedAverage(spreadSignals) || 0;
-  const totalConsensus = weightedAverage(totalSignals) || 0;
+  const homeMarketProb = wAvg(homeProbPairs);
+  const awayMarketProb = wAvg(awayProbPairs);
+  const spreadAdj      = wAvg(spreadSignals) || 0;
+  const totalConsensus = wAvg(totalSignals)  || 0;
+  const disagreementPenalty = clamp((variance(homeProbRaw) + variance(awayProbRaw)) * 10, 0, 0.035);
 
   let totalAdj = 0;
   if (totalConsensus < 220) totalAdj = 0.005;
   else if (totalConsensus > 236) totalAdj = -0.005;
 
-  const disagreementPenalty = clamp(
-    (variance(homeProbRaw) + variance(awayProbRaw)) * 10,
-    0,
-    0.035
-  );
-
-  const homePrices = books.map(b => b.homePrice).filter(v => typeof v === "number");
-  const awayPrices = books.map(b => b.awayPrice).filter(v => typeof v === "number");
-  const homeSpreads = books.map(b => b.homeSpread).filter(v => typeof v === "number");
-  const totals = books.map(b => b.total).filter(v => typeof v === "number");
-
-  return {
-    homeMarketProb,
-    awayMarketProb,
-    spreadAdj,
-    totalConsensus,
-    totalAdj,
-    disagreementPenalty,
-    bestHomePrice: homePrices.length ? Math.max(...homePrices) : null,
-    bestAwayPrice: awayPrices.length ? Math.max(...awayPrices) : null,
-    avgHomePrice: average(homePrices),
-    avgAwayPrice: average(awayPrices),
-    avgHomeSpread: average(homeSpreads),
-    avgTotal: average(totals),
-    bookCount: books.filter(b => typeof b.homePrice === "number" && typeof b.awayPrice === "number").length,
-    books
-  };
-}
-
-function buildConfidence(currentConsensus, historicalComparisons, propSignal, injurySummary) {
-  let score = 50;
-
-  score += clamp((currentConsensus.bookCount - 3) * 6, 0, 25);
-  score -= clamp(currentConsensus.disagreementPenalty * 800, 0, 22);
-
-  const h24 = historicalComparisons?.["24h"];
-  const h2 = historicalComparisons?.["2h"];
-
-  if (h24 && typeof h24.homeMarketProb === "number") score += 6;
-  if (h2 && typeof h2.homeMarketProb === "number") score += 6;
-
-  score += clamp((propSignal?.depth || 0) * 0.6, 0, 10);
-
-  if (injurySummary?.available) {
-    score += 4;
-    score += clamp((injurySummary.lineupRowsCount || 0) * 0.4, 0, 8);
+  // Historical line movement
+  const hc2h  = historicalComparisons?.["2h"];
+  const hc24h = historicalComparisons?.["24h"];
+  let moveAdj = 0;
+  if (hc2h?.homeMarketProb && homeMarketProb) {
+    moveAdj += clamp((homeMarketProb - hc2h.homeMarketProb) * 0.25, -0.03, 0.03);
+  }
+  if (hc24h?.homeMarketProb && homeMarketProb) {
+    moveAdj += clamp((homeMarketProb - hc24h.homeMarketProb) * 0.15, -0.02, 0.02);
   }
 
-  score = clamp(score, 1, 99);
+  // Injury adjustment
+  const injAdj = (injurySummary?.homePenalty || 0) - (injurySummary?.awayPenalty || 0);
 
-  let label = "Low";
-  if (score >= 75) label = "High";
-  else if (score >= 60) label = "Medium";
+  // Prop signal
+  const propAdj = propSignal?.adj || 0;
 
-  return {
-    percent: score / 100,
-    label
-  };
-}
+  // Final probability
+  let trueProbHome = homeMarketProb + spreadAdj + totalAdj + moveAdj - injAdj + propAdj;
+  trueProbHome = clamp(cal(trueProbHome), 0.01, 0.99);
 
-function buildVerdict(rawEdge, confidence, noBetFilter) {
-  if (noBetFilter.blocked) return "Avoid";
-  if (rawEdge >= 0.045 && confidence.percent >= 0.72) return "Bet now";
-  if (rawEdge >= 0.02) return "Watch";
-  return "Avoid";
-}
-
-function buildStakeSuggestion(rawEdge, confidence, noBetFilter) {
-  if (noBetFilter.blocked) return "No bet";
-  if (rawEdge >= 0.06 && confidence.percent >= 0.78) return "1.5u";
-  if (rawEdge >= 0.04 && confidence.percent >= 0.72) return "1u";
-  if (rawEdge >= 0.02) return "0.5u";
-  return "No bet";
-}
-
-function buildElitePregameModel({
-  featuredOdds,
-  historicalComparisons = {},
-  propSignal = { adj: 0, depth: 0 },
-  injurySummary = { available: false },
-  calibrationFn = null
-}) {
-  const currentConsensus = extractPregameConsensus(featuredOdds);
-  if (!currentConsensus) {
-    throw new Error("Could not extract pregame consensus from featured odds.");
-  }
-
-  let lineMovementAdj = 0;
-  const h24 = historicalComparisons?.["24h"];
-  const h2 = historicalComparisons?.["2h"];
-
-  if (h24 && typeof h24.homeMarketProb === "number") {
-    const delta24 = currentConsensus.homeMarketProb - h24.homeMarketProb;
-    lineMovementAdj += clamp(delta24 * 0.45, -0.03, 0.03);
-  }
-
-  if (h2 && typeof h2.homeMarketProb === "number") {
-    const delta2 = currentConsensus.homeMarketProb - h2.homeMarketProb;
-    lineMovementAdj += clamp(delta2 * 0.8, -0.03, 0.03);
-  }
-
-  const propAdj = clamp(propSignal?.adj || 0, 0, 0.01);
-
-  const injuryAdjHome = injurySummary?.available
-    ? clamp(
-        ((injurySummary.awayPenalty || 0) - (injurySummary.homePenalty || 0)) +
-        ((injurySummary.homeLineupBoost || 0) - (injurySummary.awayLineupBoost || 0)),
-        -0.06,
-        0.06
-      )
-    : 0;
-
-  let homeTrueProb =
-    currentConsensus.homeMarketProb +
-    currentConsensus.spreadAdj +
-    currentConsensus.totalAdj +
-    lineMovementAdj +
-    propAdj +
-    injuryAdjHome -
-    currentConsensus.disagreementPenalty;
-
-  let awayTrueProb =
-    currentConsensus.awayMarketProb -
-    currentConsensus.spreadAdj -
-    currentConsensus.totalAdj -
-    lineMovementAdj -
-    propAdj -
-    injuryAdjHome -
-    currentConsensus.disagreementPenalty;
-
-  homeTrueProb = clamp(homeTrueProb, 0.01, 0.99);
-  awayTrueProb = clamp(awayTrueProb, 0.01, 0.99);
-
-  const totalProb = homeTrueProb + awayTrueProb;
-  homeTrueProb /= totalProb;
-  awayTrueProb /= totalProb;
-
-  const homeEdge = homeTrueProb - currentConsensus.homeMarketProb;
-  const awayEdge = awayTrueProb - currentConsensus.awayMarketProb;
-
-  const pickSide = homeEdge >= awayEdge ? "home" : "away";
+  // Pick
+  const pickSide = trueProbHome >= 0.5 ? "home" : "away";
   const pickTeam = pickSide === "home" ? featuredOdds.home_team : featuredOdds.away_team;
-  const impliedProbability = pickSide === "home" ? currentConsensus.homeMarketProb : currentConsensus.awayMarketProb;
-  const trueProbability = pickSide === "home" ? homeTrueProb : awayTrueProb;
-  const sportsbookDecimal = pickSide === "home" ? currentConsensus.bestHomePrice : currentConsensus.bestAwayPrice;
-  const rawEdge = pickSide === "home" ? homeEdge : awayEdge;
+  const truePickProb    = pickSide === "home" ? trueProbHome : 1 - trueProbHome;
+  const impliedPickProb = pickSide === "home" ? homeMarketProb : awayMarketProb;
+  const edge            = truePickProb - impliedPickProb;
 
-  const calibratedTrueProbability = typeof calibrationFn === "function"
-    ? calibrationFn(trueProbability)
-    : trueProbability;
+  // Best prices
+  const homePs = books.map(b => b.homePrice).filter(v => typeof v === "number");
+  const awayPs = books.map(b => b.awayPrice).filter(v => typeof v === "number");
+  const bestHome = homePs.length ? Math.max(...homePs) : null;
+  const bestAway = awayPs.length ? Math.max(...awayPs) : null;
+  const sportsbookDecimal = pickSide === "home" ? bestHome : bestAway;
 
-  const calibratedEdge = calibratedTrueProbability - impliedProbability;
+  // Confidence
+  let confidenceLabel = "Low", confidencePct = 0.5;
+  if (Math.abs(edge) >= 0.06)      { confidenceLabel = "High";   confidencePct = 0.80; }
+  else if (Math.abs(edge) >= 0.035) { confidenceLabel = "Medium"; confidencePct = 0.65; }
 
-  const noBetFilter = {
-    blocked: false,
-    reasons: []
-  };
-
-  if (currentConsensus.bookCount < 2) {
-    noBetFilter.blocked = true;
-    noBetFilter.reasons.push("Low book coverage");
+  // No-bet conditions
+  const noBetFilter = { blocked: false, reasons: [] };
+  if (disagreementPenalty > 0.025) {
+    noBetFilter.reasons.push(`High book disagreement (${(disagreementPenalty * 100).toFixed(1)}%)`);
   }
 
-  if (currentConsensus.disagreementPenalty > 0.03) {
-    noBetFilter.blocked = true;
-    noBetFilter.reasons.push("High market disagreement");
-  }
+  let stakeSuggestion = "No bet";
+  if (Math.abs(edge) >= 0.045 && confidencePct >= 0.65) stakeSuggestion = "1u";
+  else if (Math.abs(edge) >= 0.025) stakeSuggestion = "0.5u";
 
-  const confidence = buildConfidence(currentConsensus, historicalComparisons, propSignal, injurySummary);
-  const verdict = buildVerdict(calibratedEdge, confidence, noBetFilter);
-  const stakeSuggestion = buildStakeSuggestion(calibratedEdge, confidence, noBetFilter);
+  const avgHomeSpread = avg(books.map(b => b.homeSpread).filter(v => typeof v === "number"));
+  const avgTotal      = avg(books.map(b => b.total).filter(v => typeof v === "number"));
 
   return {
     pickSide,
     pickTeam,
-    impliedProbability,
-    trueProbability,
-    calibratedTrueProbability,
-    rawEdge,
-    calibratedEdge,
+    impliedProbability:  impliedPickProb,
+    trueProbability:     truePickProb,
     sportsbookDecimal,
-    confidence: {
-      label: confidence.label,
-      percent: roundToTwo(confidence.percent)
-    },
-    verdict,
+    edge,
+    confidence:   { label: confidenceLabel, percent: confidencePct },
     noBetFilter,
     stakeSuggestion,
-    oddsFormats: buildOddsFormatsFromDecimal(sportsbookDecimal),
-    impliedProbabilityFormats: buildProbabilityFormats(impliedProbability),
-    trueProbabilityFormats: buildProbabilityFormats(calibratedTrueProbability),
-    bookmakerTable: currentConsensus.books,
+    scoreState: null,
     modelDetails: {
-      homeMarketProb: roundToTwo(currentConsensus.homeMarketProb),
-      awayMarketProb: roundToTwo(currentConsensus.awayMarketProb),
-      bestHomePrice: roundToTwo(currentConsensus.bestHomePrice),
-      bestAwayPrice: roundToTwo(currentConsensus.bestAwayPrice),
-      avgHomePrice: roundToTwo(currentConsensus.avgHomePrice),
-      avgAwayPrice: roundToTwo(currentConsensus.avgAwayPrice),
-      avgHomeSpread: roundToTwo(currentConsensus.avgHomeSpread),
-      avgTotal: roundToTwo(currentConsensus.avgTotal),
-      totalConsensus: roundToTwo(currentConsensus.totalConsensus),
-      bookCount: currentConsensus.bookCount,
-      spreadAdj: roundToTwo(currentConsensus.spreadAdj),
-      totalAdj: roundToTwo(currentConsensus.totalAdj),
-      lineMovementAdj: roundToTwo(lineMovementAdj),
-      propAdj: roundToTwo(propAdj),
-      injuryAdjHome: roundToTwo(injuryAdjHome),
-      disagreementPenalty: roundToTwo(currentConsensus.disagreementPenalty)
+      homeMarketProb:   r2(homeMarketProb),
+      awayMarketProb:   r2(awayMarketProb),
+      spreadAdj:        r2(spreadAdj),
+      totalAdj:         r2(totalAdj),
+      totalConsensus:   r2(totalConsensus),
+      disagreementPenalty: r2(disagreementPenalty),
+      moveAdj:          r2(moveAdj),
+      injAdj:           r2(injAdj),
+      propAdj:          r2(propAdj),
+      avgHomeSpread:    r2(avgHomeSpread),
+      avgTotal:         r2(avgTotal),
+      bookCount: books.filter(b => b.homePrice && b.awayPrice).length,
     },
-    featureSnapshot: {
-      spreadAdj: roundToTwo(currentConsensus.spreadAdj),
-      totalAdj: roundToTwo(currentConsensus.totalAdj),
-      lineMovementAdj: roundToTwo(lineMovementAdj),
-      propAdj: roundToTwo(propAdj),
-      injuryAdjHome: roundToTwo(injuryAdjHome),
-      disagreementPenalty: roundToTwo(currentConsensus.disagreementPenalty),
-      avgHomeSpread: roundToTwo(currentConsensus.avgHomeSpread),
-      avgTotal: roundToTwo(currentConsensus.avgTotal),
-      totalConsensus: roundToTwo(currentConsensus.totalConsensus),
-      scoreAdj: 0,
-      comebackAdj: 0,
-      momentumAdj: 0,
-      pacePressureAdj: 0,
-      garbageTimePenalty: 0,
-      timeLeverage: 0
-    }
+    bookmakerTable: books,
   };
 }
 
-module.exports = {
-  buildElitePregameModel
-};
+module.exports = { buildElitePregameModel };
