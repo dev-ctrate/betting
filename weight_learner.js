@@ -1,133 +1,280 @@
 "use strict";
 
 /**
- * auto_grader.js  v3
- *
- * Full automated learning loop:
- *   1. Grade ungraded snapshots from BDL final scores
- *   2. Rebuild calibration table
- *   3. Run market weight learner
- *   4. Run signal optimizer (realistic 58-72% accuracy targets)
- *
- * KEY FIX: This version ensures statsSignals are populated so
- * the signal optimizer actually has training data.
- * The backfill.js also now calls computeIndependentWinProb and stores
- * statsSignals in each historical snapshot.
+ * weight_learner.js
+ * Learns market-level blend weights from graded snapshots.
+ * Exports: runWeightLearning, loadLearnedWeights, applyLearnedWeights, DEFAULT_WEIGHTS
  */
 
-const learning = require("./learning");
-const BALLDONTLIE_API_KEY = process.env.BALLDONTLIE_API_KEY || "";
-const MIN_FOR_MARKET  = 50;
-const MIN_FOR_SIGNALS = 50;
-const BUFFER_HOURS    = 5;
-const INTERVAL_MS     = 60 * 60 * 1000;
+const fs   = require("fs");
+const path = require("path");
 
-async function bdlFetch(path) {
-  if (!BALLDONTLIE_API_KEY) throw new Error("Missing BALLDONTLIE_API_KEY");
-  const res=await fetch(`https://api.balldontlie.io/v1${path}`,{headers:{Authorization:BALLDONTLIE_API_KEY},signal:AbortSignal.timeout(15000)});
-  const txt=await res.text(); if(!res.ok)throw new Error(`BDL ${res.status}`);
-  return JSON.parse(txt);
+const DATA_DIR      = path.join(__dirname, "data");
+const WEIGHTS_FILE  = path.join(DATA_DIR, "learned_weights.json");
+
+const MIN_SAMPLES   = 30;
+const LEARNING_RATE = 0.005;
+const MAX_EPOCHS    = 3000;
+const L2_LAMBDA     = 0.08;
+const K             = 4.0;
+
+const DEFAULT_WEIGHTS = {
+  bias:         0.0,
+  market:       1.0,
+  spread:       1.0,
+  total:        1.0,
+  lineMove:     1.0,
+  disagreement: 1.0,
+  statsBlend:   0.45,
+  injury:       1.0,
+  prop:         1.0
+};
+
+const BOUNDS = {
+  bias:         { lo: -1.5, hi:  1.5 },
+  market:       { lo:  0.6, hi:  1.8 },
+  spread:       { lo:  0.0, hi:  6.0 },
+  total:        { lo:  0.0, hi:  6.0 },
+  lineMove:     { lo:  0.0, hi:  6.0 },
+  disagreement: { lo:  0.0, hi:  6.0 },
+  statsBlend:   { lo:  0.0, hi:  0.85 },
+  injury:       { lo:  0.0, hi:  6.0 },
+  prop:         { lo:  0.0, hi:  6.0 }
+};
+
+// ─── math ─────────────────────────────────────────────────────────────────────
+function sigmoid(x) {
+  const cx = Math.max(-50, Math.min(50, x));
+  return 1 / (1 + Math.exp(-cx));
 }
-const bdlRows=p=>Array.isArray(p)?p:Array.isArray(p?.data)?p.data:[];
 
-const normName=s=>String(s||"").toLowerCase().replace(/[^a-z0-9 ]/g,"").replace(/\s+/g," ").trim();
-const ymdFromIso=iso=>String(iso||"").slice(0,10);
-const getSeason=ymd=>{const d=new Date(`${ymd}T00:00:00Z`);const m=d.getUTCMonth()+1;return m>=10?d.getUTCFullYear():d.getUTCFullYear()-1;};
-const bdlMatch=(g,h,a)=>{const bh=normName(g.home_team?.full_name||""),ba=normName(g.visitor_team?.full_name||"");if(bh===normName(h)&&ba===normName(a))return true;const last=s=>normName(s).split(" ").pop()||"";return last(bh)===last(normName(h))&&last(ba)===last(normName(a));};
+function logit(p) {
+  const cp = Math.max(1e-7, Math.min(1 - 1e-7, p));
+  return Math.log(cp / (1 - cp));
+}
 
-async function getFinishedGames(ymd) {
+function clamp(x, lo, hi) {
+  return Math.max(lo, Math.min(hi, x));
+}
+
+// ─── file I/O ─────────────────────────────────────────────────────────────────
+function ensureDir() {
+  if (!fs.existsSync(DATA_DIR)) {
+    fs.mkdirSync(DATA_DIR, { recursive: true });
+  }
+}
+
+function loadLearnedWeights() {
   try {
-    const s=getSeason(ymd);
-    const r=await bdlFetch(`/games?dates[]=${encodeURIComponent(ymd)}&seasons[]=${s}&per_page=100`);
-    return bdlRows(r).filter(g=>String(g.status||"").toLowerCase().includes("final"));
-  } catch(e){console.error(`[grader] ${ymd}:`,e.message);return[];}
+    ensureDir();
+    if (!fs.existsSync(WEIGHTS_FILE)) {
+      return { ...DEFAULT_WEIGHTS };
+    }
+    const raw = fs.readFileSync(WEIGHTS_FILE, "utf8").trim();
+    if (!raw) return { ...DEFAULT_WEIGHTS };
+    const saved = JSON.parse(raw);
+    return { ...DEFAULT_WEIGHTS, ...(saved.weights || {}) };
+  } catch (err) {
+    console.error("[weight_learner] loadLearnedWeights failed:", err.message);
+    return { ...DEFAULT_WEIGHTS };
+  }
 }
 
-// Check what % of graded snapshots have statsSignals
-function auditSignalCoverage(snaps) {
-  const graded=snaps.filter(s=>s?.result&&typeof s.result.modelWon==="boolean");
-  const withSignals=graded.filter(s=>s?.statsSignals&&typeof s.statsSignals==="object"&&Object.keys(s.statsSignals).length>=5);
-  return{graded:graded.length,withSignals:withSignals.length,pct:graded.length>0?Math.round(withSignals.length/graded.length*100):0};
+function saveLearnedWeights(weights, meta) {
+  try {
+    ensureDir();
+    fs.writeFileSync(
+      WEIGHTS_FILE,
+      JSON.stringify({ weights, meta: { ...meta, savedAt: new Date().toISOString(), version: 3 } }, null, 2),
+      "utf8"
+    );
+    return true;
+  } catch (err) {
+    console.error("[weight_learner] saveLearnedWeights failed:", err.message);
+    return false;
+  }
 }
 
-async function gradeAllUngraded() {
-  const allSnaps=learning.getSnapshots();
-  const ungraded=allSnaps.filter(s=>!s.result||typeof s.result.modelWon!=="boolean");
-  if (!ungraded.length){console.log("[grader] Nothing to grade.");return{graded:0,checked:0};}
-  console.log(`[grader] ${ungraded.length} ungraded snapshots.`);
+// ─── feature extraction ───────────────────────────────────────────────────────
+function extractFeatures(snap) {
+  if (!snap) return null;
+  if (!snap.result || typeof snap.result.modelWon !== "boolean") return null;
 
-  const gameMap=new Map();
-  for (const s of ungraded) {
-    const date=ymdFromIso(s.commenceTime||s.timestamp); if(!date)continue;
-    const startMs=new Date(s.commenceTime||`${date}T00:00:00Z`).getTime();
-    if(Date.now()<startMs+BUFFER_HOURS*3600000)continue;
-    const key=`${date}__${normName(s.homeTeam)}__${normName(s.awayTeam)}`;
-    if(!gameMap.has(key))gameMap.set(key,{date,homeTeam:s.homeTeam,awayTeam:s.awayTeam,gameId:s.gameId});
+  const mp = Number(snap.impliedProbability);
+  if (!Number.isFinite(mp) || mp <= 0.01 || mp >= 0.99) return null;
+
+  const side = snap.pickSide === "home" ? 1 : -1;
+
+  const statsHomeProb = Number(snap.statsModelHomeProb);
+  const statsDelta = Number.isFinite(statsHomeProb)
+    ? (snap.pickSide === "home" ? statsHomeProb : 1 - statsHomeProb) - mp
+    : 0;
+
+  return {
+    logitMarket:  logit(mp),
+    spreadAdj:    side * Number(snap.spreadAdj      || 0),
+    totalAdj:     side * Number(snap.totalAdj       || 0),
+    lineMoveAdj:  side * Number(snap.lineMovementAdj || 0),
+    disagreement: -Math.abs(Number(snap.disagreementPenalty || 0)),
+    statsDelta,
+    injuryAdj:    side * Number(snap.injuryAdjHome  || 0),
+    propAdj:      side * Number(snap.propAdj        || 0),
+    won:          snap.result.modelWon ? 1 : 0
+  };
+}
+
+// ─── model ────────────────────────────────────────────────────────────────────
+function predict(f, w) {
+  const logitP =
+    w.market       * f.logitMarket
+    + w.spread       * f.spreadAdj    * K
+    + w.total        * f.totalAdj     * K
+    + w.lineMove     * f.lineMoveAdj  * K
+    + w.disagreement * f.disagreement * K
+    + w.statsBlend   * f.statsDelta   * K
+    + w.injury       * f.injuryAdj    * K
+    + w.prop         * f.propAdj      * K
+    + w.bias;
+  return sigmoid(logitP);
+}
+
+function computeLoss(samples, w) {
+  const eps = 1e-7;
+  let ce = 0;
+  for (const f of samples) {
+    const p = predict(f, w);
+    ce += -(f.won * Math.log(p + eps) + (1 - f.won) * Math.log(1 - p + eps));
+  }
+  ce /= samples.length;
+
+  let reg = 0;
+  for (const k of Object.keys(DEFAULT_WEIGHTS)) {
+    reg += (w[k] - DEFAULT_WEIGHTS[k]) ** 2;
+  }
+  reg = L2_LAMBDA * reg / samples.length;
+
+  return ce + reg;
+}
+
+function numericalGradient(samples, w, eps = 1e-5) {
+  const base = computeLoss(samples, w);
+  const grad = {};
+  for (const k of Object.keys(w)) {
+    const wPlus = { ...w, [k]: w[k] + eps };
+    grad[k] = (computeLoss(samples, wPlus) - base) / eps;
+  }
+  return grad;
+}
+
+// ─── Adam optimizer ───────────────────────────────────────────────────────────
+async function runWeightLearning(snapshots) {
+  console.log(`[weight_learner] Starting on ${snapshots.length} snapshots`);
+
+  const features = snapshots.map(extractFeatures).filter(Boolean);
+  console.log(`[weight_learner] Valid features: ${features.length}`);
+
+  if (features.length < MIN_SAMPLES) {
+    console.log(`[weight_learner] Not enough samples (${features.length} < ${MIN_SAMPLES})`);
+    return { weights: DEFAULT_WEIGHTS, improved: false, samples: features.length };
   }
 
-  if (!gameMap.size){console.log("[grader] All games too recent.");return{graded:0,checked:ungraded.length};}
+  let w = { ...loadLearnedWeights() };
+  const initialLoss = computeLoss(features, w);
+  let prevLoss = initialLoss;
 
-  const uniqueDates=[...new Set([...gameMap.values()].map(g=>g.date))];
-  const bdlByDate=new Map();
-  for (const d of uniqueDates)bdlByDate.set(d,await getFinishedGames(d));
+  const m = Object.fromEntries(Object.keys(w).map(k => [k, 0]));
+  const v = Object.fromEntries(Object.keys(w).map(k => [k, 0]));
+  const b1 = 0.9, b2 = 0.999, eps_a = 1e-8;
+  let t = 0, stalled = 0;
 
-  let totalGraded=0;
-  for (const[,game] of gameMap) {
-    const bdlGames=bdlByDate.get(game.date)||[];
-    const bdlGame=bdlGames.find(g=>bdlMatch(g,game.homeTeam,game.awayTeam));
-    if(!bdlGame)continue;
-    const hs=bdlGame.home_team_score,as_=bdlGame.visitor_team_score;
-    if(typeof hs!=="number"||typeof as_!=="number"||hs===as_)continue;
-    const fw=hs>as_?"home":"away";
-    const updated=learning.updateGameResult({gameId:game.gameId,finalWinner:fw,finalHomeScore:hs,finalAwayScore:as_});
-    if(updated>0){
-      const wt=fw==="home"?game.homeTeam:game.awayTeam;
-      console.log(`[grader] ✓ ${game.awayTeam} @ ${game.homeTeam} → ${wt} won ${as_}-${hs} [${updated} snaps]`);
-      totalGraded+=updated;
+  for (let epoch = 0; epoch < MAX_EPOCHS; epoch++) {
+    t++;
+    const grad = numericalGradient(features, w);
+    for (const k of Object.keys(w)) {
+      m[k] = b1 * m[k] + (1 - b1) * grad[k];
+      v[k] = b2 * v[k] + (1 - b2) * grad[k] ** 2;
+      const mh = m[k] / (1 - b1 ** t);
+      const vh = v[k] / (1 - b2 ** t);
+      w[k] -= LEARNING_RATE * mh / (Math.sqrt(vh) + eps_a);
+      const bnd = BOUNDS[k];
+      if (bnd) w[k] = clamp(w[k], bnd.lo, bnd.hi);
     }
+
+    const currentLoss = computeLoss(features, w);
+    if (Math.abs(prevLoss - currentLoss) < 1e-7) {
+      stalled++;
+      if (stalled > 60) {
+        console.log(`[weight_learner] Converged at epoch ${epoch + 1}`);
+        break;
+      }
+    } else {
+      stalled = 0;
+    }
+    prevLoss = currentLoss;
   }
 
-  if (totalGraded>0) {
-    learning.buildCalibrationTable();
-    const summary=learning.getLearningSummary();
-    const coverage=auditSignalCoverage(learning.getSnapshots());
-    console.log(`[grader] graded=${summary.gradedSnapshots} win_rate=${summary.overallWinRate!=null?(summary.overallWinRate*100).toFixed(1)+"%":"n/a"}`);
-    console.log(`[grader] Signal coverage: ${coverage.withSignals}/${coverage.graded} (${coverage.pct}%)`);
+  const finalLoss = computeLoss(features, w);
+  const improved = finalLoss < initialLoss - 1e-4;
 
-    if (coverage.pct<20&&coverage.graded>20) {
-      console.log(`[grader] ⚠ Low signal coverage — run node backfill.js to populate historical signal data`);
-    }
+  let correct = 0;
+  for (const f of features) {
+    if ((predict(f, w) >= 0.5) === (f.won === 1)) correct++;
+  }
+  const accuracy = correct / features.length;
 
-    if (summary.gradedSnapshots>=MIN_FOR_MARKET) {
-      try{const{runWeightLearning}=require("./weight_learner");const r=await runWeightLearning(learning.getSnapshots());if(r.improved)console.log("[grader] Market weights improved");}
-      catch(e){console.error("[grader] weight_learner:",e.message);}
-    }
+  console.log(`[weight_learner] Loss: ${initialLoss.toFixed(4)} → ${finalLoss.toFixed(4)} | Acc: ${(accuracy * 100).toFixed(1)}%`);
 
-    if (summary.gradedSnapshots>=MIN_FOR_SIGNALS&&coverage.withSignals>=MIN_FOR_SIGNALS) {
-      try{
-        const{runSignalOptimizer}=require("./signal_optimizer");
-        console.log("[grader] Running signal optimizer...");
-        const r=await runSignalOptimizer(learning.getSnapshots());
-        if(r.saved)console.log(`[grader] Signal weights updated → ${r.optimized?.overall!=null?(r.optimized.overall*100).toFixed(1)+"%":"n/a"} accuracy`);
-        else console.log(`[grader] Signal optimizer ran — no improvement (${r.reason||"below threshold"})`);
-      }catch(e){console.error("[grader] signal_optimizer:",e.message);}
-    } else if (coverage.withSignals<MIN_FOR_SIGNALS) {
-      console.log(`[grader] Need ${MIN_FOR_SIGNALS-coverage.withSignals} more signal snapshots. Run: node backfill.js <start_date> <end_date>`);
-    }
+  if (improved || features.length >= 150) {
+    saveLearnedWeights(w, { samples: features.length, finalLoss, initialLoss: initialLoss, accuracy });
+    console.log("[weight_learner] Weights saved.");
   }
 
-  return{graded:totalGraded,checked:ungraded.length};
+  return {
+    weights: w, finalLoss, initialLoss: initialLoss, improved, samples: features.length,
+    accuracy,
+    marketResult: { improved, finalLoss, initialLoss: initialLoss },
+    signalResult:  { improved: false }
+  };
 }
 
-function startAutoGradeScheduler(intervalMs=INTERVAL_MS) {
-  console.log(`[grader] Scheduler started (every ${Math.round(intervalMs/60000)} min)`);
-  setTimeout(async()=>{try{await gradeAllUngraded();}catch(e){console.error("[grader]",e.message);}},45000);
-  setInterval(async()=>{try{await gradeAllUngraded();}catch(e){console.error("[grader]",e.message);}},intervalMs);
+// ─── apply learned weights ────────────────────────────────────────────────────
+function applyLearnedWeights({ marketProb, pickSide, modelDetails, statsHomeProb, weights }) {
+  const w = weights || DEFAULT_WEIGHTS;
+  const side = pickSide === "home" ? 1 : -1;
+
+  let statsDelta = 0;
+  if (typeof statsHomeProb === "number" && Number.isFinite(statsHomeProb)) {
+    const spp = pickSide === "home" ? statsHomeProb : 1 - statsHomeProb;
+    statsDelta = spp - marketProb;
+  }
+
+  const safeMarket = clamp(marketProb, 0.01, 0.99);
+  const logitP =
+    w.market       * logit(safeMarket)
+    + w.spread       * side * Number(modelDetails?.spreadAdj       || 0) * K
+    + w.total        * side * Number(modelDetails?.totalAdj        || 0) * K
+    + w.lineMove     * side * Number(modelDetails?.lineMovementAdj || 0) * K
+    + w.disagreement * -Math.abs(Number(modelDetails?.disagreementPenalty || 0)) * K
+    + w.statsBlend   * statsDelta * K
+    + w.injury       * side * Number(modelDetails?.injuryAdjHome   || 0) * K
+    + w.prop         * side * Number(modelDetails?.propAdj         || 0) * K
+    + w.bias;
+
+  return clamp(sigmoid(logitP), 0.01, 0.99);
 }
 
-if (require.main===module) {
-  if (!BALLDONTLIE_API_KEY){console.error("Set BALLDONTLIE_API_KEY");process.exit(1);}
-  gradeAllUngraded().then(r=>{console.log(`Done. Graded:${r.graded}`);process.exit(0);}).catch(e=>{console.error(e);process.exit(1);});
+// ─── standalone ───────────────────────────────────────────────────────────────
+if (require.main === module) {
+  const learning = require("./learning");
+  runWeightLearning(learning.getSnapshots())
+    .then(r => { console.log(`Done. Improved: ${r.improved}`); process.exit(0); })
+    .catch(e => { console.error(e); process.exit(1); });
 }
 
-module.exports={gradeAllUngraded,startAutoGradeScheduler,auditSignalCoverage};
+// ─── exports — explicitly listed, not compressed ──────────────────────────────
+module.exports = {
+  runWeightLearning,
+  loadLearnedWeights,
+  applyLearnedWeights,
+  DEFAULT_WEIGHTS
+};
