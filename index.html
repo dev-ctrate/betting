@@ -614,9 +614,23 @@ function updateOddsCard(d) {
 /* ─── signal labels ──────────────────────────────────────── */
 const SIG_LABELS={officialNetRating:"Net Rating (Off.)",injuryAdjNetRating:"Inj-Adj Net Rtg",predictedSpread:"Predicted Spread",pie:"PIE (Official)",recentForm:"Recent Form",clutch:"Clutch",starPower:"Star Power",shooting:"Shooting TS%",turnover:"Turnovers",rest:"Rest/Schedule",hustle:"Hustle",rebound:"Rebounding",shotQuality:"Shot Quality",h2h:"H2H Record",momentum:"Momentum",referee:"Referee",travelFatigue:"Travel Fatigue",opponentMatchup:"Opp Matchup",splits:"Splits",pace:"Pace",threePointVariance:"3PT Variance",defense:"Defense"};
 
-function renderSignals(signals, pickSide, weights) {
+function renderSignals(signals, pickSide, weights, homeTeam, awayTeam) {
   const g=$("sigGrid"); g.innerHTML="";
   if(!signals) return;
+
+  // Add team name header row
+  const hn = (homeTeam||"Home").split(" ").pop();
+  const an = (awayTeam||"Away").split(" ").pop();
+  const header = document.createElement("div");
+  header.style.cssText="display:grid;grid-template-columns:150px 1fr 38px;gap:8px;align-items:center;margin-bottom:6px;padding-bottom:6px;border-bottom:1px solid var(--bdr);";
+  header.innerHTML=`<span></span>
+    <div style="display:flex;justify-content:space-between;padding:0 2px;">
+      <span style="font-size:10px;font-weight:700;color:var(--home-c)">${hn}</span>
+      <span style="font-size:10px;font-weight:700;color:var(--away-c)">${an}</span>
+    </div>
+    <span></span>`;
+  g.appendChild(header);
+
   const sorted=Object.entries(signals).sort((a,b)=>(weights?.[b[0]]||0)-(weights?.[a[0]]||0));
   for (const[k,s] of sorted) {
     const p=typeof s.prob==="number"?s.prob:0.5;
@@ -624,7 +638,7 @@ function renderSignals(signals, pickSide, weights) {
     const he=Math.max(0,(hp-0.5)*2*38), ae=Math.max(0,(0.5-hp)*2*38);
     const w=weights?.[k]!=null?Math.round(weights[k]*100)+"% wt":"";
     const row=document.createElement("div"); row.className="sig-row";
-    row.title=`${SIG_LABELS[k]||k}${w?" ("+w+")":""}: ${Math.round(hp*100)}% home`;
+    row.title=`${SIG_LABELS[k]||k}${w?" ("+w+")":""}: ${Math.round(hp*100)}% ${hn}`;
     row.innerHTML=`<span class="sig-name">${SIG_LABELS[k]||k}</span>
       <div class="sig-bar"><div class="sig-mid"></div>
         <div class="sig-home" style="width:${he}%;background:var(--home-c);opacity:.70"></div>
@@ -673,16 +687,17 @@ function renderAdvStats(h,a,ht,at){
 }
 
 /* ─── enhanced props ─────────────────────────────────────── */
-function renderProps(rows, id) {
+function renderProps(rows, id, unit) {
   const el=$(id); if(!Array.isArray(rows)||!rows.length){el.innerHTML='<div style="color:var(--muted);font-size:12px;padding:8px 0">No data</div>';return;}
-  el.innerHTML=rows.slice(0,6).map(r=>{
+  el.innerHTML=rows.slice(0,7).map(r=>{
     const pct=typeof r.pickProbability==="number"?r.pickProbability:typeof r.hitProbability==="number"?r.hitProbability:0.5;
     const barW=Math.round(Math.abs(pct-0.5)*2*100);
-    const barColor=pct>0.6?"var(--green)":pct<0.4?"var(--red)":"var(--yellow)";
+    const barColor=pct>0.62?"var(--green)":pct<0.38?"var(--red)":"var(--yellow)";
     const pickCls=(r.pick||"").toLowerCase()==="over"?"over":"under";
     const conf=pct>=0.72?"🔥 HIGH":pct>=0.62?"◉ MED":"◎ LOW";
+    const lineLabel=r.line!=null?`${r.line} ${unit}`:"";
     return`<div class="prop-item">
-      <div class="prop-player">${r.player||"—"} <span style="font-size:10px;color:var(--muted);font-weight:400">· ${r.line!=null?r.line+" pts/reb/ast":""}</span></div>
+      <div class="prop-player">${r.player||"—"} <span style="font-size:10px;color:var(--muted);font-weight:400">${lineLabel?`· ${lineLabel}`:""}</span></div>
       <div class="prop-detail">
         <span class="prop-line">Line: ${r.line??"-"}</span>
         <span class="prop-pick ${pickCls}">${(r.pick||"?").toUpperCase()}</span>
@@ -901,7 +916,7 @@ async function loadGame() {
     setV("nbaStatus",mp?.nba_service_used?"Active ✓":"Offline");
 
     // ── Signals ────────────────────────────────────────────
-    renderSignals(ai.signals||null,d.pickSide||"home",ai.activeWeights||null);
+    renderSignals(ai.signals||null,d.pickSide||"home",ai.activeWeights||null,homeTeam,awayTeam);
     $("sigSubtitle").textContent=`Pick: ${d.pick||"—"} · ${d.pickSide==="home"?"Green=Home":"Green=Home"} · sorted by weight`;
 
     // ── Advanced stats ─────────────────────────────────────
@@ -929,11 +944,17 @@ async function loadGame() {
     const mv=(c,p)=>{if(typeof c!=="number"||typeof p!=="number")return"—";const delta=c-p;return`${delta>=0?"+":""}${(delta*100).toFixed(2)}%`;};
     setV("move2h",mv(d.impliedProbability,hist["2h"]?.homeMarketProb));
     setV("move24h",mv(d.impliedProbability,hist["24h"]?.homeMarketProb));
-    setV("avgSpread",fNum(d.modelDetails?.avgHomeSpread));
-    setV("avgTotal",fNum(d.modelDetails?.avgTotal));
+    // Avg spread and total from bookmaker table
+    const bmRows=d.bookmakerTable||[];
+    const spreads=bmRows.map(b=>b.homeSpread).filter(v=>typeof v==="number");
+    const totals=bmRows.map(b=>b.total).filter(v=>typeof v==="number");
+    const avgSpr=spreads.length?spreads.reduce((s,v)=>s+v,0)/spreads.length:null;
+    const avgTot=totals.length?totals.reduce((s,v)=>s+v,0)/totals.length:null;
+    setV("avgSpread",avgSpr!=null?avgSpr.toFixed(1):"—");
+    setV("avgTotal",avgTot!=null?avgTot.toFixed(1):"—");
     setV("disagPenalty",fPct(d.modelDetails?.disagreementPenalty));
-    const ri=mp?.ref_impact; setV("refImpact",ri!=null?fSign(ri*100,2)+"%":"—");
-    $("refNames").textContent=(mp?.ref_names||[]).slice(0,2).join(", ")||"";
+    setV("refImpact","—");
+    $("refNames").textContent="";
 
     // ── Best prices ────────────────────────────────────────
     setV("bestHome",`${d.modelDetails?.bestHomePrice??"-"} / ${fAm(d2a(d.modelDetails?.bestHomePrice))}`);
@@ -952,8 +973,8 @@ async function loadGame() {
 
     // ── Props ──────────────────────────────────────────────
     const ps=d.propSections||{};
-    renderProps(ps.points||[],"propsPoints"); renderProps(ps.assists||[],"propsAssists");
-    renderProps(ps.rebounds||[],"propsRebounds"); renderProps(ps.pra||[],"propsPRA");
+    renderProps(ps.points||[],"propsPoints","pts"); renderProps(ps.assists||[],"propsAssists","ast");
+    renderProps(ps.rebounds||[],"propsRebounds","reb"); renderProps(ps.pra||[],"propsPRA","PRA");
 
     // ── Play-by-play ───────────────────────────────────────
     renderPbp(scoreState, homeTeam, awayTeam);
