@@ -38,10 +38,14 @@ const avg   = arr => { const n = arr.filter(v => Number.isFinite(v)); return n.l
 const flt   = (v, fb = 0) => { const n = Number(v); return Number.isFinite(n) ? n : fb; };
 
 function getCurrentSeason() {
-  const d = new Date(); const m = d.getUTCMonth() + 1;
-  return m >= 10
-    ? `${d.getUTCFullYear()}-${String(d.getUTCFullYear() + 1).slice(2)}`
-    : `${d.getUTCFullYear() - 1}-${String(d.getUTCFullYear()).slice(2)}`;
+  const d = new Date(); const m = d.getUTCMonth() + 1; const y = d.getUTCFullYear();
+  if (m >= 10) return `${y}-${String(y + 1).slice(2)}`;
+  return `${y - 1}-${String(y).slice(2)}`;
+}
+
+function getPreviousSeason(season) {
+  const start = parseInt(season.split("-")[0], 10);
+  return `${start - 1}-${String(start).slice(2)}`;
 }
 
 // ─── NBA Stats API ─────────────────────────────────────────────────────────────
@@ -123,7 +127,20 @@ async function fetchLeagueAdvanced(season) {
       PaceAdjust: "N", PlusMinus: "N", Rank: "N",
       LeagueID: "00",
     });
-    const rows = parseRS(json);
+    let rows = parseRS(json);
+    // If current season has no data yet, try previous season automatically
+    if (!rows.length) {
+      const prev = getPreviousSeason(season);
+      console.log(`[adv_stats] ${season} returned 0 rows, trying ${prev}...`);
+      const json2 = await nbaFetch("leaguedashteamstats", {
+        Season: prev, SeasonType: "Regular Season",
+        MeasureType: "Advanced", PerMode: "PerGame",
+        PaceAdjust: "N", PlusMinus: "N", Rank: "N",
+        LeagueID: "00",
+      });
+      rows = parseRS(json2);
+      console.log(`[adv_stats] Fallback ${prev} got ${rows.length} rows`);
+    }
     console.log(`[adv_stats] Got ${rows.length} team advanced rows`);
     return cs(k, rows, TTL_LEAGUE);
   } catch (e) {
@@ -136,11 +153,16 @@ async function fetchLeagueBase(season) {
   const k = `nba:base:${season}`;
   const h = cg(k); if (h) return h;
   try {
-    const json = await nbaFetch("leaguedashteamstats", {
-      Season: season, SeasonType: "Regular Season",
-      MeasureType: "Base", PerMode: "PerGame", LeagueID: "00",
-    });
-    return cs(k, parseRS(json), TTL_LEAGUE);
+    const fetchBase = async (s) => {
+      const json = await nbaFetch("leaguedashteamstats", {
+        Season: s, SeasonType: "Regular Season",
+        MeasureType: "Base", PerMode: "PerGame", LeagueID: "00",
+      });
+      return parseRS(json);
+    };
+    let rows = await fetchBase(season);
+    if (!rows.length) rows = await fetchBase(getPreviousSeason(season));
+    return cs(k, rows, TTL_LEAGUE);
   } catch (e) {
     console.error("[adv_stats] fetchLeagueBase failed:", e.message);
     return [];
@@ -151,13 +173,18 @@ async function fetchLeagueClutch(season) {
   const k = `nba:clutch:${season}`;
   const h = cg(k); if (h) return h;
   try {
-    const json = await nbaFetch("leaguedashteamclutch", {
-      Season: season, SeasonType: "Regular Season",
-      MeasureType: "Base", PerMode: "PerGame",
-      ClutchTime: "Last 5 Minutes", AheadBehind: "Ahead or Behind",
-      PointDiff: 5, LeagueID: "00",
-    });
-    return cs(k, parseRS(json), TTL_LEAGUE);
+    const fetchClutch = async (s) => {
+      const json = await nbaFetch("leaguedashteamclutch", {
+        Season: s, SeasonType: "Regular Season",
+        MeasureType: "Base", PerMode: "PerGame",
+        ClutchTime: "Last 5 Minutes", AheadBehind: "Ahead or Behind",
+        PointDiff: 5, LeagueID: "00",
+      });
+      return parseRS(json);
+    };
+    let rows = await fetchClutch(season);
+    if (!rows.length) rows = await fetchClutch(getPreviousSeason(season));
+    return cs(k, rows, TTL_LEAGUE);
   } catch (e) {
     console.error("[adv_stats] fetchLeagueClutch failed:", e.message);
     return [];
@@ -168,10 +195,15 @@ async function fetchLeagueHustle(season) {
   const k = `nba:hustle:${season}`;
   const h = cg(k); if (h) return h;
   try {
-    const json = await nbaFetch("leaguehustlestatsTeam", {
-      Season: season, SeasonType: "Regular Season", PerMode: "PerGame", LeagueID: "00",
-    });
-    return cs(k, parseRS(json), TTL_LEAGUE);
+    const fetchHustle = async (s) => {
+      const json = await nbaFetch("leaguehustlestatsTeam", {
+        Season: s, SeasonType: "Regular Season", PerMode: "PerGame", LeagueID: "00",
+      });
+      return parseRS(json);
+    };
+    let rows = await fetchHustle(season);
+    if (!rows.length) rows = await fetchHustle(getPreviousSeason(season));
+    return cs(k, rows, TTL_LEAGUE);
   } catch (e) {
     console.error("[adv_stats] fetchLeagueHustle failed:", e.message);
     return [];
@@ -181,13 +213,13 @@ async function fetchLeagueHustle(season) {
 async function fetchLeagueDefense(season) {
   const k = `nba:def:${season}`;
   const h = cg(k); if (h) return h;
-  try {
+  const fetchDef = async (s) => {
     const results = {};
     const cats = ["Overall", "2 Pointers", "3 Pointers", "Less Than 6Ft", "Greater Than 15Ft"];
     for (const cat of cats) {
       try {
         const json = await nbaFetch("leaguedashptteamdefend", {
-          Season: season, SeasonType: "Regular Season",
+          Season: s, SeasonType: "Regular Season",
           PerMode: "PerGame", DefenseCategory: cat, LeagueID: "00",
         });
         for (const r of parseRS(json)) {
@@ -201,7 +233,14 @@ async function fetchLeagueDefense(season) {
         }
       } catch { /* skip this category */ }
     }
-    const data = Object.entries(results).map(([TEAM_NAME, zones]) => ({ TEAM_NAME, zones }));
+    return Object.entries(results).map(([TEAM_NAME, zones]) => ({ TEAM_NAME, zones }));
+  };
+  try {
+    let data = await fetchDef(season);
+    if (!data.length) {
+      console.log(`[adv_stats] Defense ${season} empty, trying ${getPreviousSeason(season)}`);
+      data = await fetchDef(getPreviousSeason(season));
+    }
     return cs(k, data, TTL_LEAGUE);
   } catch (e) {
     console.error("[adv_stats] fetchLeagueDefense failed:", e.message);
@@ -213,11 +252,16 @@ async function fetchLeaguePlayers(season) {
   const k = `nba:players:${season}`;
   const h = cg(k); if (h) return h;
   try {
-    const json = await nbaFetch("leaguedashplayerstats", {
-      Season: season, SeasonType: "Regular Season",
-      MeasureType: "Advanced", PerMode: "PerGame", LeagueID: "00",
-    });
-    return cs(k, parseRS(json), TTL_PLAYER);
+    const fetchPlayers = async (s) => {
+      const json = await nbaFetch("leaguedashplayerstats", {
+        Season: s, SeasonType: "Regular Season",
+        MeasureType: "Advanced", PerMode: "PerGame", LeagueID: "00",
+      });
+      return parseRS(json);
+    };
+    let rows = await fetchPlayers(season);
+    if (!rows.length) rows = await fetchPlayers(getPreviousSeason(season));
+    return cs(k, rows, TTL_PLAYER);
   } catch (e) {
     console.error("[adv_stats] fetchLeaguePlayers failed:", e.message);
     return [];
@@ -227,14 +271,19 @@ async function fetchLeaguePlayers(season) {
 async function fetchTeamGameLog(teamId, season) {
   const k = `nba:gl:${teamId}:${season}`;
   const h = cg(k); if (h) return h;
-  try {
+  const fetchGL = async (s) => {
     const json = await nbaFetch("teamgamelogs", {
-      TeamID: teamId, Season: season,
-      SeasonType: "Regular Season", LeagueID: "00",
+      TeamID: teamId, Season: s, SeasonType: "Regular Season", LeagueID: "00",
     });
     const rows = parseRS(json);
-    for (const r of rows) {
-      r.OPP_PTS = flt(r.PTS) - flt(r.PLUS_MINUS);
+    for (const r of rows) r.OPP_PTS = flt(r.PTS) - flt(r.PLUS_MINUS);
+    return rows;
+  };
+  try {
+    let rows = await fetchGL(season);
+    if (!rows.length) {
+      console.log(`[adv_stats] GL ${teamId} ${season} empty, trying ${getPreviousSeason(season)}`);
+      rows = await fetchGL(getPreviousSeason(season));
     }
     return cs(k, rows.slice(-25), TTL_GAME);
   } catch (e) {
@@ -369,18 +418,19 @@ function buildProfile(teamName, advRows, baseRows, clutchRows, hustleRows, defRo
   });
 
   // Core efficiency — official NBA opponent-adjusted numbers
-  const off_rating = flt(a.OFF_RATING, 0) || flt(a.E_OFF_RATING, 0) || 0;
-  const def_rating = flt(a.DEF_RATING, 0) || flt(a.E_DEF_RATING, 0) || 0;
-  const net_rating = flt(a.NET_RATING, 0) || flt(a.E_NET_RATING, 0) || (off_rating - def_rating);
-  const pace       = flt(a.PACE, 0) || flt(a.E_PACE, 0) || 0;
-  const pie        = flt(a.PIE, 0);
-  const ts_pct     = flt(a.TS_PCT, 0);
-  const efg_pct    = flt(a.EFG_PCT, 0);
-  const tov_pct    = flt(a.TM_TOV_PCT, 0);
-  const oreb_pct   = flt(a.OREB_PCT, 0);
-  const dreb_pct   = flt(a.DREB_PCT, 0);
-  const ast_to     = flt(a.AST_TO, 0);
-  const poss       = flt(a.POSS, pace);
+  // Use || chaining: prefer non-zero values, fall back to sensible NBA league averages
+  const off_rating = flt(a.OFF_RATING) || flt(a.E_OFF_RATING) || 0;
+  const def_rating = flt(a.DEF_RATING) || flt(a.E_DEF_RATING) || 0;
+  const net_rating = flt(a.NET_RATING) || flt(a.E_NET_RATING) || (off_rating - def_rating);
+  const pace       = flt(a.PACE)       || flt(a.E_PACE)       || 0;
+  const pie        = flt(a.PIE)        || 0;
+  const ts_pct     = flt(a.TS_PCT)     || 0;
+  const efg_pct    = flt(a.EFG_PCT)    || 0;
+  const tov_pct    = flt(a.TM_TOV_PCT) || 0;
+  const oreb_pct   = flt(a.OREB_PCT)   || 0;
+  const dreb_pct   = flt(a.DREB_PCT)   || 0;
+  const ast_to     = flt(a.AST_TO)     || 0;
+  const poss       = flt(a.POSS) || pace || 98;
 
   const pts     = flt(b.PTS, 0);
   const fg_pct  = flt(b.FG_PCT, 0);
@@ -613,6 +663,7 @@ async function getAdvancedMatchup(homeTeam, awayTeam) {
   const season  = getCurrentSeason();
   const homeNbaId = getNbaTeamId(homeTeam);
   const awayNbaId = getNbaTeamId(awayTeam);
+  console.log(`[adv_stats] Season=${season} Home=${homeTeam}(${homeNbaId}) Away=${awayTeam}(${awayNbaId})`);
 
   // Fetch NBA Stats data + BDL team IDs in parallel
   const [
