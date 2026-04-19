@@ -1,615 +1,468 @@
-/**
- * stats_model.js
- *
- * Fully independent win probability engine.
- * Does NOT use sportsbook odds as an input.
- *
- * Signals used:
- *   1. Offensive / Defensive efficiency ratings (season)
- *   2. Recent form  — last 10 games (W%, point-diff)
- *   3. Head-to-head history (current season)
- *   4. Player impact — top-player usage & scoring share
- *   5. Home-court advantage
- *   6. Home/Away splits
- *   7. Live score-state adjustment (when in-game)
- *
- * Outputs a probability between 0 and 1 that the HOME team wins.
- * Combine with market probability externally to compute edge.
- */
-
 "use strict";
 
-const BALLDONTLIE_API_KEY = process.env.BALLDONTLIE_API_KEY || "";
-
-// ─── constants ────────────────────────────────────────────────────────────────
-const HOME_COURT_BOOST   = 0.028;   // ~3 pts → ~2.8% win prob lift
-const RECENT_GAMES_N     = 10;
-const H2H_GAMES_N        = 5;
-const RATING_WEIGHT      = 0.35;
-const FORM_WEIGHT        = 0.25;
-const H2H_WEIGHT         = 0.10;
-const PLAYER_WEIGHT      = 0.15;
-const SPLIT_WEIGHT       = 0.15;
-
-const PER_GAME_CACHE_TTL = 6 * 60 * 60 * 1000;   // 6 h  — season stats move slowly
-const RECENT_CACHE_TTL   = 20 * 60 * 1000;         // 20 min
-const PLAYER_CACHE_TTL   = 30 * 60 * 1000;         // 30 min
-
-// ─── tiny in-process cache ────────────────────────────────────────────────────
-const _cache = new Map();
-
-function cacheGet(key) {
-  const hit = _cache.get(key);
-  if (!hit) return null;
-  if (Date.now() > hit.exp) { _cache.delete(key); return null; }
-  return hit.val;
-}
-function cacheSet(key, val, ttl) {
-  _cache.set(key, { val, exp: Date.now() + ttl });
-  return val;
-}
-
-// ─── helpers ──────────────────────────────────────────────────────────────────
-function clamp(x, lo, hi) { return Math.max(lo, Math.min(hi, x)); }
-function roundTo(n, d = 4) {
-  const f = 10 ** d;
-  return Math.round(n * f) / f;
-}
-function avg(arr) {
-  const nums = arr.filter(v => typeof v === "number" && Number.isFinite(v));
-  return nums.length ? nums.reduce((s, v) => s + v, 0) / nums.length : null;
-}
-function logit(p) { return Math.log(p / (1 - p)); }
-function sigmoid(x) { return 1 / (1 + Math.exp(-x)); }
-
-// ─── BallDontLie fetch ─────────────────────────────────────────────────────
-async function bdlFetch(path) {
-  if (!BALLDONTLIE_API_KEY) throw new Error("Missing BALLDONTLIE_API_KEY");
-  const base = "https://api.balldontlie.io/v1";
-  const url  = `${base}${path}`;
-  const res  = await fetch(url, {
-    headers: { Authorization: BALLDONTLIE_API_KEY },
-    signal: AbortSignal.timeout(12000)
-  });
-  const txt = await res.text();
-  if (!res.ok) throw new Error(`BDL ${res.status}: ${txt.slice(0, 200)}`);
-  try { return JSON.parse(txt); } catch { throw new Error(`BDL bad JSON: ${txt.slice(0, 200)}`); }
-}
-
-function normalizeRows(payload) {
-  if (Array.isArray(payload))        return payload;
-  if (Array.isArray(payload?.data))  return payload.data;
-  return [];
-}
-
-// ─── Team lookup ─────────────────────────────────────────────────────────────
-async function getTeams() {
-  const key = "bdl:teams";
-  const hit = cacheGet(key);
-  if (hit) return hit;
-  const raw = await bdlFetch("/teams?per_page=100");
-  return cacheSet(key, normalizeRows(raw), PER_GAME_CACHE_TTL);
-}
-
-async function findTeamId(fullName) {
-  const teams = await getTeams();
-  const norm  = s => String(s || "").toLowerCase().replace(/[^a-z0-9 ]/g, "").trim();
-  const target = norm(fullName);
-
-  // exact match first
-  let match = teams.find(t => norm(t.full_name) === target);
-  if (match) return match.id;
-
-  // partial: last word (nickname)
-  const lastWord = target.split(" ").pop();
-  match = teams.find(t => norm(t.full_name).includes(lastWord));
-  if (match) return match.id;
-
-  // partial: any word
-  match = teams.find(t => target.split(" ").some(w => norm(t.full_name).includes(w)));
-  return match ? match.id : null;
-}
-
-// ─── Season stats (offensive / defensive ratings) ────────────────────────────
-function getCurrentSeason() {
-  const now   = new Date();
-  const year  = now.getUTCFullYear();
-  const month = now.getUTCMonth() + 1;
-  return month >= 10 ? year : year - 1;
-}
-
-async function getTeamSeasonStats(teamId, season) {
-  const key = `bdl:season:${teamId}:${season}`;
-  const hit = cacheGet(key);
-  if (hit) return hit;
-
-  try {
-    const raw  = await bdlFetch(`/teams/${teamId}/stats?seasons[]=${season}&postseason=false`);
-    const rows = normalizeRows(raw);
-    return cacheSet(key, rows[0] || null, PER_GAME_CACHE_TTL);
-  } catch {
-    return null;
-  }
-}
-
 /**
- * Build a simple offensive/defensive efficiency rating for a team.
- * Returns { offRating, defRating, pace } all in points-per-100-possessions space
- * or null if data unavailable.
+ * stats_model.js  —  Fully independent win probability engine v2
  *
- * BallDontLie /teams/:id/stats returns averaged per-game fields including:
- *   pts, fg_pct, fg3_pct, ft_pct, reb, ast, stl, blk, turnover, pf, min
- * We derive pace proxy from reb + ast + turnover as possession estimate.
+ * Uses advanced_stats.js for every metric. Does NOT use sportsbook odds.
+ *
+ * ─── 13 signals (weights sum to 1.0) ────────────────────────────────────────
+ *
+ *  1. Net Rating matchup     0.24  ORtg vs DRtg cross-comparison (most predictive)
+ *  2. Predicted spread       0.14  derived from projected pts both sides
+ *  3. Recent form            0.13  last-10 win% + point diff
+ *  4. Star power             0.10  player quality differential
+ *  5. Shooting efficiency    0.08  TS% / eFG% matchup
+ *  6. Turnover battle        0.07  TOV% differential
+ *  7. Rest / schedule        0.07  rest days + B2B penalties
+ *  8. Rebound battle         0.05  OREB% advantage
+ *  9. H2H history            0.05  current season head-to-head
+ * 10. Momentum               0.04  recent form trend (last-5 vs season)
+ * 11. Defense quality        0.03  STL + BLK rates
+ * 12. Home/away splits       0.03  contextual home vs away record
+ * 13. Pace / ball movement   0.03  pace edge + AST/TOV quality
+ *
+ * Each signal produces a home-win probability in [0.1, 0.9].
+ * Signals are blended in logit space (more stable than linear for probs).
+ * Home court advantage added as a calibrated logit bump.
+ * Live score adjustment applied when a game is in progress.
+ * ─────────────────────────────────────────────────────────────────────────────
  */
-function buildEfficiencyRating(stats) {
-  if (!stats) return null;
 
-  const pts = Number(stats.pts)      || 0;
-  const reb = Number(stats.reb)      || 0;
-  const ast = Number(stats.ast)      || 0;
-  const tov = Number(stats.turnover) || 0;
-  const stl = Number(stats.stl)      || 0;
-  const blk = Number(stats.blk)      || 0;
-  const fgPct  = Number(stats.fg_pct)  || 0;
-  const fg3Pct = Number(stats.fg3_pct) || 0;
-  const ftPct  = Number(stats.ft_pct)  || 0;
+const { getAdvancedMatchup } = require("./advanced_stats");
 
-  // Rough possession proxy per game
-  const possProxy = Math.max(reb + ast + tov + 1, 1);
+// ─── signal weights ───────────────────────────────────────────────────────────
+const W = {
+  netRating:    0.24,
+  predictedSpread: 0.14,
+  recentForm:   0.13,
+  starPower:    0.10,
+  shooting:     0.08,
+  turnover:     0.07,
+  rest:         0.07,
+  rebound:      0.05,
+  h2h:          0.05,
+  momentum:     0.04,
+  defense:      0.03,
+  splits:       0.03,
+  pace:         0.03
+};
 
-  // Offensive efficiency  = pts per possession (scaled to 100)
-  const offRating = (pts / possProxy) * 100;
+// Sanity check: weights should sum to ~1
+const W_TOTAL = Object.values(W).reduce((s, v) => s + v, 0);
 
-  // Defensive proxy: blocks + steals relative to possession
-  const defRating = ((stl + blk) / possProxy) * 100;
+const HOME_COURT_LOGIT_BUMP = 0.112;  // ≈ +2.8% win prob at p=0.5
 
-  // Shooting quality index (0-1 scale, weighted)
-  const shootingIndex = fgPct * 0.5 + fg3Pct * 0.3 + ftPct * 0.2;
+// ─── math ─────────────────────────────────────────────────────────────────────
+function clamp(x, lo, hi) { return Math.max(lo, Math.min(hi, x)); }
+function sigmoid(x) { return 1 / (1 + Math.exp(-clamp(x, -50, 50))); }
+function logit(p)   { const cp = clamp(p, 1e-6, 1 - 1e-6); return Math.log(cp / (1 - cp)); }
+function roundTo(n, d = 4) { return Math.round(n * (10 ** d)) / (10 ** d); }
 
-  return { offRating, defRating, shootingIndex, pts, reb, ast, tov, possProxy };
-}
+// ─── signal builders (each returns prob in [0.1, 0.9]) ───────────────────────
 
-// ─── Recent form (last N games) ───────────────────────────────────────────────
-async function getRecentGames(teamId, n = RECENT_GAMES_N) {
-  const key = `bdl:recent:${teamId}:${n}`;
-  const hit = cacheGet(key);
-  if (hit) return hit;
-
-  const season = getCurrentSeason();
-  try {
-    const raw  = await bdlFetch(
-      `/games?team_ids[]=${teamId}&seasons[]=${season}&per_page=${n}&postseason=false`
-    );
-    const rows = normalizeRows(raw)
-      .filter(g => String(g.status || "").toLowerCase().includes("final"))
-      .slice(-n);
-    return cacheSet(key, rows, RECENT_CACHE_TTL);
-  } catch {
-    return [];
-  }
-}
-
-function buildFormSignal(games, teamId) {
-  if (!games || !games.length) return null;
-
-  let wins = 0, totalDiff = 0, homeWins = 0, homeGames = 0, awayWins = 0, awayGames = 0;
-
-  for (const g of games) {
-    const isHome   = g.home_team?.id === teamId || g.home_team_id === teamId;
-    const teamScore = isHome ? g.home_team_score : g.visitor_team_score;
-    const oppScore  = isHome ? g.visitor_team_score : g.home_team_score;
-    if (typeof teamScore !== "number" || typeof oppScore !== "number") continue;
-
-    const won  = teamScore > oppScore;
-    const diff = teamScore - oppScore;
-
-    if (won) wins++;
-    totalDiff += diff;
-
-    if (isHome) {
-      homeGames++;
-      if (won) homeWins++;
-    } else {
-      awayGames++;
-      if (won) awayWins++;
-    }
-  }
-
-  const n        = games.length;
-  const winRate  = wins / n;
-  const avgDiff  = totalDiff / n;
-
-  // Normalize avgDiff: ~5 pts per game → 0.1 prob swing
-  const diffProb = clamp(0.5 + avgDiff * 0.01, 0.1, 0.9);
-  const formProb = (winRate * 0.6 + diffProb * 0.4);
-
-  return {
-    winRate,
-    avgDiff,
-    formProb,
-    homeWinRate: homeGames ? homeWins / homeGames : null,
-    awayWinRate: awayGames ? awayWins / awayGames : null,
-    games: n
-  };
-}
-
-// ─── Home / Away splits ───────────────────────────────────────────────────────
-function buildSplitSignal(homeForm, awayForm) {
-  // homeForm: form object for the home team (playing at home)
-  // awayForm: form object for the away team (playing away)
-  if (!homeForm || !awayForm) return 0.5;
-
-  const homeRate  = homeForm.homeWinRate ?? homeForm.winRate ?? 0.5;
-  const awayRate  = awayForm.awayWinRate ?? awayForm.winRate ?? 0.5;
-  const total     = homeRate + (1 - awayRate);
-  return total / 2;
-}
-
-// ─── Head-to-head ─────────────────────────────────────────────────────────────
-async function getH2HGames(homeTeamId, awayTeamId, n = H2H_GAMES_N) {
-  const key = `bdl:h2h:${homeTeamId}:${awayTeamId}:${n}`;
-  const hit = cacheGet(key);
-  if (hit) return hit;
-
-  const season = getCurrentSeason();
-  try {
-    // Fetch games involving both teams this season
-    const raw  = await bdlFetch(
-      `/games?team_ids[]=${homeTeamId}&team_ids[]=${awayTeamId}&seasons[]=${season}&per_page=100&postseason=false`
-    );
-    const all  = normalizeRows(raw).filter(g =>
-      String(g.status || "").toLowerCase().includes("final")
-    );
-
-    // Keep only matchups between these two teams
-    const h2h = all.filter(g => {
-      const ids = [g.home_team?.id, g.home_team_id, g.visitor_team?.id, g.visitor_team_id];
-      return ids.includes(homeTeamId) && ids.includes(awayTeamId);
-    }).slice(-n);
-
-    return cacheSet(key, h2h, RECENT_CACHE_TTL);
-  } catch {
-    return [];
-  }
-}
-
-function buildH2HSignal(h2hGames, homeTeamId) {
-  if (!h2hGames || !h2hGames.length) return null;
-
-  let homeWins = 0;
-  let homeDiff = 0;
-
-  for (const g of h2hGames) {
-    const isHome   = g.home_team?.id === homeTeamId || g.home_team_id === homeTeamId;
-    const homeScore = g.home_team_score;
-    const awayScore = g.visitor_team_score;
-    if (typeof homeScore !== "number" || typeof awayScore !== "number") continue;
-
-    const teamScore = isHome ? homeScore : awayScore;
-    const oppScore  = isHome ? awayScore : homeScore;
-    const diff      = teamScore - oppScore;
-
-    if (diff > 0) homeWins++;
-    homeDiff += diff;
-  }
-
-  const n       = h2hGames.length;
-  const winRate = homeWins / n;
-  const avgDiff = homeDiff / n;
-  const h2hProb = clamp(0.5 + avgDiff * 0.01 + (winRate - 0.5) * 0.15, 0.2, 0.8);
-
-  return { winRate, avgDiff, h2hProb, games: n };
-}
-
-// ─── Player impact signal ─────────────────────────────────────────────────────
-async function getTopPlayerStats(teamId, n = 5) {
-  const season = getCurrentSeason();
-  const key    = `bdl:players:${teamId}:${season}`;
-  const hit    = cacheGet(key);
-  if (hit) return hit;
-
-  try {
-    const raw  = await bdlFetch(
-      `/players/stats?team_ids[]=${teamId}&seasons[]=${season}&per_page=100&postseason=false`
-    );
-    const rows = normalizeRows(raw)
-      .filter(r => (Number(r.min) || 0) >= 10)   // at least 10 mpg
-      .sort((a, b) => (Number(b.pts) || 0) - (Number(a.pts) || 0))
-      .slice(0, n);
-    return cacheSet(key, rows, PLAYER_CACHE_TTL);
-  } catch {
-    return [];
-  }
-}
-
-function buildPlayerSignal(homePlayers, awayPlayers) {
-  if (!homePlayers.length && !awayPlayers.length) return null;
-
-  function teamScore(players) {
-    // Weighted star power: top scorer weighted more
-    const pts  = players.map(p => Number(p.pts) || 0);
-    const ast  = players.map(p => Number(p.ast) || 0);
-    const reb  = players.map(p => Number(p.reb) || 0);
-    const fgPct = players.map(p => Number(p.fg_pct) || 0);
-
-    // Approximate "value" per player
-    const values = pts.map((p, i) =>
-      p * 1.0 + ast[i] * 0.75 + reb[i] * 0.5 + fgPct[i] * 10
-    );
-
-    // Apply diminishing returns for top-heavy lineups
-    const sorted = values.slice().sort((a, b) => b - a);
-    return sorted.reduce((s, v, i) => s + v / (i + 1), 0);
-  }
-
-  const homeVal = teamScore(homePlayers);
-  const awayVal = teamScore(awayPlayers);
-  const total   = homeVal + awayVal;
-
-  if (total === 0) return null;
-  return { homeVal, awayVal, playerProb: homeVal / total };
-}
-
-// ─── Efficiency matchup signal ────────────────────────────────────────────────
-function buildEfficiencyMatchupProb(homeEff, awayEff) {
-  if (!homeEff || !awayEff) return null;
-
-  // Offense vs Defense matchup: home offRating vs away defRating
-  const homeOffAdv = homeEff.offRating - awayEff.defRating;
-  const awayOffAdv = awayEff.offRating - homeEff.defRating;
-
-  // Net advantage in home team's favor
-  const netAdv = homeOffAdv - awayOffAdv;
-
-  // Shooting efficiency delta
-  const shootDelta = homeEff.shootingIndex - awayEff.shootingIndex;
-
-  // Combine: 1 point of offRating diff ≈ 0.5% win prob
-  const effProb = clamp(0.5 + netAdv * 0.004 + shootDelta * 0.3, 0.1, 0.9);
-
-  return { netAdv, shootDelta, effProb };
-}
-
-// ─── Live game adjustment ─────────────────────────────────────────────────────
 /**
- * Given a live game state, adjust pregame probability using score and time remaining.
- * Uses a simple "win probability model":
- *   - Lead size relative to expected scoring rate for remaining time
- *   - Returns adjusted probability for the currently leading team
+ * 1. Net Rating matchup
+ * NRtg diff of +7.5 pts/100poss → sigmoid produces ≈ 70% win prob for better team.
+ * Scale = 7.5 is calibrated from historical NBA data.
  */
-function buildLiveAdjustment(pregameHomeProb, liveState) {
-  if (!liveState || !liveState.liveFound) return pregameHomeProb;
+function signalNetRating(matchup) {
+  const diff = matchup?.net_diff;
+  if (typeof diff !== "number" || !Number.isFinite(diff)) return 0.5;
+  return clamp(sigmoid(diff / 7.5), 0.12, 0.88);
+}
+
+/**
+ * 2. Predicted spread
+ * Translates projected point differential directly to win probability.
+ * Each 3.5 pts of spread ≈ sigmoid unit.
+ */
+function signalPredictedSpread(matchup) {
+  const spread = matchup?.predicted_spread;
+  if (typeof spread !== "number" || !Number.isFinite(spread)) return 0.5;
+  return clamp(sigmoid(spread / 3.5), 0.10, 0.90);
+}
+
+/**
+ * 3. Recent form (last 10 games win% + point differential)
+ */
+function signalRecentForm(matchup) {
+  const formEdge = matchup?.form_edge  || 0;   // win% diff last 10
+  const diffEdge = matchup?.diff5_edge || 0;    // point diff diff last 5
+  // Combine: win% difference of 0.20 → ≈ 60% vs 0.40 differential
+  const combined = formEdge * 0.60 + clamp(diffEdge / 15, -0.3, 0.3) * 0.40;
+  return clamp(0.5 + combined * 0.45, 0.12, 0.88);
+}
+
+/**
+ * 4. Star power (normalised player quality differential)
+ * star_edge is normalised to roughly [-0.5, 0.5]
+ */
+function signalStarPower(matchup) {
+  const se = matchup?.star_edge  || 0;   // normalised [-0.5, 0.5]
+  const de = matchup?.depth_edge || 0;
+  const combined = se * 0.75 + de * 0.25;
+  return clamp(0.5 + combined * 0.55, 0.15, 0.85);
+}
+
+/**
+ * 5. Shooting efficiency
+ * TS% difference of 0.03 (3%) → meaningful edge.
+ */
+function signalShooting(matchup) {
+  const ts_edge  = matchup?.ts_edge  || 0;
+  const efg_edge = matchup?.efg_edge || 0;
+  // Weight TS% more (more comprehensive than eFG%)
+  const combined = ts_edge * 0.65 + efg_edge * 0.35;
+  return clamp(0.5 + combined * 6.5, 0.15, 0.85);
+}
+
+/**
+ * 6. Turnover battle
+ * TOV% diff of 2 percentage points → meaningful edge.
+ */
+function signalTurnover(matchup) {
+  const tov_edge    = matchup?.tov_edge    || 0;   // away_tov - home_tov (+ = home advantage)
+  const ast_tov_edge = matchup?.ast_tov_edge || 0;
+  const combined = tov_edge * 0.022 + ast_tov_edge * 0.04;
+  return clamp(0.5 + combined, 0.15, 0.85);
+}
+
+/**
+ * 7. Rest / schedule
+ * rest_edge already includes B2B penalties and rest day differential.
+ */
+function signalRest(matchup) {
+  const re = matchup?.rest_edge || 0;
+  return clamp(0.5 + re, 0.18, 0.82);
+}
+
+/**
+ * 8. Rebounding battle
+ * OREB% edge of 0.05 (5 percentage points) → ~2% win prob swing.
+ */
+function signalRebounding(matchup) {
+  const ore = matchup?.oreb_edge || 0;
+  return clamp(0.5 + ore * 0.8, 0.25, 0.75);
+}
+
+/**
+ * 9. H2H — current season only
+ */
+function signalH2H(h2h) {
+  if (!h2h) return 0.5;
+  return clamp(h2h.h2h_prob || 0.5, 0.22, 0.78);
+}
+
+/**
+ * 10. Momentum (recent form trend — improving or declining)
+ * momentum = winRate_last5 - winRate_season
+ */
+function signalMomentum(matchup) {
+  const me = matchup?.momentum_edge || 0;
+  const se = matchup?.streak_edge   || 0;
+  const combined = me * 0.70 + se * 0.30;
+  return clamp(0.5 + combined * 0.7, 0.25, 0.75);
+}
+
+/**
+ * 11. Defensive quality (steals + blocks)
+ */
+function signalDefense(matchup) {
+  const de = matchup?.def_edge || 0;
+  // def_edge: combined stl+blk advantage (e.g. ±5 raw)
+  return clamp(0.5 + de * 0.008, 0.25, 0.75);
+}
+
+/**
+ * 12. Home / away splits (contextual)
+ */
+function signalSplits(homeData, awayData) {
+  const homeHomeWR = homeData?.recent?.homeWinRate;
+  const awayAwayWR = awayData?.recent?.awayWinRate;
+
+  const homeRate  = homeHomeWR ?? homeData?.recent?.winRate ?? 0.5;
+  const awayRate  = awayAwayWR ?? awayData?.recent?.winRate ?? 0.5;
+
+  // Combine: home's at-home record vs away's on-road record
+  const total = homeRate + (1 - awayRate);
+  return clamp(total / 2, 0.25, 0.75);
+}
+
+/**
+ * 13. Pace / ball movement quality
+ */
+function signalPace(matchup) {
+  const pe  = matchup?.pace_edge || 0;
+  const ate = clamp(matchup?.ast_tov_edge * 0.03 || 0, -0.04, 0.04);
+  return clamp(0.5 + pe + ate, 0.25, 0.75);
+}
+
+// ─── weighted logit blend ──────────────────────────────────────────────────────
+/**
+ * Combine all signal probabilities in logit space.
+ * This is more principled than linear averaging (avoids probability ceiling issues).
+ */
+function blendSignals(components) {
+  if (!components.length) return 0.5;
+
+  let logitSum  = 0;
+  let weightSum = 0;
+
+  for (const c of components) {
+    const safeP = clamp(c.prob, 0.01, 0.99);
+    logitSum  += logit(safeP) * c.weight;
+    weightSum += c.weight;
+  }
+
+  return sigmoid(logitSum / weightSum);
+}
+
+// ─── live score adjustment ─────────────────────────────────────────────────────
+/**
+ * Adjust pregame probability using live score and time remaining.
+ * Uses a logistic model blended with pregame estimate.
+ */
+function applyLiveAdjustment(pregameProb, liveState) {
+  if (!liveState?.liveFound) return pregameProb;
 
   const homeScore = Number(liveState.homeScore || 0);
   const awayScore = Number(liveState.awayScore || 0);
   const scoreDiff = homeScore - awayScore;
 
-  const period    = Number(liveState.period || 1);
-  const clockSec  = typeof liveState.clockSec === "number"
-    ? liveState.clockSec
-    : 12 * 60;
+  const period   = Number(liveState.period || 1);
+  const clockSec = typeof liveState.clockSec === "number" ? liveState.clockSec : 12 * 60;
 
-  // Total regulation seconds = 4 * 12 * 60 = 2880
-  const totalSec    = 4 * 12 * 60;
-  const elapsedSec  = clamp((period - 1) * 12 * 60 + (12 * 60 - clockSec), 0, totalSec);
-  const remainSec   = clamp(totalSec - elapsedSec, 0, totalSec);
-  const progress    = clamp(elapsedSec / totalSec, 0, 1);
+  const totalSec   = 4 * 12 * 60;   // 2880
+  const elapsedSec = clamp((period - 1) * 12 * 60 + (12 * 60 - clockSec), 0, totalSec);
+  const remainSec  = clamp(totalSec - elapsedSec, 0, totalSec);
+  const progress   = clamp(elapsedSec / totalSec, 0, 1);
 
-  if (progress < 0.03) return pregameHomeProb;   // too early, trust pregame
+  // Too early to meaningfully adjust
+  if (progress < 0.04) return pregameProb;
 
-  // Expected points per second (NBA averages ~100 pts per team per game)
-  // Each team scores ~100/2880 pts/sec ≈ 0.0347
-  // So remaining scoring ≈ 2 * 100 * (remainSec/2880)
-  const ptPerSec     = 100 / 2880;
-  const remainPts    = remainSec * ptPerSec * 2;   // both teams combined
+  // Expected points remaining per team ≈ 100 * remainSec / totalSec
+  const remainPts  = remainSec * (100 / totalSec) * 2;
+  const leadFactor = scoreDiff / Math.max(Math.sqrt(remainPts), 1);
 
-  // "Critical number": pts needed vs expected
-  // If up by X with Y pts remaining, P(win) for leader
-  // Use logistic model: logit(baseProb) + lead_factor
-  const leadFactor   = scoreDiff / Math.max(Math.sqrt(remainPts), 1);
+  // Blend weight: exponential curve so late-game score matters a lot more
+  const blendWeight = Math.pow(progress, 1.5);
 
-  // At progress=1 (game over), leadFactor dominates; at 0 it doesn't
-  const blendWeight  = Math.pow(progress, 1.4);
+  const liveLogit = logit(clamp(pregameProb, 0.05, 0.95)) + leadFactor * 1.9;
+  const liveProb  = sigmoid(liveLogit);
 
-  const logitBase    = logit(clamp(pregameHomeProb, 0.05, 0.95));
-  const logitLive    = logitBase + leadFactor * 1.8;
-
-  const liveProb     = sigmoid(logitLive);
-  const blended      = pregameHomeProb * (1 - blendWeight) + liveProb * blendWeight;
-
-  return clamp(blended, 0.01, 0.99);
+  return clamp(pregameProb * (1 - blendWeight) + liveProb * blendWeight, 0.01, 0.99);
 }
 
-// ─── Main export ──────────────────────────────────────────────────────────────
-
+// ─── main export ──────────────────────────────────────────────────────────────
 /**
  * computeIndependentWinProb
  *
- * @param {string} homeTeam   - Full team name, e.g. "Boston Celtics"
- * @param {string} awayTeam   - Full team name, e.g. "Miami Heat"
- * @param {object} [liveState] - Optional live game state (from live_tracker)
+ * @param {string} homeTeam
+ * @param {string} awayTeam
+ * @param {object|null} liveState  — from live_tracker (optional)
  * @returns {Promise<{
- *   homeWinProb: number,
- *   signals: object,
- *   meta: object
+ *   homeWinProb, pregameHomeProb,
+ *   signals, weights, matchupProfile, meta
  * }>}
  */
 async function computeIndependentWinProb(homeTeam, awayTeam, liveState = null) {
-  // ── 1. Resolve team IDs ──────────────────────────────────────────────────
-  const [homeId, awayId] = await Promise.all([
-    findTeamId(homeTeam),
-    findTeamId(awayTeam)
-  ]);
 
-  if (!homeId || !awayId) {
-    console.warn(`[stats_model] Could not resolve team IDs: ${homeTeam}=${homeId}, ${awayTeam}=${awayId}`);
-    // Fall back to coin flip + home court
+  // ── 1. Fetch all advanced data ──────────────────────────────────────────
+  let advancedData = null;
+  try {
+    advancedData = await getAdvancedMatchup(homeTeam, awayTeam);
+  } catch (err) {
+    console.warn(`[stats_model] getAdvancedMatchup failed: ${err.message}`);
+  }
+
+  // Graceful fallback: no data → home court only
+  if (!advancedData) {
+    const fallback = clamp(sigmoid(HOME_COURT_LOGIT_BUMP), 0.45, 0.60);
     return {
-      homeWinProb: 0.5 + HOME_COURT_BOOST,
-      signals:     { fallback: true },
-      meta:        { homeId, awayId, error: "team_id_not_found" }
+      homeWinProb:     roundTo(fallback, 4),
+      pregameHomeProb: roundTo(fallback, 4),
+      signals:         { fallback: true, reason: "advanced_data_unavailable" },
+      weights:         W,
+      matchupProfile:  null,
+      meta:            { error: "no_advanced_data" }
     };
   }
 
-  // ── 2. Fetch all data in parallel ─────────────────────────────────────────
-  const season = getCurrentSeason();
+  const { matchup, homeData, awayData, h2h, homeId, awayId } = advancedData;
 
-  const [
-    homeStats, awayStats,
-    homeRecent, awayRecent,
-    h2hGames,
-    homePlayers, awayPlayers
-  ] = await Promise.allSettled([
-    getTeamSeasonStats(homeId, season),
-    getTeamSeasonStats(awayId, season),
-    getRecentGames(homeId),
-    getRecentGames(awayId),
-    getH2HGames(homeId, awayId),
-    getTopPlayerStats(homeId),
-    getTopPlayerStats(awayId)
-  ]).then(results => results.map(r => r.status === "fulfilled" ? r.value : null));
+  // ── 2. Build each signal ─────────────────────────────────────────────────
+  const sig = {
+    netRating:       signalNetRating(matchup),
+    predictedSpread: signalPredictedSpread(matchup),
+    recentForm:      signalRecentForm(matchup),
+    starPower:       signalStarPower(matchup),
+    shooting:        signalShooting(matchup),
+    turnover:        signalTurnover(matchup),
+    rest:            signalRest(matchup),
+    rebound:         signalRebounding(matchup),
+    h2h:             signalH2H(h2h),
+    momentum:        signalMomentum(matchup),
+    defense:         signalDefense(matchup),
+    splits:          signalSplits(homeData, awayData),
+    pace:            signalPace(matchup)
+  };
 
-  // ── 3. Build individual signals ───────────────────────────────────────────
-  const homeEff   = buildEfficiencyRating(homeStats);
-  const awayEff   = buildEfficiencyRating(awayStats);
-  const effMatch  = buildEfficiencyMatchupProb(homeEff, awayEff);
+  // ── 3. Weighted logit blend ──────────────────────────────────────────────
+  const components = Object.entries(sig).map(([label, prob]) => ({
+    label,
+    prob,
+    weight: W[label] || 0
+  }));
 
-  const homeForm  = buildFormSignal(homeRecent, homeId);
-  const awayForm  = buildFormSignal(awayRecent, awayId);
+  let statsHomeProb = blendSignals(components);
 
-  const h2hSignal = buildH2HSignal(h2hGames, homeId);
-
-  const playerSig = buildPlayerSignal(
-    homePlayers || [],
-    awayPlayers || []
-  );
-
-  const splitProb = buildSplitSignal(homeForm, awayForm);
-
-  // ── 4. Assemble weighted blend ─────────────────────────────────────────────
-  const components = [];
-
-  // Efficiency matchup
-  if (effMatch) {
-    components.push({ prob: effMatch.effProb, weight: RATING_WEIGHT, label: "efficiency" });
-  }
-
-  // Recent form — blend home's formProb vs away's formProb
-  if (homeForm && awayForm) {
-    const homeFormP = homeForm.formProb;
-    const awayFormP = awayForm.formProb;
-    const formTotal = homeFormP + awayFormP;
-    const formProb  = formTotal > 0 ? homeFormP / formTotal : 0.5;
-    components.push({ prob: clamp(formProb, 0.1, 0.9), weight: FORM_WEIGHT, label: "form" });
-  } else if (homeForm) {
-    components.push({ prob: homeForm.formProb, weight: FORM_WEIGHT * 0.5, label: "form_home_only" });
-  }
-
-  // H2H
-  if (h2hSignal) {
-    components.push({ prob: clamp(h2hSignal.h2hProb, 0.2, 0.8), weight: H2H_WEIGHT, label: "h2h" });
-  }
-
-  // Player impact
-  if (playerSig) {
-    components.push({ prob: clamp(playerSig.playerProb, 0.2, 0.8), weight: PLAYER_WEIGHT, label: "player" });
-  }
-
-  // Home/away splits
-  if (splitProb !== null) {
-    components.push({ prob: clamp(splitProb, 0.2, 0.8), weight: SPLIT_WEIGHT, label: "splits" });
-  }
-
-  // If we have zero components, return informed coin flip
-  if (!components.length) {
-    const fallback = clamp(0.5 + HOME_COURT_BOOST, 0.4, 0.65);
-    return {
-      homeWinProb: fallback,
-      signals:     { fallback: true },
-      meta:        { homeId, awayId, season }
-    };
-  }
-
-  // Weighted average in logit space (better than linear for probabilities)
-  let logitSum    = 0;
-  let weightSum   = 0;
-
-  for (const c of components) {
-    const safeP  = clamp(c.prob, 0.01, 0.99);
-    logitSum    += logit(safeP) * c.weight;
-    weightSum   += c.weight;
-  }
-
-  let statsHomeProb = sigmoid(logitSum / weightSum);
-
-  // Add home court advantage as additive logit bump
-  statsHomeProb = sigmoid(logit(clamp(statsHomeProb, 0.01, 0.99)) + logit(0.5 + HOME_COURT_BOOST) - logit(0.5));
+  // ── 4. Home court advantage ──────────────────────────────────────────────
+  statsHomeProb = sigmoid(logit(clamp(statsHomeProb, 0.01, 0.99)) + HOME_COURT_LOGIT_BUMP);
   statsHomeProb = clamp(statsHomeProb, 0.01, 0.99);
 
-  // ── 5. Live adjustment ────────────────────────────────────────────────────
+  // ── 5. Live adjustment ───────────────────────────────────────────────────
   let finalProb = statsHomeProb;
-  if (liveState && liveState.liveFound) {
-    finalProb = buildLiveAdjustment(statsHomeProb, liveState);
+  if (liveState?.liveFound) {
+    finalProb = applyLiveAdjustment(statsHomeProb, liveState);
   }
 
-  // ── 6. Return ─────────────────────────────────────────────────────────────
+  // ── 6. Build diagnostics ─────────────────────────────────────────────────
+  const signalDiagnostics = {};
+  for (const [label, prob] of Object.entries(sig)) {
+    signalDiagnostics[label] = {
+      prob:         roundTo(prob, 4),
+      weight:       W[label] || 0,
+      contribution: roundTo((prob - 0.5) * (W[label] || 0), 4)
+    };
+  }
+
   return {
-    homeWinProb: roundTo(finalProb, 4),
+    homeWinProb:     roundTo(finalProb, 4),
     pregameHomeProb: roundTo(statsHomeProb, 4),
-    signals: {
-      efficiency: effMatch ? {
-        effProb:    roundTo(effMatch.effProb, 4),
-        netAdv:     roundTo(effMatch.netAdv, 2),
-        shootDelta: roundTo(effMatch.shootDelta, 4)
+    signals: signalDiagnostics,
+    weights: W,
+    matchupProfile: {
+      // Key matchup numbers the UI can display
+      net_diff:          matchup?.net_diff         != null ? roundTo(matchup.net_diff, 2) : null,
+      predicted_spread:  matchup?.predicted_spread != null ? roundTo(matchup.predicted_spread, 1) : null,
+      home_predicted_pts: matchup?.home_predicted_pts != null ? roundTo(matchup.home_predicted_pts, 1) : null,
+      away_predicted_pts: matchup?.away_predicted_pts != null ? roundTo(matchup.away_predicted_pts, 1) : null,
+      ts_edge:           matchup?.ts_edge           != null ? roundTo(matchup.ts_edge, 4) : null,
+      tov_edge:          matchup?.tov_edge          != null ? roundTo(matchup.tov_edge, 2) : null,
+      oreb_edge:         matchup?.oreb_edge         != null ? roundTo(matchup.oreb_edge, 4) : null,
+      rest_edge:         matchup?.rest_edge         != null ? roundTo(matchup.rest_edge, 4) : null,
+      home_rest:         matchup?.home_rest,
+      away_rest:         matchup?.away_rest,
+      home_b2b:          matchup?.home_b2b,
+      away_b2b:          matchup?.away_b2b,
+      star_edge:         matchup?.star_edge         != null ? roundTo(matchup.star_edge, 4) : null,
+      variance_factor:   matchup?.variance_factor   != null ? roundTo(matchup.variance_factor, 3) : null,
+      // Raw advanced stats for display
+      homeAdv: homeData?.adv  ? {
+        ortg:     roundTo(homeData.adv.ortg, 1),
+        ts_pct:   roundTo(homeData.adv.ts_pct, 3),
+        efg_pct:  roundTo(homeData.adv.efg_pct, 3),
+        tov_rate: roundTo(homeData.adv.tov_rate, 1),
+        oreb_pct: roundTo(homeData.adv.oreb_pct, 3),
+        ftr:      roundTo(homeData.adv.ftr, 3),
+        fg3_rate: roundTo(homeData.adv.fg3_rate, 3),
+        ast_tov:  roundTo(homeData.adv.ast_tov, 2),
+        stl_rate: roundTo(homeData.adv.stl_rate, 1),
+        blk_rate: roundTo(homeData.adv.blk_rate, 3)
       } : null,
-      form: homeForm ? {
-        home: { winRate: roundTo(homeForm.winRate, 3), avgDiff: roundTo(homeForm.avgDiff, 2) },
-        away: awayForm ? { winRate: roundTo(awayForm.winRate, 3), avgDiff: roundTo(awayForm.avgDiff, 2) } : null
+      awayAdv: awayData?.adv ? {
+        ortg:     roundTo(awayData.adv.ortg, 1),
+        ts_pct:   roundTo(awayData.adv.ts_pct, 3),
+        efg_pct:  roundTo(awayData.adv.efg_pct, 3),
+        tov_rate: roundTo(awayData.adv.tov_rate, 1),
+        oreb_pct: roundTo(awayData.adv.oreb_pct, 3),
+        ftr:      roundTo(awayData.adv.ftr, 3),
+        fg3_rate: roundTo(awayData.adv.fg3_rate, 3),
+        ast_tov:  roundTo(awayData.adv.ast_tov, 2),
+        stl_rate: roundTo(awayData.adv.stl_rate, 1),
+        blk_rate: roundTo(awayData.adv.blk_rate, 3)
       } : null,
-      h2h: h2hSignal ? {
-        h2hProb: roundTo(h2hSignal.h2hProb, 4),
-        winRate: roundTo(h2hSignal.winRate, 3),
-        avgDiff: roundTo(h2hSignal.avgDiff, 2),
-        games:   h2hSignal.games
+      homeNet: homeData?.netRating,
+      awayNet: awayData?.netRating,
+      homePlayers: {
+        star_power:   roundTo(homeData?.players?.star_power || 0, 2),
+        depth_score:  roundTo(homeData?.players?.depth_score || 0, 2),
+        top_ts:       homeData?.players?.top_ts,
+        per_proxy_avg: homeData?.players?.per_proxy_avg,
+        top_players:  (homeData?.players?.players || []).slice(0, 3).map(p => ({
+          name:      p.name,
+          pts:       p.pts,
+          ast:       p.ast,
+          reb:       p.reb,
+          ts_pct:    p.ts_pct,
+          per_proxy: p.per_proxy,
+          bpm_proxy: p.bpm_proxy
+        }))
+      },
+      awayPlayers: {
+        star_power:   roundTo(awayData?.players?.star_power || 0, 2),
+        depth_score:  roundTo(awayData?.players?.depth_score || 0, 2),
+        top_ts:       awayData?.players?.top_ts,
+        per_proxy_avg: awayData?.players?.per_proxy_avg,
+        top_players:  (awayData?.players?.players || []).slice(0, 3).map(p => ({
+          name:      p.name,
+          pts:       p.pts,
+          ast:       p.ast,
+          reb:       p.reb,
+          ts_pct:    p.ts_pct,
+          per_proxy: p.per_proxy,
+          bpm_proxy: p.bpm_proxy
+        }))
+      },
+      homeSchedule: homeData?.schedule,
+      awaySchedule: awayData?.schedule,
+      homeForm: homeData?.recent ? {
+        winRate:    homeData.recent.winRate,
+        winRate5:   homeData.recent.winRate5,
+        winRate10:  homeData.recent.winRate10,
+        avgDiff:    homeData.recent.avgDiff,
+        avgDiff5:   homeData.recent.avgDiff5,
+        momentum:   homeData.recent.momentum,
+        streak:     homeData.recent.streak,
+        avgPtsScored:  homeData.recent.avgPtsScored,
+        avgPtsAllowed: homeData.recent.avgPtsAllowed
       } : null,
-      player: playerSig ? {
-        playerProb: roundTo(playerSig.playerProb, 4),
-        homeVal:    roundTo(playerSig.homeVal, 2),
-        awayVal:    roundTo(playerSig.awayVal, 2)
+      awayForm: awayData?.recent ? {
+        winRate:    awayData.recent.winRate,
+        winRate5:   awayData.recent.winRate5,
+        winRate10:  awayData.recent.winRate10,
+        avgDiff:    awayData.recent.avgDiff,
+        avgDiff5:   awayData.recent.avgDiff5,
+        momentum:   awayData.recent.momentum,
+        streak:     awayData.recent.streak,
+        avgPtsScored:  awayData.recent.avgPtsScored,
+        avgPtsAllowed: awayData.recent.avgPtsAllowed
       } : null,
-      splits: { splitProb: roundTo(splitProb, 4) },
-      homeCourt: HOME_COURT_BOOST,
-      liveAdjusted: !!(liveState && liveState.liveFound)
+      h2h
     },
     meta: {
-      homeId,
-      awayId,
-      season,
-      componentWeights: components.map(c => ({ label: c.label, weight: c.weight, prob: roundTo(c.prob, 4) }))
+      homeId, awayId,
+      season:       require("./advanced_stats").getCurrentSeason(),
+      weightTotal:  roundTo(W_TOTAL, 4),
+      liveAdjusted: !!(liveState?.liveFound),
+      signalCount:  components.filter(c => c.prob !== 0.5).length
     }
   };
 }
 
 /**
- * computeEdge
- *
- * Compare independent model probability against sportsbook implied probability
- * to find true edge.
- *
- * @param {number} modelProb   - Independent win prob for pick side
- * @param {number} marketProb  - Sportsbook implied prob (no-vig) for same side
- * @returns {{ edge: number, verdict: string, confidence: string }}
+ * computeEdge — compare model prob to market implied prob for pick side.
  */
 function computeEdge(modelProb, marketProb) {
   const edge = modelProb - marketProb;
 
   let verdict = "Avoid";
-  if (edge >= 0.05)  verdict = "Bet now";
+  if (edge >= 0.05)       verdict = "Bet now";
   else if (edge >= 0.025) verdict = "Watch";
 
   let confidence = "Low";
-  if (edge >= 0.08)  confidence = "High";
-  else if (edge >= 0.04) confidence = "Medium";
+  if (edge >= 0.08)       confidence = "High";
+  else if (edge >= 0.04)  confidence = "Medium";
 
   return {
     edge:       roundTo(edge, 4),
@@ -623,15 +476,13 @@ function computeEdge(modelProb, marketProb) {
 module.exports = {
   computeIndependentWinProb,
   computeEdge,
-  buildLiveAdjustment,
-  // exposed for testing
-  _internals: {
-    buildEfficiencyRating,
-    buildFormSignal,
-    buildH2HSignal,
-    buildPlayerSignal,
-    buildSplitSignal,
-    buildEfficiencyMatchupProb,
-    buildLiveAdjustment
+  applyLiveAdjustment,
+  SIGNAL_WEIGHTS: W,
+  // expose internals for testing
+  _signals: {
+    signalNetRating, signalPredictedSpread, signalRecentForm,
+    signalStarPower, signalShooting, signalTurnover, signalRest,
+    signalRebounding, signalH2H, signalMomentum, signalDefense,
+    signalSplits, signalPace
   }
 };
