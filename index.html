@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1.0"/>
-<title>Chaudhry Saab</title>
+<title>Edge Model</title>
 <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 <style>
 :root{--r-xl:26px;--r-lg:20px;--tf:180ms ease;--tm:320ms ease;}
@@ -674,14 +674,22 @@ function renderAdvStats(h,a,ht,at){
   $("awayTH").textContent=(at||"Away").split(" ").pop();
   const body=$("advBody"); body.innerHTML="";
   if(!h&&!a) return;
+  // Fields that should never be 0 for a real NBA team — treat 0 as missing
+  const nonZero=new Set(["adj_off_rating","adj_def_rating","adj_net_rating","pace","ts_pct","efg_pct","oreb_pct","pie"]);
+  const isValid=(key,val)=>{
+    if(!Number.isFinite(val)) return false;
+    if(nonZero.has(key) && val===0) return false;
+    return true;
+  };
   for (const r of ADV_ROWS) {
     const hv=h?.[r.hk], av=a?.[r.hk];
     const hn=Number(hv), an=Number(av);
-    const ok=Number.isFinite(hn)&&Number.isFinite(an);
+    const hOk=isValid(r.hk,hn), aOk=isValid(r.hk,an);
+    const ok=hOk&&aOk;
     let hc="",ac="",et="—";
     if(ok&&r.hb!==null){const hw=r.hb?hn>an:hn<an;hc=hw?"better":"worse";ac=hw?"worse":"better";const d=hn-an;et=d>=0?`+${d.toFixed(2)}`:d.toFixed(2);}
     const tr=document.createElement("tr");
-    tr.innerHTML=`<td>${r.k}</td><td class="${hc}">${Number.isFinite(hn)?r.fmt(hn):"—"}</td><td class="${ac}">${Number.isFinite(an)?r.fmt(an):"—"}</td><td>${et}</td>`;
+    tr.innerHTML=`<td>${r.k}</td><td class="${hc}">${hOk?r.fmt(hn):"—"}</td><td class="${ac}">${aOk?r.fmt(an):"—"}</td><td>${et}</td>`;
     body.appendChild(tr);
   }
 }
