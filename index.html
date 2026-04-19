@@ -726,7 +726,7 @@ function renderPbp(scoreState, homeTeam, awayTeam) {
   $("pbpAwayName").textContent=(awayTeam||"Away").split(" ").pop();
   $("pbpHomeScore").textContent=isLive?(scoreState.homeScore??"-"):"-";
   $("pbpAwayScore").textContent=isLive?(scoreState.awayScore??"-"):"-";
-  $("pbpClock").textContent=scoreState?.formattedClock||scoreState?.clock||"—";
+  $("pbpClock").textContent=scoreState?.clock||scoreState?.formattedClock||"—";
   $("pbpPeriod").textContent=scoreState?.period?`Q${scoreState.period}`:"—";
 
   // Logos in pbp
@@ -734,7 +734,11 @@ function renderPbp(scoreState, homeTeam, awayTeam) {
   setLogo("pbpAwayLogo", awayTeam, 36);
 
   const feed=$("pbpFeed");
-  if (!isLive) {feed.innerHTML='<div class="pbp-empty">Game not live yet — play-by-play will appear here when the game starts</div>';return;}
+  if (!isLive) {
+    const msg=scoreState?.isFinal?"Game has ended":"Game not live yet — play-by-play will appear here when the game starts";
+    feed.innerHTML=`<div class="pbp-empty">${msg}</div>`;
+    return;
+  }
 
   const plays=scoreState?.recentPlays||scoreState?.plays||[];
   if (!plays.length) {
@@ -748,29 +752,38 @@ function renderPbp(scoreState, homeTeam, awayTeam) {
     return;
   }
 
-  // Render plays in reverse (newest first)
-  const reversed=[...plays].reverse().slice(0,50);
+  // Render plays (already newest-first from tracker)
+  const playList=[...plays].slice(0,50);
   let lastPeriod=null;
-  const items=reversed.map(play=>{
+  const homeNick=(homeTeam||"").split(" ").pop();
+  const awayNick=(awayTeam||"").split(" ").pop();
+  const items=playList.map(play=>{
     const desc=play.description||play.text||play.event||play.msg||"";
-    const isScoring=(play.points||play.pts||play.score_value||0)>0||/made|scores|dunk|layup|jumper|three/i.test(desc);
-    const teamName=play.team?.full_name||play.team?.name||play.team_name||"";
-    const isHome=teamName&&(teamName.includes(homeTeam?.split(" ").pop()||"")||teamName===homeTeam);
-    const pts=play.points||play.pts||play.score_value;
-    const time=play.clock||play.time||"";
+    if(!desc) return "";
+    // Support both NBA API format (isHomeTeam bool) and BDL format (team_name string)
+    const isHome=typeof play.isHomeTeam==="boolean"
+      ? play.isHomeTeam
+      : (play.team?.full_name||play.team?.name||play.team_name||"").includes(homeNick);
+    const isScoring=play.isScore||(play.points||play.pts||play.score_value||0)>0||/makes|dunk|layup|jumper|three/i.test(desc);
     const period=play.period||play.quarter||"";
+    const time=play.clock||play.time||"";
+    // Running score from play data
+    const hScore=play.homeScore;
+    const aScore=play.awayScore;
+    const scoreCtx=(typeof hScore==="number"&&typeof aScore==="number")?` <span style="opacity:0.5;font-size:10px">${awayNick} ${aScore}–${hScore} ${homeNick}</span>`:"";
     let periodHeader="";
-    if (period&&period!==lastPeriod){lastPeriod=period;periodHeader=`<div class="pbp-period-marker">QUARTER ${period}</div>`;}
-    const logoEl=teamName?`<div class="pbp-play-team-ph">${abbr(teamName)}</div>`:`<div></div>`;
-    const scoreTag=pts?`<div class="pbp-play-score">+${pts}</div>`:"";
+    if(period&&period!==lastPeriod){lastPeriod=period;periodHeader=`<div class="pbp-period-marker">QUARTER ${period}</div>`;}
+    const teamDot=isHome
+      ? `<div class="pbp-play-team-ph" style="background:var(--blue)">${homeNick.slice(0,3).toUpperCase()}</div>`
+      : `<div class="pbp-play-team-ph" style="background:var(--red)">${awayNick.slice(0,3).toUpperCase()}</div>`;
     return `${periodHeader}<div class="pbp-play${isScoring?" scoring":""}">
-      <span class="pbp-play-time">${time}</span>
-      ${logoEl}
-      <div><div class="pbp-play-desc">${desc||"Play"}</div>${scoreTag}</div>
+      <span class="pbp-play-time">${time||""}</span>
+      ${teamDot}
+      <div><div class="pbp-play-desc">${desc}${isScoring?scoreCtx:""}</div></div>
     </div>`;
-  });
+  }).filter(Boolean);
 
-  feed.innerHTML=items.join("")||'<div class="pbp-empty">No play data available yet</div>';
+  feed.innerHTML=items.join("")||'<div class="pbp-empty">No play data yet</div>';
 }
 
 /* ─── players ────────────────────────────────────────────── */
@@ -868,7 +881,7 @@ async function loadGame() {
       $("predScore").style.display="none"; $("predScoreLabel").style.display="none";
       $("homeScoreHero").textContent=scoreState.homeScore??"-";
       $("awayScoreHero").textContent=scoreState.awayScore??"-";
-      $("periodDisplay").textContent=scoreState.period?`Q${scoreState.period} ${scoreState.formattedClock||""}`.trim():"Live";
+      $("periodDisplay").textContent=scoreState.period?`Q${scoreState.period} ${scoreState.formattedClock||scoreState.clock||""}`.trim():(scoreState.isFinal?"Final":"Live");
     } else {
       $("scoreDisplay").classList.add("score-hidden");
       $("heroSub").style.display="block";
