@@ -601,6 +601,11 @@ function buildPlayersFromStats(rawPlayers, teamAdv) {
     return {
       name:       p.name || "",
       min:        r4(min),
+      pts:        r4(pts),
+      reb:        r4(flt(p.reb)),
+      ast:        r4(flt(p.ast)),
+      stl:        r4(stl),
+      blk:        r4(blk),
       off_rating: 0, def_rating: 0, net_rating: 0,
       ts_pct:     r4(clamp(ts_pct, 0, 1)),
       efg_pct:    r4(efg_pct),
