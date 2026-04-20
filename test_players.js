@@ -27,8 +27,8 @@ async function testTeam(teamName) {
   if (!games.length) { console.log(`❌ No final games for season ${season}`); return; }
   console.log(`✅ Games: ${games.length} recent finals (last: ${games[games.length-1]?.date})`);
   const idsQ = games.map(g=>`game_ids[]=${g.id}`).join("&");
-  const sData = await bdl(`/stats?${idsQ}&per_page=300`);
-  const allRows = bdlRows(sData).filter(r=>flt(r.min)>1);
+  const [p1,p2] = await Promise.allSettled([bdl(`/stats?${idsQ}&per_page=100`),bdl(`/stats?${idsQ}&per_page=100&page=2`)]);
+  const allRows = [...bdlRows(p1.status==="fulfilled"?p1.value:[]),...bdlRows(p2.status==="fulfilled"?p2.value:[])].filter(r=>flt(r.min)>1);
   const teamRows = allRows.filter(r=>{ const tid=r.team?.id??r.team_id; return tid===team.id||tid===String(team.id); });
   const useRows = teamRows.length>=5?teamRows:allRows;
   console.log(`✅ Stat rows: ${allRows.length} total, ${teamRows.length} filtered to team`);
