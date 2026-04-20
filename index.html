@@ -4,7 +4,6 @@
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1.0"/>
 <title>Edge Model</title>
-<title>Chaudhry Saab</title>
 <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 <style>
 :root{--r-xl:26px;--r-lg:20px;--tf:180ms ease;--tm:320ms ease;}
@@ -43,8 +42,6 @@ select{width:100%;padding:12px 16px;border-radius:14px;border:1px solid var(--bd
 .stat .sub{font-size:11px;color:var(--muted);margin-top:3px;}
 .bet{color:var(--green);font-weight:700;}.watch{color:var(--yellow);font-weight:700;}.avoid{color:var(--red);font-weight:700;}
 .low{color:var(--red);}.medium{color:var(--yellow);}.high{color:var(--green);}
-
-/* ── SCORE DISPLAY in hero ────────────────────────── */
 .score-display{display:flex;align-items:center;justify-content:center;gap:20px;margin:10px 0;flex-wrap:wrap;}
 .score-team{display:flex;flex-direction:column;align-items:center;gap:6px;min-width:100px;}
 .score-logo{width:56px;height:56px;object-fit:contain;filter:drop-shadow(0 2px 6px rgba(0,0,0,.15));}
@@ -54,8 +51,6 @@ select{width:100%;padding:12px 16px;border-radius:14px;border:1px solid var(--bd
 .score-sep{font-size:28px;font-weight:300;color:var(--muted);}
 .score-period{font-size:12px;color:var(--muted);font-weight:500;background:var(--sbg);border:1px solid var(--bdr);border-radius:8px;padding:3px 10px;margin:4px auto 0;}
 .score-hidden{opacity:0;pointer-events:none;}
-
-/* ── TEAM SELECTOR ────────────────────────────────── */
 .team-selector{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:16px;}
 .team-card{background:var(--card);border:2px solid var(--bdr);border-radius:20px;padding:18px 14px;cursor:pointer;transition:all .2s ease;display:flex;flex-direction:column;align-items:center;gap:10px;text-align:center;position:relative;box-shadow:var(--shadow);}
 .team-card:hover{border-color:var(--acc);transform:translateY(-2px);}
@@ -73,17 +68,11 @@ select{width:100%;padding:12px 16px;border-radius:14px;border:1px solid var(--bd
 .tc-stat span{font-size:14px;font-weight:700;color:var(--txt);}
 .tc-implied{font-size:22px;font-weight:800;color:var(--txt);margin-top:2px;}
 .tc-implied-label{font-size:11px;color:var(--muted);}
-
-/* ── WIN PROBABILITY CHART ────────────────────────── */
 .winprob-wrap{position:relative;height:180px;margin-top:10px;}
 .winprob-label-home{position:absolute;top:6px;left:10px;font-size:11px;font-weight:600;color:var(--home-c);}
 .winprob-label-away{position:absolute;bottom:6px;left:10px;font-size:11px;font-weight:600;color:var(--away-c);}
 .winprob-pct{position:absolute;top:50%;right:10px;transform:translateY(-50%);font-size:20px;font-weight:800;color:var(--txt);}
-
-/* ── MAIN STATS ───────────────────────────────────── */
 .main-stats{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:10px;margin-top:14px;}
-
-/* ── SIGNAL BARS ──────────────────────────────────── */
 .sig-wrap{display:flex;flex-direction:column;gap:6px;margin-top:10px;}
 .sig-row{display:grid;grid-template-columns:150px 1fr 38px;align-items:center;gap:8px;}
 .sig-name{font-size:11px;color:var(--soft);text-align:right;font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
@@ -92,8 +81,6 @@ select{width:100%;padding:12px 16px;border-radius:14px;border:1px solid var(--bd
 .sig-away{position:absolute;right:50%;top:0;height:100%;border-radius:8px 0 0 8px;transition:width .4s ease;}
 .sig-mid{position:absolute;left:50%;top:0;width:1px;height:100%;background:var(--muted);opacity:.3;}
 .sig-val{font-size:10px;color:var(--muted);text-align:left;font-weight:700;}
-
-/* ── ADV STATS TABLE ──────────────────────────────── */
 .adv-tbl{width:100%;border-collapse:separate;border-spacing:0;font-size:12px;margin-top:10px;}
 .adv-tbl th{padding:8px 10px;color:var(--muted);font-size:10px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;background:var(--thead);border-bottom:1px solid var(--bdr);text-align:center;}
 .adv-tbl th:first-child{text-align:left;border-top-left-radius:12px;}
@@ -103,8 +90,6 @@ select{width:100%;padding:12px 16px;border-radius:14px;border:1px solid var(--bd
 .adv-tbl td:first-child{text-align:left;color:var(--muted);font-size:10px;font-weight:600;letter-spacing:.05em;text-transform:uppercase;}
 .adv-tbl td.better{color:var(--green);font-weight:700;}
 .adv-tbl td.worse{color:var(--red);}
-
-/* ── ENHANCED PROPS ───────────────────────────────── */
 .props-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px;}
 .prop-sec{background:var(--sbg);border:1px solid var(--bdr);padding:14px;border-radius:var(--r-lg);text-align:left;}
 .prop-item{padding:10px 0;border-bottom:1px solid var(--bdr);display:flex;flex-direction:column;gap:5px;}
@@ -119,12 +104,8 @@ select{width:100%;padding:12px 16px;border-radius:14px;border:1px solid var(--bd
 .prop-conf-fill{height:100%;border-radius:3px;transition:width .4s ease;}
 .prop-conf-pct{font-size:11px;font-weight:700;min-width:36px;text-align:right;}
 .prop-odds{font-size:11px;color:var(--muted);}
-
-/* ── EDGE CHART ───────────────────────────────────── */
 .chart-shell{position:relative;height:200px;margin-top:10px;}
 canvas{display:block;width:100%;height:100%;background:transparent!important;}
-
-/* ── PLAY BY PLAY ─────────────────────────────────── */
 .pbp-card{background:var(--card);backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);border:1px solid var(--bdr);border-radius:var(--r-xl);padding:0;margin-bottom:16px;box-shadow:var(--shadow);overflow:hidden;}
 .pbp-header{display:flex;align-items:center;justify-content:space-between;padding:16px 20px;border-bottom:1px solid var(--bdr);background:var(--thead);}
 .pbp-header h2{margin:0;font-size:16px;}
@@ -154,15 +135,14 @@ canvas{display:block;width:100%;height:100%;background:transparent!important;}
 .pbp-empty{text-align:center;padding:40px 20px;color:var(--muted);font-size:13px;}
 .pbp-period-marker{text-align:center;padding:6px;font-size:10px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);background:var(--thead);border-bottom:1px solid var(--bdr);}
 
-/* ── PLAYERS ──────────────────────────────────────── */
-.pl-hdr,.pl-row{display:grid;grid-template-columns:1fr repeat(4,50px);gap:4px;padding:5px 0;font-size:11px;}
+/* ── PLAYERS — 7 stat columns ────────────────────────────────────────── */
+.pl-hdr,.pl-row{display:grid;grid-template-columns:1fr repeat(7,42px);gap:3px;padding:5px 0;font-size:11px;}
 .pl-hdr{border-bottom:1px solid var(--bdr);font-size:9px;font-weight:600;letter-spacing:.05em;text-transform:uppercase;color:var(--muted);padding-bottom:6px;}
 .pl-row{border-bottom:1px solid var(--bdr);}
 .pl-row:last-child{border-bottom:none;}
 .pl-name{color:var(--txt);font-weight:500;text-align:left;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
 .pl-val{color:var(--soft);text-align:center;}
 
-/* ── INJURY ───────────────────────────────────────── */
 .inj-box{background:var(--sbg);border:1px solid var(--bdr);border-radius:var(--r-lg);padding:14px;}
 .inj-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;}
 .inj-title{font-size:11px;font-weight:700;color:var(--soft);text-transform:uppercase;letter-spacing:.05em;}
@@ -170,8 +150,6 @@ canvas{display:block;width:100%;height:100%;background:transparent!important;}
 .pill{display:inline-block;padding:4px 9px;border-radius:999px;background:var(--card-s);border:1px solid var(--bdr);color:var(--soft);font-size:10px;margin:2px;}
 .pill.out{border-color:rgba(154,103,97,.5);color:var(--red);}
 .pill.dtd{border-color:rgba(167,140,87,.5);color:var(--yellow);}
-
-/* ── BM TABLE ─────────────────────────────────────── */
 .bm-tbl{width:100%;border-collapse:separate;border-spacing:0;font-size:12px;}
 .bm-tbl thead th{padding:9px 10px;color:var(--muted);font-size:10px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;background:var(--thead);border-bottom:1px solid var(--bdr);text-align:center;}
 .bm-tbl thead th:first-child{border-top-left-radius:12px;text-align:left;}
@@ -179,8 +157,6 @@ canvas{display:block;width:100%;height:100%;background:transparent!important;}
 .bm-tbl tbody td{padding:9px 10px;text-align:center;border-bottom:1px solid var(--bdr);color:var(--soft);background:var(--trow);}
 .bm-tbl tbody tr:nth-child(even) td{background:var(--trowa);}
 .bm-tbl tbody td:first-child{text-align:left;font-size:11px;}
-
-/* ── AI STATUS ────────────────────────────────────── */
 .opt-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-top:10px;}
 .opt-cell{background:var(--sbg);border:1px solid var(--bdr);border-radius:12px;padding:10px;text-align:center;}
 .opt-cell strong{display:block;color:var(--muted);font-size:9px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;margin-bottom:4px;}
@@ -194,7 +170,7 @@ canvas{display:block;width:100%;height:100%;background:transparent!important;}
   body{padding:12px;}
   .g2,.g3,.g4,.g6,.main-stats,.props-grid,.team-selector{grid-template-columns:1fr;}
   .sig-row{grid-template-columns:100px 1fr 32px;}
-  .pl-hdr,.pl-row{grid-template-columns:1fr repeat(3,44px);}
+  .pl-hdr,.pl-row{grid-template-columns:1fr repeat(4,36px);}
   .winprob-wrap{height:140px;}
   .pbp-feed{height:260px;}
   .adv-tbl{font-size:11px;}
@@ -205,7 +181,6 @@ canvas{display:block;width:100%;height:100%;background:transparent!important;}
 <body data-theme="light">
 <div class="wrap">
 
-<!-- topbar -->
 <div class="topbar">
   <div class="acc-badge">Model Acc: <span id="accBadge">—</span></div>
   <button class="theme-toggle" id="themeToggle" aria-label="Toggle theme">
@@ -213,11 +188,9 @@ canvas{display:block;width:100%;height:100%;background:transparent!important;}
   </button>
 </div>
 
-<!-- hero -->
 <div class="card hero-card">
   <h1>Edge Model</h1>
   <p class="subtle" id="heroSub">NBA Prediction Engine</p>
-  <!-- LIVE SCORE DISPLAY -->
   <div class="score-display score-hidden" id="scoreDisplay">
     <div class="score-team">
       <div id="awayLogoHero" class="score-logo-placeholder">A</div>
@@ -238,14 +211,12 @@ canvas{display:block;width:100%;height:100%;background:transparent!important;}
   <p id="predScoreLabel" style="font-size:12px;color:var(--muted);display:none;">Projected final score</p>
 </div>
 
-<!-- game select -->
 <div class="card">
   <label for="gameSelect">Select NBA game</label>
   <select id="gameSelect"></select>
   <div id="statusMsg" class="msg">Loading...</div>
 </div>
 
-<!-- TEAM SELECTOR -->
 <div class="team-selector" id="teamSelector">
   <div class="team-card active-home" id="homeCard" onclick="selectTeam('home')">
     <span class="tc-badge" id="homePickBadge" style="display:none">PICK</span>
@@ -273,7 +244,6 @@ canvas{display:block;width:100%;height:100%;background:transparent!important;}
   </div>
 </div>
 
-<!-- main pick + stats -->
 <div class="card">
   <h2 id="matchup" style="text-align:center">Waiting for selection</h2>
   <p id="pick" style="text-align:center;color:var(--soft);margin-top:4px;">Pick: —</p>
@@ -286,7 +256,6 @@ canvas{display:block;width:100%;height:100%;background:transparent!important;}
   </div>
 </div>
 
-<!-- odds / probability (updates on team card click) -->
 <div class="card" id="oddsCard">
   <h2>Odds / Probability — <span id="selectedTeamName" style="color:var(--acc)">Select a team above</span></h2>
   <div class="g4" style="margin-top:12px;">
@@ -297,10 +266,9 @@ canvas{display:block;width:100%;height:100%;background:transparent!important;}
   </div>
 </div>
 
-<!-- WIN PROBABILITY CHART -->
 <div class="card">
   <h2>Win Probability</h2>
-  <p class="subtle" id="winProbSubtitle">Live probability of each team winning — updated each refresh</p>
+  <p class="subtle" id="winProbSubtitle">Live probability of each team winning</p>
   <div class="winprob-wrap">
     <div class="winprob-label-home" id="wpLabelHome">Home</div>
     <div class="winprob-label-away" id="wpLabelAway">Away</div>
@@ -309,7 +277,6 @@ canvas{display:block;width:100%;height:100%;background:transparent!important;}
   </div>
 </div>
 
-<!-- AI learning -->
 <div class="card">
   <h2>AI Learning Status</h2>
   <p class="subtle">Self-calibrates after every graded game</p>
@@ -323,14 +290,12 @@ canvas{display:block;width:100%;height:100%;background:transparent!important;}
   </div>
 </div>
 
-<!-- signals -->
 <div class="card">
   <h2>Signal Breakdown <span style="font-size:12px;color:var(--muted);font-weight:400">22 independent signals</span></h2>
   <p class="subtle" id="sigSubtitle">Green = home, Red = away. Width = signal strength. Sorted by weight.</p>
   <div class="sig-wrap" id="sigGrid"></div>
 </div>
 
-<!-- advanced stats -->
 <div class="card">
   <h2>Advanced Stats</h2>
   <p class="subtle" id="advSubtitle">Official NBA metrics — injury-adjusted</p>
@@ -340,7 +305,6 @@ canvas{display:block;width:100%;height:100%;background:transparent!important;}
   </table>
 </div>
 
-<!-- injury -->
 <div class="card">
   <h2>Injury Impact</h2>
   <div class="g2">
@@ -355,20 +319,27 @@ canvas{display:block;width:100%;height:100%;background:transparent!important;}
   </div>
 </div>
 
-<!-- players -->
+<!-- PLAYER IMPACT -->
 <div class="card">
   <h2>Player Impact</h2>
   <div class="g2">
-    <div><h3 id="homePlayersH" style="text-align:center;margin-bottom:6px">Home</h3>
-      <div class="pl-hdr"><span>Player</span><span>PIE</span><span>TS%</span><span>USG%</span><span>Net±</span></div>
-      <div id="homePlayers"></div></div>
-    <div><h3 id="awayPlayersH" style="text-align:center;margin-bottom:6px">Away</h3>
-      <div class="pl-hdr"><span>Player</span><span>PIE</span><span>TS%</span><span>USG%</span><span>Net±</span></div>
-      <div id="awayPlayers"></div></div>
+    <div>
+      <h3 id="homePlayersH" style="text-align:center;margin-bottom:6px">Home</h3>
+      <div class="pl-hdr">
+        <span>Player</span><span>PTS</span><span>REB</span><span>AST</span><span>STL</span><span>BLK</span><span>±</span><span>USG</span>
+      </div>
+      <div id="homePlayers"></div>
+    </div>
+    <div>
+      <h3 id="awayPlayersH" style="text-align:center;margin-bottom:6px">Away</h3>
+      <div class="pl-hdr">
+        <span>Player</span><span>PTS</span><span>REB</span><span>AST</span><span>STL</span><span>BLK</span><span>±</span><span>USG</span>
+      </div>
+      <div id="awayPlayers"></div>
+    </div>
   </div>
 </div>
 
-<!-- line movement -->
 <div class="card">
   <h2>Line Movement</h2>
   <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-top:10px;">
@@ -381,7 +352,6 @@ canvas{display:block;width:100%;height:100%;background:transparent!important;}
   </div>
 </div>
 
-<!-- best price -->
 <div class="card">
   <h2>Market Prices</h2>
   <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-top:10px;">
@@ -392,13 +362,11 @@ canvas{display:block;width:100%;height:100%;background:transparent!important;}
   </div>
 </div>
 
-<!-- edge history chart -->
 <div class="card">
   <h2>Edge — Last 15 Minutes</h2>
   <div class="chart-shell"><canvas id="edgeChart"></canvas></div>
 </div>
 
-<!-- bookmakers -->
 <div class="card">
   <h2>Bookmaker Comparison</h2>
   <table class="bm-tbl">
@@ -407,7 +375,6 @@ canvas{display:block;width:100%;height:100%;background:transparent!important;}
   </table>
 </div>
 
-<!-- ENHANCED PROPS -->
 <div class="card">
   <h2>Player Props <span style="font-size:12px;color:var(--muted);font-weight:400">— AI confidence scores</span></h2>
   <div class="props-grid">
@@ -418,13 +385,11 @@ canvas{display:block;width:100%;height:100%;background:transparent!important;}
   </div>
 </div>
 
-<!-- LIVE PLAY BY PLAY -->
 <div class="pbp-card" id="pbpCard">
   <div class="pbp-header">
     <h2 style="text-align:left;display:flex;align-items:center;"><span class="pbp-live-dot" id="pbpDot" style="display:none"></span>Play by Play</h2>
     <span style="font-size:11px;color:var(--muted)" id="pbpStatus">Waiting for game...</span>
   </div>
-  <!-- mini scoreboard inside pbp -->
   <div class="pbp-scoreboard" id="pbpScoreboard">
     <div class="pbp-team">
       <div id="pbpAwayLogo" class="pbp-logo-ph">A</div>
@@ -453,84 +418,58 @@ canvas{display:block;width:100%;height:100%;background:transparent!important;}
 </div><!-- /wrap -->
 
 <script>
-/* ─── NBA TEAM LOGOS & IDs ────────────────────────────────── */
 const NBA_TEAMS = {
-  "Atlanta Hawks":          {id:1610612737,abbr:"ATL"},
-  "Boston Celtics":         {id:1610612738,abbr:"BOS"},
-  "Brooklyn Nets":          {id:1610612751,abbr:"BKN"},
-  "Charlotte Hornets":      {id:1610612766,abbr:"CHA"},
-  "Chicago Bulls":          {id:1610612741,abbr:"CHI"},
-  "Cleveland Cavaliers":    {id:1610612739,abbr:"CLE"},
-  "Dallas Mavericks":       {id:1610612742,abbr:"DAL"},
-  "Denver Nuggets":         {id:1610612743,abbr:"DEN"},
-  "Detroit Pistons":        {id:1610612765,abbr:"DET"},
-  "Golden State Warriors":  {id:1610612744,abbr:"GSW"},
-  "Houston Rockets":        {id:1610612745,abbr:"HOU"},
-  "Indiana Pacers":         {id:1610612754,abbr:"IND"},
-  "Los Angeles Clippers":   {id:1610612746,abbr:"LAC"},
-  "Los Angeles Lakers":     {id:1610612747,abbr:"LAL"},
-  "Memphis Grizzlies":      {id:1610612763,abbr:"MEM"},
-  "Miami Heat":             {id:1610612748,abbr:"MIA"},
-  "Milwaukee Bucks":        {id:1610612749,abbr:"MIL"},
-  "Minnesota Timberwolves": {id:1610612750,abbr:"MIN"},
-  "New Orleans Pelicans":   {id:1610612740,abbr:"NOP"},
-  "New York Knicks":        {id:1610612752,abbr:"NYK"},
-  "Oklahoma City Thunder":  {id:1610612760,abbr:"OKC"},
-  "Orlando Magic":          {id:1610612753,abbr:"ORL"},
-  "Philadelphia 76ers":     {id:1610612755,abbr:"PHI"},
-  "Phoenix Suns":           {id:1610612756,abbr:"PHX"},
-  "Portland Trail Blazers": {id:1610612757,abbr:"POR"},
-  "Sacramento Kings":       {id:1610612758,abbr:"SAC"},
-  "San Antonio Spurs":      {id:1610612759,abbr:"SAS"},
-  "Toronto Raptors":        {id:1610612761,abbr:"TOR"},
-  "Utah Jazz":              {id:1610612762,abbr:"UTA"},
-  "Washington Wizards":     {id:1610612764,abbr:"WAS"},
+  "Atlanta Hawks":{id:1610612737,abbr:"ATL"},"Boston Celtics":{id:1610612738,abbr:"BOS"},
+  "Brooklyn Nets":{id:1610612751,abbr:"BKN"},"Charlotte Hornets":{id:1610612766,abbr:"CHA"},
+  "Chicago Bulls":{id:1610612741,abbr:"CHI"},"Cleveland Cavaliers":{id:1610612739,abbr:"CLE"},
+  "Dallas Mavericks":{id:1610612742,abbr:"DAL"},"Denver Nuggets":{id:1610612743,abbr:"DEN"},
+  "Detroit Pistons":{id:1610612765,abbr:"DET"},"Golden State Warriors":{id:1610612744,abbr:"GSW"},
+  "Houston Rockets":{id:1610612745,abbr:"HOU"},"Indiana Pacers":{id:1610612754,abbr:"IND"},
+  "Los Angeles Clippers":{id:1610612746,abbr:"LAC"},"Los Angeles Lakers":{id:1610612747,abbr:"LAL"},
+  "Memphis Grizzlies":{id:1610612763,abbr:"MEM"},"Miami Heat":{id:1610612748,abbr:"MIA"},
+  "Milwaukee Bucks":{id:1610612749,abbr:"MIL"},"Minnesota Timberwolves":{id:1610612750,abbr:"MIN"},
+  "New Orleans Pelicans":{id:1610612740,abbr:"NOP"},"New York Knicks":{id:1610612752,abbr:"NYK"},
+  "Oklahoma City Thunder":{id:1610612760,abbr:"OKC"},"Orlando Magic":{id:1610612753,abbr:"ORL"},
+  "Philadelphia 76ers":{id:1610612755,abbr:"PHI"},"Phoenix Suns":{id:1610612756,abbr:"PHX"},
+  "Portland Trail Blazers":{id:1610612757,abbr:"POR"},"Sacramento Kings":{id:1610612758,abbr:"SAC"},
+  "San Antonio Spurs":{id:1610612759,abbr:"SAS"},"Toronto Raptors":{id:1610612761,abbr:"TOR"},
+  "Utah Jazz":{id:1610612762,abbr:"UTA"},"Washington Wizards":{id:1610612764,abbr:"WAS"},
 };
-function logoUrl(name) {
-  const t=NBA_TEAMS[name]; if(!t) return null;
-  return `https://cdn.nba.com/logos/nba/${t.id}/global/L/logo.svg`;
-}
-function abbr(name) { return NBA_TEAMS[name]?.abbr || name?.split(" ").pop()?.slice(0,3).toUpperCase() || "?"; }
-
-function setLogo(elId, teamName, size=62) {
-  const el=document.getElementById(elId); if(!el) return;
+function logoUrl(name){const t=NBA_TEAMS[name];if(!t)return null;return`https://cdn.nba.com/logos/nba/${t.id}/global/L/logo.svg`;}
+function abbr(name){return NBA_TEAMS[name]?.abbr||name?.split(" ").pop()?.slice(0,3).toUpperCase()||"?";}
+function setLogo(elId,teamName,size=62){
+  const el=document.getElementById(elId);if(!el)return;
   const url=logoUrl(teamName);
-  if (url) {
-    const img=document.createElement("img");
-    img.src=url; img.className=el.className.includes("score-logo")?"score-logo":el.className.includes("pbp-logo")?"pbp-logo":"tc-logo";
-    img.style.cssText=`width:${size}px;height:${size}px;object-fit:contain;`;
-    img.alt=teamName;
-    img.onerror=()=>{ img.style.display="none"; el.style.display="flex"; el.textContent=abbr(teamName); };
-    el.parentNode.replaceChild(img, el);
-    img.id=elId;
-  } else {
-    el.textContent=abbr(teamName);
-  }
+  if(url){const img=document.createElement("img");img.src=url;img.style.cssText=`width:${size}px;height:${size}px;object-fit:contain;`;img.alt=teamName;img.onerror=()=>{img.style.display="none";el.style.display="flex";el.textContent=abbr(teamName);};el.parentNode.replaceChild(img,el);img.id=elId;}
+  else{el.textContent=abbr(teamName);}
 }
 
-/* ─── state ─────────────────────────────────────────────── */
-let selId=null, gMode="pregame", rfTimer=null, edgeChart=null, wpChart=null;
-let selectedTeam="home", lastData=null;
-let winProbHistory=[]; // [{ts, homeProb}]
-let pbpPlays=[]; // stored play-by-play
-
+let selId=null,gMode="pregame",rfTimer=null,edgeChart=null,wpChart=null;
+let selectedTeam="home",lastData=null,winProbHistory=[];
 const $=id=>document.getElementById(id);
 
-/* ─── theme ─────────────────────────────────────────────── */
+// Theme
 const css=n=>getComputedStyle(document.body).getPropertyValue(n).trim();
 const setTheme=t=>{document.body.setAttribute("data-theme",t);localStorage.setItem("edge_th",t);[edgeChart,wpChart].forEach(c=>{if(c)refreshChartTheme(c);});};
 const getSavedTheme=()=>{const s=localStorage.getItem("edge_th");return s==="light"||s==="dark"?s:"light";};
 $("themeToggle").addEventListener("click",()=>setTheme(document.body.getAttribute("data-theme")==="light"?"dark":"light"));
 setTheme(getSavedTheme());
 
-/* ─── formatters ─────────────────────────────────────────── */
+// Formatters
 const fPct=(v,d=1)=>typeof v==="number"?`${(v*100).toFixed(d)}%`:"—";
 const fNum=(v,d=1)=>typeof v==="number"?v.toFixed(d):"—";
 const fAm=v=>typeof v==="number"&&v!==null?(v>0?`+${v}`:`${v}`):"—";
 const fSign=(v,d=1)=>typeof v==="number"?(v>=0?`+${v.toFixed(d)}`:v.toFixed(d)):"—";
 const d2a=d=>{if(typeof d!=="number"||!isFinite(d)||d<=1)return null;return d>=2?Math.round((d-1)*100):Math.round(-100/(d-1));};
 
-/* ─── build edge chart ───────────────────────────────────── */
+// Format player name as "D.Mitchell"
+function fmtName(name){
+  const parts=(name||"").trim().split(" ");
+  if(parts.length>=2) return `${parts[0].charAt(0)}.${parts.slice(1).join(" ")}`;
+  return name||"—";
+}
+
+// Charts
 function buildEdgeChart(){
   edgeChart=new Chart($("edgeChart").getContext("2d"),{type:"line",
     data:{labels:[],datasets:[{label:"Edge",data:[],borderColor:css("--cl"),backgroundColor:css("--cf"),fill:true,tension:.34,pointRadius:0,borderWidth:2}]},
@@ -539,69 +478,50 @@ function buildEdgeChart(){
       scales:{x:{grid:{display:false},border:{display:false},ticks:{color:css("--ctk"),maxRotation:0,autoSkip:true,maxTicksLimit:7,font:{size:10}}},
         y:{grid:{color:css("--cg")},border:{display:false},ticks:{color:css("--ctk"),callback:v=>(v*100).toFixed(1)+"%",font:{size:10}}}}}});
 }
-
-/* ─── build win probability chart ────────────────────────── */
 function buildWinProbChart(){
-  const ctx=$("winProbChart").getContext("2d");
-  wpChart=new Chart(ctx,{type:"line",
+  wpChart=new Chart($("winProbChart").getContext("2d"),{type:"line",
     data:{labels:[],datasets:[
       {label:"Home Win%",data:[],borderColor:css("--home-c"),backgroundColor:"rgba(37,99,235,.08)",fill:{target:"origin",above:"rgba(37,99,235,.10)",below:"rgba(220,38,38,.10)"},tension:.35,pointRadius:0,borderWidth:2.5},
       {label:"50%",data:[],borderColor:css("--muted"),borderDash:[4,4],pointRadius:0,borderWidth:1,fill:false},
     ]},
     options:{responsive:true,maintainAspectRatio:false,animation:{duration:250},
-      plugins:{legend:{display:false},
-        tooltip:{backgroundColor:css("--ct"),titleColor:"#f5efe6",bodyColor:"#f5efe6",borderColor:css("--bdr"),borderWidth:1,displayColors:false,
-          callbacks:{label:c=>c.datasetIndex===0?`Home Win: ${(c.parsed.y*100).toFixed(1)}%`:"50% baseline"}}},
+      plugins:{legend:{display:false},tooltip:{backgroundColor:css("--ct"),titleColor:"#f5efe6",bodyColor:"#f5efe6",borderColor:css("--bdr"),borderWidth:1,displayColors:false,callbacks:{label:c=>c.datasetIndex===0?`Home Win: ${(c.parsed.y*100).toFixed(1)}%`:"50% baseline"}}},
       scales:{x:{grid:{display:false},border:{display:false},ticks:{color:css("--ctk"),maxRotation:0,autoSkip:true,maxTicksLimit:6,font:{size:10}}},
         y:{grid:{color:css("--cg")},border:{display:false},min:0,max:1,
           ticks:{color:css("--ctk"),callback:v=>v===0.5?"50%":(v*100).toFixed(0)+"%",font:{size:10}}}}}});
 }
-
 function refreshChartTheme(c){
   if(!c)return;
-  if(c.data.datasets[0]) c.data.datasets[0].borderColor=css("--cl");
-  c.options.plugins.tooltip.backgroundColor=css("--ct"); c.options.plugins.tooltip.borderColor=css("--bdr");
-  c.options.scales.x.ticks.color=css("--ctk"); c.options.scales.y.ticks.color=css("--ctk");
-  if(c.options.scales.y.grid) c.options.scales.y.grid.color=css("--cg");
+  c.options.plugins.tooltip.backgroundColor=css("--ct");c.options.plugins.tooltip.borderColor=css("--bdr");
+  c.options.scales.x.ticks.color=css("--ctk");c.options.scales.y.ticks.color=css("--ctk");
+  if(c.options.scales.y.grid)c.options.scales.y.grid.color=css("--cg");
   c.update();
 }
+buildEdgeChart();buildWinProbChart();
 
-buildEdgeChart(); buildWinProbChart();
-
-/* ─── win prob history ───────────────────────────────────── */
-function updateWinProbChart(homeProb) {
+function updateWinProbChart(homeProb){
   const ts=new Date().toLocaleTimeString();
   winProbHistory.push({ts,homeProb});
-  const cutoff=Date.now()-20*60*1000;
   winProbHistory=winProbHistory.filter((_,i)=>i>=winProbHistory.length-40);
-  const labels=winProbHistory.map(p=>p.ts);
-  const vals=winProbHistory.map(p=>p.homeProb);
-  const base=new Array(labels.length).fill(0.5);
-  wpChart.data.labels=labels;
-  wpChart.data.datasets[0].data=vals;
-  wpChart.data.datasets[1].data=base;
-  wpChart.update();
-  // current pct display
-  const cur=vals[vals.length-1];
-  $("wpCurrentPct").textContent=typeof cur==="number"?(cur*100).toFixed(0)+"%":"—";
+  const labels=winProbHistory.map(p=>p.ts),vals=winProbHistory.map(p=>p.homeProb),base=new Array(labels.length).fill(0.5);
+  wpChart.data.labels=labels;wpChart.data.datasets[0].data=vals;wpChart.data.datasets[1].data=base;wpChart.update();
+  const cur=vals[vals.length-1];$("wpCurrentPct").textContent=typeof cur==="number"?(cur*100).toFixed(0)+"%":"—";
 }
 
-/* ─── team card selection ────────────────────────────────── */
-function selectTeam(side) {
+function selectTeam(side){
   selectedTeam=side;
   $("homeCard").className="team-card"+(side==="home"?" active-home":" inactive");
   $("awayCard").className="team-card"+(side==="away"?" active-away":" inactive");
-  if (lastData) updateOddsCard(lastData);
+  if(lastData)updateOddsCard(lastData);
 }
-
-function updateOddsCard(d) {
+function updateOddsCard(d){
   const isHome=selectedTeam==="home";
   const teamName=isHome?d.homeTeam:d.awayTeam;
   $("selectedTeamName").textContent=teamName||"—";
   const implied=isHome?d.impliedProbability:1-(d.impliedProbability||0.5);
   const trueP=isHome?d.trueProbability:1-(d.trueProbability||0.5);
   const edge=isHome?d.edge:-d.edge;
-  const decimal=isHome?d.oddsFormats?.decimal:null; // away decimal needs different calc
+  const decimal=isHome?d.oddsFormats?.decimal:null;
   setV("oddsDecimal",typeof decimal==="number"?decimal.toFixed(2):"—");
   setV("oddsAm",fAm(d2a(decimal)));
   setV("impliedPct",fPct(implied));
@@ -612,34 +532,22 @@ function updateOddsCard(d) {
   setV("stakeFrac",typeof d.stakeSuggestion?.fraction==="number"?`${(d.stakeSuggestion.fraction*100).toFixed(0)}% unit`:"—");
 }
 
-/* ─── signal labels ──────────────────────────────────────── */
 const SIG_LABELS={officialNetRating:"Net Rating (Off.)",injuryAdjNetRating:"Inj-Adj Net Rtg",predictedSpread:"Predicted Spread",pie:"PIE (Official)",recentForm:"Recent Form",clutch:"Clutch",starPower:"Star Power",shooting:"Shooting TS%",turnover:"Turnovers",rest:"Rest/Schedule",hustle:"Hustle",rebound:"Rebounding",shotQuality:"Shot Quality",h2h:"H2H Record",momentum:"Momentum",referee:"Referee",travelFatigue:"Travel Fatigue",opponentMatchup:"Opp Matchup",splits:"Splits",pace:"Pace",threePointVariance:"3PT Variance",defense:"Defense"};
 
-function renderSignals(signals, pickSide, weights, homeTeam, awayTeam) {
-  const g=$("sigGrid"); g.innerHTML="";
-  if(!signals) return;
-
-  // Add team name header row
-  const hn = (homeTeam||"Home").split(" ").pop();
-  const an = (awayTeam||"Away").split(" ").pop();
-  const header = document.createElement("div");
+function renderSignals(signals,pickSide,weights,homeTeam,awayTeam){
+  const g=$("sigGrid");g.innerHTML="";if(!signals)return;
+  const hn=(homeTeam||"Home").split(" ").pop(),an=(awayTeam||"Away").split(" ").pop();
+  const header=document.createElement("div");
   header.style.cssText="display:grid;grid-template-columns:150px 1fr 38px;gap:8px;align-items:center;margin-bottom:6px;padding-bottom:6px;border-bottom:1px solid var(--bdr);";
-  header.innerHTML=`<span></span>
-    <div style="display:flex;justify-content:space-between;padding:0 2px;">
-      <span style="font-size:10px;font-weight:700;color:var(--home-c)">${hn}</span>
-      <span style="font-size:10px;font-weight:700;color:var(--away-c)">${an}</span>
-    </div>
-    <span></span>`;
+  header.innerHTML=`<span></span><div style="display:flex;justify-content:space-between;padding:0 2px;"><span style="font-size:10px;font-weight:700;color:var(--home-c)">${hn}</span><span style="font-size:10px;font-weight:700;color:var(--away-c)">${an}</span></div><span></span>`;
   g.appendChild(header);
-
   const sorted=Object.entries(signals).sort((a,b)=>(weights?.[b[0]]||0)-(weights?.[a[0]]||0));
-  for (const[k,s] of sorted) {
+  for(const[k,s]of sorted){
     const p=typeof s.prob==="number"?s.prob:0.5;
     const hp=pickSide==="home"?p:1-p;
-    const he=Math.max(0,(hp-0.5)*2*38), ae=Math.max(0,(0.5-hp)*2*38);
-    const w=weights?.[k]!=null?Math.round(weights[k]*100)+"% wt":"";
-    const row=document.createElement("div"); row.className="sig-row";
-    row.title=`${SIG_LABELS[k]||k}${w?" ("+w+")":""}: ${Math.round(hp*100)}% ${hn}`;
+    const he=Math.max(0,(hp-0.5)*2*38),ae=Math.max(0,(0.5-hp)*2*38);
+    const row=document.createElement("div");row.className="sig-row";
+    row.title=`${SIG_LABELS[k]||k}: ${Math.round(hp*100)}% ${hn}`;
     row.innerHTML=`<span class="sig-name">${SIG_LABELS[k]||k}</span>
       <div class="sig-bar"><div class="sig-mid"></div>
         <div class="sig-home" style="width:${he}%;background:var(--home-c);opacity:.70"></div>
@@ -650,43 +558,34 @@ function renderSignals(signals, pickSide, weights, homeTeam, awayTeam) {
   }
 }
 
-/* ─── advanced stats ─────────────────────────────────────── */
 const ADV_ROWS=[
-  {k:"ORtg (Adj)",  hk:"adj_off_rating",fmt:v=>fNum(v,1),hb:true},
-  {k:"DRtg (Adj)",  hk:"adj_def_rating",fmt:v=>fNum(v,1),hb:false},
-  {k:"Net Rtg",     hk:"adj_net_rating", fmt:fSign,       hb:true},
-  {k:"Pace",        hk:"pace",           fmt:v=>fNum(v,1),hb:null},
-  {k:"PIE",         hk:"pie",            fmt:v=>fPct(v,2),hb:true},
-  {k:"TS%",         hk:"ts_pct",         fmt:v=>fPct(v,1),hb:true},
-  {k:"eFG%",        hk:"efg_pct",        fmt:v=>fPct(v,1),hb:true},
-  {k:"TOV%",        hk:"tov_pct",        fmt:v=>fNum(v,1)+"%",hb:false},
-  {k:"OREB%",       hk:"oreb_pct",       fmt:v=>fPct(v,1),hb:true},
-  {k:"AST/TO",      hk:"ast_to",         fmt:v=>fNum(v,2),hb:true},
-  {k:"Clutch W%",   hk:"clutch_w_pct",   fmt:v=>fPct(v,1),hb:true},
-  {k:"Clutch ±",    hk:"clutch_pm",      fmt:fSign,       hb:true},
-  {k:"Hustle",      hk:"hustle_score",   fmt:v=>fNum(v,1),hb:true},
-  {k:"FT Rate",     hk:"ftr",            fmt:v=>fPct(v,1),hb:true},
-  {k:"3PA Rate",    hk:"fg3_rate",       fmt:v=>fPct(v,1),hb:null},
-  {k:"Rest Days",   hk:"rest_days",      fmt:v=>v+"d",    hb:true},
-  {k:"Streak",      hk:"streak",         fmt:v=>v>=0?"+"+v:String(v),hb:true},
+  {k:"ORtg (Adj)",hk:"adj_off_rating",fmt:v=>fNum(v,1),hb:true},
+  {k:"DRtg (Adj)",hk:"adj_def_rating",fmt:v=>fNum(v,1),hb:false},
+  {k:"Net Rtg",hk:"adj_net_rating",fmt:fSign,hb:true},
+  {k:"Pace",hk:"pace",fmt:v=>fNum(v,1),hb:null},
+  {k:"PIE",hk:"pie",fmt:v=>fPct(v,2),hb:true},
+  {k:"TS%",hk:"ts_pct",fmt:v=>fPct(v,1),hb:true},
+  {k:"eFG%",hk:"efg_pct",fmt:v=>fPct(v,1),hb:true},
+  {k:"TOV%",hk:"tov_pct",fmt:v=>fNum(v,1)+"%",hb:false},
+  {k:"OREB%",hk:"oreb_pct",fmt:v=>fPct(v,1),hb:true},
+  {k:"AST/TO",hk:"ast_to",fmt:v=>fNum(v,2),hb:true},
+  {k:"Clutch W%",hk:"clutch_w_pct",fmt:v=>fPct(v,1),hb:true},
+  {k:"Clutch ±",hk:"clutch_pm",fmt:fSign,hb:true},
+  {k:"Hustle",hk:"hustle_score",fmt:v=>fNum(v,1),hb:true},
+  {k:"FT Rate",hk:"ftr",fmt:v=>fPct(v,1),hb:true},
+  {k:"3PA Rate",hk:"fg3_rate",fmt:v=>fPct(v,1),hb:null},
+  {k:"Rest Days",hk:"rest_days",fmt:v=>v+"d",hb:true},
+  {k:"Streak",hk:"streak",fmt:v=>v>=0?"+"+v:String(v),hb:true},
 ];
 function renderAdvStats(h,a,ht,at){
   $("homeTH").textContent=(ht||"Home").split(" ").pop();
   $("awayTH").textContent=(at||"Away").split(" ").pop();
-  const body=$("advBody"); body.innerHTML="";
-  if(!h&&!a) return;
-  // Fields that should never be 0 for a real NBA team — treat 0 as missing
+  const body=$("advBody");body.innerHTML="";if(!h&&!a)return;
   const nonZero=new Set(["adj_off_rating","adj_def_rating","adj_net_rating","pace","ts_pct","efg_pct","oreb_pct","pie"]);
-  const isValid=(key,val)=>{
-    if(!Number.isFinite(val)) return false;
-    if(nonZero.has(key) && val===0) return false;
-    return true;
-  };
-  for (const r of ADV_ROWS) {
-    const hv=h?.[r.hk], av=a?.[r.hk];
-    const hn=Number(hv), an=Number(av);
-    const hOk=isValid(r.hk,hn), aOk=isValid(r.hk,an);
-    const ok=hOk&&aOk;
+  const isValid=(key,val)=>{if(!Number.isFinite(val))return false;if(nonZero.has(key)&&val===0)return false;return true;};
+  for(const r of ADV_ROWS){
+    const hv=h?.[r.hk],av=a?.[r.hk],hn=Number(hv),an=Number(av);
+    const hOk=isValid(r.hk,hn),aOk=isValid(r.hk,an),ok=hOk&&aOk;
     let hc="",ac="",et="—";
     if(ok&&r.hb!==null){const hw=r.hb?hn>an:hn<an;hc=hw?"better":"worse";ac=hw?"worse":"better";const d=hn-an;et=d>=0?`+${d.toFixed(2)}`:d.toFixed(2);}
     const tr=document.createElement("tr");
@@ -695,31 +594,32 @@ function renderAdvStats(h,a,ht,at){
   }
 }
 
-/* ─── enhanced props ─────────────────────────────────────── */
-function renderProps(rows, id, unit) {
-  const el=$(id); if(!Array.isArray(rows)||!rows.length){el.innerHTML='<div style="color:var(--muted);font-size:12px;padding:8px 0">No data</div>';return;}
+function renderProps(rows,id,unit){
+  const el=$(id);if(!Array.isArray(rows)||!rows.length){el.innerHTML='<div style="color:var(--muted);font-size:12px;padding:8px 0">No data</div>';return;}
   el.innerHTML=rows.slice(0,7).map(r=>{
-    const pct=typeof r.pickProbability==="number"?r.pickProbability:typeof r.hitProbability==="number"?r.hitProbability:0.5;
+    const pct=typeof r.aiPickProb==="number"?r.aiPickProb:typeof r.pickProbability==="number"?r.pickProbability:typeof r.hitProbability==="number"?r.hitProbability:0.5;
+    const pick=r.aiPick||r.pick||"?";
+    const conf=r.aiConfidence?.label||"Low";
+    const pickCls=pick.toLowerCase()==="over"?"over":"under";
     const barW=Math.round(Math.abs(pct-0.5)*2*100);
-    const barColor=pct>0.62?"var(--green)":pct<0.38?"var(--red)":"var(--yellow)";
-    const pickCls=(r.pick||"").toLowerCase()==="over"?"over":"under";
-    const conf=pct>=0.72?"🔥 HIGH":pct>=0.62?"◉ MED":"◎ LOW";
+    const barColor=pct>=0.72?"var(--green)":pct>=0.62?"var(--yellow)":"var(--red)";
+    const confIcon=conf==="High"?"🔥 HIGH":conf==="Medium"?"◉ MED":"◎ LOW";
     const lineLabel=r.line!=null?`${r.line} ${unit}`:"";
+    const aiEdge=typeof r.aiEdge==="number"?`edge ${r.aiEdge>=0?"+":""}${(r.aiEdge*100).toFixed(1)}%`:"";
     return`<div class="prop-item">
       <div class="prop-player">${r.player||"—"} <span style="font-size:10px;color:var(--muted);font-weight:400">${lineLabel?`· ${lineLabel}`:""}</span></div>
       <div class="prop-detail">
-        <span class="prop-line">Line: ${r.line??"-"}</span>
-        <span class="prop-pick ${pickCls}">${(r.pick||"?").toUpperCase()}</span>
+        <span class="prop-line">Book: ${r.bookOverProb!=null?(r.bookOverProb*100).toFixed(0)+"%":r.line??"-"}</span>
+        <span class="prop-pick ${pickCls}">${pick.toUpperCase()}</span>
         <div class="prop-conf-bar"><div class="prop-conf-fill" style="width:${barW}%;background:${barColor}"></div></div>
         <span class="prop-conf-pct" style="color:${barColor}">${(pct*100).toFixed(0)}%</span>
       </div>
-      <div class="prop-odds">${conf} · ${typeof r.overDecimal==="number"?r.overDecimal.toFixed(2):"—"} / ${fAm(d2a(r.overDecimal))}</div>
+      <div class="prop-odds">${confIcon}${aiEdge?` · AI ${aiEdge}`:""}</div>
     </div>`;
   }).join("");
 }
 
-/* ─── play by play ───────────────────────────────────────── */
-function renderPbp(scoreState, homeTeam, awayTeam) {
+function renderPbp(scoreState,homeTeam,awayTeam){
   const isLive=scoreState?.liveFound;
   $("pbpDot").style.display=isLive?"inline-block":"none";
   $("pbpStatus").textContent=isLive?"LIVE":"Not live yet";
@@ -729,120 +629,91 @@ function renderPbp(scoreState, homeTeam, awayTeam) {
   $("pbpAwayScore").textContent=isLive?(scoreState.awayScore??"-"):"-";
   $("pbpClock").textContent=scoreState?.clock||scoreState?.formattedClock||"—";
   $("pbpPeriod").textContent=scoreState?.period?`Q${scoreState.period}`:"—";
-
-  // Logos in pbp
-  setLogo("pbpHomeLogo", homeTeam, 36);
-  setLogo("pbpAwayLogo", awayTeam, 36);
-
+  setLogo("pbpHomeLogo",homeTeam,36);setLogo("pbpAwayLogo",awayTeam,36);
   const feed=$("pbpFeed");
-  if (!isLive) {
-    const msg=scoreState?.isFinal?"Game has ended":"Game not live yet — play-by-play will appear here when the game starts";
-    feed.innerHTML=`<div class="pbp-empty">${msg}</div>`;
-    return;
-  }
-
+  if(!isLive){feed.innerHTML=`<div class="pbp-empty">${scoreState?.isFinal?"Game has ended":"Game not live yet"}</div>`;return;}
   const plays=scoreState?.recentPlays||scoreState?.plays||[];
-  if (!plays.length) {
-    // Show at least score context
-    feed.innerHTML=`<div class="pbp-period-marker">PERIOD ${scoreState.period||1}</div>
-      <div class="pbp-play scoring">
-        <span class="pbp-play-time">${scoreState.formattedClock||"—"}</span>
-        <div class="pbp-play-team-ph">${abbr(homeTeam)}</div>
-        <div class="pbp-play-desc">Live data connected · Score: ${scoreState.awayScore??0}—${scoreState.homeScore??0}</div>
-      </div>`;
-    return;
-  }
-
-  // Render plays (already newest-first from tracker)
-  const playList=[...plays].slice(0,50);
+  if(!plays.length){feed.innerHTML=`<div class="pbp-period-marker">PERIOD ${scoreState.period||1}</div><div class="pbp-play scoring"><span class="pbp-play-time">${scoreState.formattedClock||"—"}</span><div class="pbp-play-team-ph">${abbr(homeTeam)}</div><div class="pbp-play-desc">Live · Score: ${scoreState.awayScore??0}—${scoreState.homeScore??0}</div></div>`;return;}
+  const homeNick=(homeTeam||"").split(" ").pop(),awayNick=(awayTeam||"").split(" ").pop();
   let lastPeriod=null;
-  const homeNick=(homeTeam||"").split(" ").pop();
-  const awayNick=(awayTeam||"").split(" ").pop();
-  const items=playList.map(play=>{
-    const desc=play.description||play.text||play.event||play.msg||"";
-    if(!desc) return "";
-    // Support both NBA API format (isHomeTeam bool) and BDL format (team_name string)
-    const isHome=typeof play.isHomeTeam==="boolean"
-      ? play.isHomeTeam
-      : (play.team?.full_name||play.team?.name||play.team_name||"").includes(homeNick);
+  const items=plays.slice(0,50).map(play=>{
+    const desc=play.description||play.text||play.event||play.msg||"";if(!desc)return"";
+    const isHome=typeof play.isHomeTeam==="boolean"?play.isHomeTeam:(play.team?.full_name||play.team?.name||play.team_name||"").includes(homeNick);
     const isScoring=play.isScore||(play.points||play.pts||play.score_value||0)>0||/makes|dunk|layup|jumper|three/i.test(desc);
-    const period=play.period||play.quarter||"";
-    const time=play.clock||play.time||"";
-    // Running score from play data
-    const hScore=play.homeScore;
-    const aScore=play.awayScore;
+    const period=play.period||play.quarter||"",time=play.clock||play.time||"";
+    const hScore=play.homeScore,aScore=play.awayScore;
     const scoreCtx=(typeof hScore==="number"&&typeof aScore==="number")?` <span style="opacity:0.5;font-size:10px">${awayNick} ${aScore}–${hScore} ${homeNick}</span>`:"";
     let periodHeader="";
     if(period&&period!==lastPeriod){lastPeriod=period;periodHeader=`<div class="pbp-period-marker">QUARTER ${period}</div>`;}
-    const teamDot=isHome
-      ? `<div class="pbp-play-team-ph" style="background:var(--blue)">${homeNick.slice(0,3).toUpperCase()}</div>`
-      : `<div class="pbp-play-team-ph" style="background:var(--red)">${awayNick.slice(0,3).toUpperCase()}</div>`;
-    return `${periodHeader}<div class="pbp-play${isScoring?" scoring":""}">
-      <span class="pbp-play-time">${time||""}</span>
-      ${teamDot}
-      <div><div class="pbp-play-desc">${desc}${isScoring?scoreCtx:""}</div></div>
-    </div>`;
+    const teamDot=isHome?`<div class="pbp-play-team-ph">${homeNick.slice(0,3).toUpperCase()}</div>`:`<div class="pbp-play-team-ph">${awayNick.slice(0,3).toUpperCase()}</div>`;
+    return`${periodHeader}<div class="pbp-play${isScoring?" scoring":""}"><span class="pbp-play-time">${time||""}</span>${teamDot}<div><div class="pbp-play-desc">${desc}${isScoring?scoreCtx:""}</div></div></div>`;
   }).filter(Boolean);
-
   feed.innerHTML=items.join("")||'<div class="pbp-empty">No play data yet</div>';
 }
 
-/* ─── players ────────────────────────────────────────────── */
+// ── PLAYER IMPACT: name as "D.Mitchell", 10 players, stats columns ────────────
 function renderPlayers(players, id) {
   const el=$(id); el.innerHTML="";
-  if(!Array.isArray(players)||!players.length){el.innerHTML='<div style="color:var(--muted);font-size:11px">No data</div>';return;}
-  for (const p of players.slice(0,5)) {
+  if(!Array.isArray(players)||!players.length){
+    el.innerHTML='<div style="color:var(--muted);font-size:11px;padding:4px 0">No data</div>';
+    return;
+  }
+  for(const p of players.slice(0,10)){
+    const parts=(p.name||"").trim().split(" ");
+    const displayName=parts.length>=2?`${parts[0].charAt(0)}.${parts.slice(1).join(" ")}`:p.name||"—";
     const row=document.createElement("div"); row.className="pl-row";
-    row.innerHTML=`<span class="pl-name" title="${p.name||""}">${(p.name||"").split(" ").pop()}</span>
-      <span class="pl-val" style="color:var(--acc);font-weight:600">${typeof p.pie==="number"?(p.pie*100).toFixed(1):"—"}</span>
-      <span class="pl-val">${typeof p.ts_pct==="number"?(p.ts_pct*100).toFixed(1):"—"}</span>
-      <span class="pl-val">${typeof p.usg_pct==="number"?(p.usg_pct*100).toFixed(0):"—"}</span>
-      <span class="pl-val">${typeof p.net_rtg==="number"?fSign(p.net_rtg):"—"}</span>`;
+    const n=v=>(typeof v==="number"&&v>0)?v.toFixed(1):"—";
+    const pm=v=>(typeof v==="number")?(v>=0?"+"+v.toFixed(1):v.toFixed(1)):"—";
+    const usg=v=>(typeof v==="number"&&v>0)?(v*100).toFixed(0)+"%":"—";
+    row.innerHTML=`
+      <span class="pl-name" title="${p.name||""}">${displayName}</span>
+      <span class="pl-val" style="font-weight:600;color:var(--txt)">${n(p.pts)}</span>
+      <span class="pl-val">${n(p.reb)}</span>
+      <span class="pl-val">${n(p.ast)}</span>
+      <span class="pl-val">${n(p.stl)}</span>
+      <span class="pl-val">${n(p.blk)}</span>
+      <span class="pl-val" style="color:${typeof p.net_rtg==="number"&&p.net_rtg>=0?"var(--green)":"var(--red)"}">${pm(p.net_rtg)}</span>
+      <span class="pl-val" style="color:var(--muted)">${usg(p.usg_pct)}</span>`;
     el.appendChild(row);
   }
 }
 
-/* ─── injury pills ───────────────────────────────────────── */
-function renderInjuries(injuries, id) {
-  const el=$(id); el.innerHTML="";
+function renderInjuries(injuries,id){
+  const el=$(id);el.innerHTML="";
   if(!Array.isArray(injuries)||!injuries.length){el.innerHTML='<span style="color:var(--muted);font-size:11px">None listed</span>';return;}
-  for (const i of injuries.slice(0,5)) {
-    const name=extractPName(i), t=JSON.stringify(i).toLowerCase();
+  for(const i of injuries.slice(0,5)){
+    const name=extractPName(i),t=JSON.stringify(i).toLowerCase();
     const cls=t.includes("out")?"out":t.includes("doubtful")||t.includes("questionable")?"dtd":"";
     const st=t.includes("out")?"OUT":t.includes("doubtful")?"DTB":t.includes("questionable")?"Q":"P";
-    const pill=document.createElement("span"); pill.className=`pill ${cls}`;
+    const pill=document.createElement("span");pill.className=`pill ${cls}`;
     pill.textContent=`${name||"Unknown"} · ${st}`;
     el.appendChild(pill);
   }
 }
 function extractPName(o){if(!o)return"";for(const k of["PlayerName","playerName","name","Name","player","full_name"])if(typeof o[k]==="string")return o[k];if(o.player&&typeof o.player==="object")return`${o.player.first_name||""} ${o.player.last_name||""}`.trim();return"";}
 
-/* ─── bm table ───────────────────────────────────────────── */
-function renderBm(rows) {
-  const body=$("bmBody"); body.innerHTML="";
+function renderBm(rows){
+  const body=$("bmBody");body.innerHTML="";
   if(!Array.isArray(rows)||!rows.length){body.innerHTML=`<tr><td colspan="5" style="text-align:center;padding:12px;color:var(--muted)">No data</td></tr>`;return;}
-  for (const r of rows) {
+  for(const r of rows){
     const tr=document.createElement("tr");
-    tr.innerHTML=`<td>${r.book||"—"}</td><td>${r.homePrice??"-"} / ${fAm(r.homeAmerican)}</td><td>${r.awayPrice??"-"} / ${fAm(r.awayAmerican)}</td><td>${r.homeSpread??"-"}</td><td>${r.total??"-"}</td>`;
+    tr.innerHTML=`<td>${r.book||"—"}</td><td>${r.homePrice??"-"} / ${fAm(d2a(r.homePrice))}</td><td>${r.awayPrice??"-"} / ${fAm(d2a(r.awayPrice))}</td><td>${r.homeSpread??"-"}</td><td>${r.total??"-"}</td>`;
     body.appendChild(tr);
   }
 }
 
-/* ─── helpers ────────────────────────────────────────────── */
-function setV(id, val, cls){const el=$(id);if(!el)return;el.textContent=val;if(cls){el.className="";el.classList.add(cls);}}
+function setV(id,val,cls){const el=$(id);if(!el)return;el.textContent=val;if(cls){el.className="";el.classList.add(cls);}}
 function setVerdictCls(v){const el=$("verdict");el.className="";if(v==="Bet now")el.classList.add("bet");else if(v==="Watch")el.classList.add("watch");else el.classList.add("avoid");}
 function setConfCls(l){const el=$("confLabel");el.className="";if(l==="High")el.classList.add("high");else if(l==="Medium")el.classList.add("medium");else el.classList.add("low");}
 
-/* ─── API ────────────────────────────────────────────────── */
 async function fetchJson(url){const r=await fetch(url);const d=await r.json();if(!r.ok||d.error)throw new Error(d.error||"Error");return d;}
 
-/* ─── load games ─────────────────────────────────────────── */
-async function loadGames() {
-  try {
+async function loadGames(){
+  try{
     const d=await fetchJson("/games");
-    const sel=$("gameSelect"); sel.innerHTML="";
+    const sel=$("gameSelect");sel.innerHTML="";
     if(!d.games?.length){sel.innerHTML='<option value="">No games</option>';selId=null;$("statusMsg").textContent="No games available.";return;}
-    for (const g of d.games){const o=document.createElement("option");o.value=g.id;o.textContent=g.label;o.dataset.mode=g.mode||"pregame";sel.appendChild(o);}
+    for(const g of d.games){const o=document.createElement("option");o.value=g.id;o.textContent=g.label;o.dataset.mode=g.mode||"pregame";sel.appendChild(o);}
     if(!selId||!d.games.some(g=>g.id===selId))selId=d.games[0].id;
     sel.value=selId;
     gMode=d.games.find(g=>g.id===selId)?.mode||"pregame";
@@ -851,161 +722,120 @@ async function loadGames() {
   }catch(e){$("statusMsg").textContent=`Failed: ${e.message}`;}
 }
 
-/* ─── refresh timer ──────────────────────────────────────── */
 function setRefreshTimer(){if(rfTimer)clearInterval(rfTimer);rfTimer=setInterval(loadGame,gMode==="live"?30000:gMode==="pregame"?60000:300000);}
 
-/* ─── main game load ─────────────────────────────────────── */
-async function loadGame() {
+async function loadGame(){
   if(!selId)return;
-  try {
+  try{
     const d=await fetchJson(`/odds?gameId=${encodeURIComponent(selId)}`);
-    lastData=d; gMode=d.gameMode||"pregame"; setRefreshTimer();
-
-    const homeTeam=d.homeTeam||"Home", awayTeam=d.awayTeam||"Away";
-    const mp=d.aiModel?.matchupProfile;
-    const ai=d.aiModel||{};
-    const scoreState=d.scoreState;
+    lastData=d;gMode=d.gameMode||"pregame";setRefreshTimer();
+    const homeTeam=d.homeTeam||"Home",awayTeam=d.awayTeam||"Away";
+    const mp=d.aiModel?.matchupProfile,ai=d.aiModel||{},scoreState=d.scoreState;
     const isLive=gMode==="live";
 
-    // ── Set team logos everywhere ─────────────────────────
-    setLogo("homeLogoHero",  homeTeam, 52);
-    setLogo("awayLogoHero",  awayTeam, 52);
-    setLogo("homeLogoCard",  homeTeam, 60);
-    setLogo("awayLogoCard",  awayTeam, 60);
+    setLogo("homeLogoHero",homeTeam,52);setLogo("awayLogoHero",awayTeam,52);
+    setLogo("homeLogoCard",homeTeam,60);setLogo("awayLogoCard",awayTeam,60);
 
-    // ── Hero score display ────────────────────────────────
     $("homeNameHero").textContent=homeTeam.split(" ").pop();
     $("awayNameHero").textContent=awayTeam.split(" ").pop();
-    if (isLive && scoreState) {
-      $("scoreDisplay").classList.remove("score-hidden");
-      $("heroSub").style.display="none";
-      $("predScore").style.display="none"; $("predScoreLabel").style.display="none";
+    if(isLive&&scoreState){
+      $("scoreDisplay").classList.remove("score-hidden");$("heroSub").style.display="none";
+      $("predScore").style.display="none";$("predScoreLabel").style.display="none";
       $("homeScoreHero").textContent=scoreState.homeScore??"-";
       $("awayScoreHero").textContent=scoreState.awayScore??"-";
       $("periodDisplay").textContent=scoreState.period?`Q${scoreState.period} ${scoreState.formattedClock||scoreState.clock||""}`.trim():(scoreState.isFinal?"Final":"Live");
-    } else {
-      $("scoreDisplay").classList.add("score-hidden");
-      $("heroSub").style.display="block";
+    }else{
+      $("scoreDisplay").classList.add("score-hidden");$("heroSub").style.display="block";
       const hp=mp?.home_predicted_pts,ap=mp?.away_predicted_pts;
       if(typeof hp==="number"&&typeof ap==="number"){
         $("predScore").textContent=`${awayTeam.split(" ").pop()} ${Math.round(ap)} — ${Math.round(hp)} ${homeTeam.split(" ").pop()}`;
-        $("predScore").style.display="block"; $("predScoreLabel").style.display="block";
-        $("heroSub").style.display="none";
+        $("predScore").style.display="block";$("predScoreLabel").style.display="block";$("heroSub").style.display="none";
       }
     }
 
-    // ── Main pick ──────────────────────────────────────────
     $("matchup").textContent=`${awayTeam} @ ${homeTeam}`;
     $("pick").textContent=`Pick: ${d.pick||"—"}`;
-    setV("edgeVal",fPct(d.edge)); setV("verdict",d.verdict||"—"); setVerdictCls(d.verdict||"");
-    setV("gameMode",d.gameMode||"—"); setV("confLabel",d.confidence?.label||"—"); setConfCls(d.confidence?.label||"");
+    setV("edgeVal",fPct(d.edge));setV("verdict",d.verdict||"—");setVerdictCls(d.verdict||"");
+    setV("gameMode",d.gameMode||"—");setV("confLabel",d.confidence?.label||"—");setConfCls(d.confidence?.label||"");
     setV("confPct",fPct(d.confidence?.percent));
     setV("bookCount",d.modelDetails?.bookCount??d.bookmakerTable?.length??"-");
 
-    // ── Team cards ─────────────────────────────────────────
     const ls=d.learningSummary||{};
-    const homeImplied=d.impliedProbability, awayImplied=1-(d.impliedProbability||0.5);
-    const homeTrue=d.trueProbability, awayTrue=1-(d.trueProbability||0.5);
+    const homeImplied=d.impliedProbability,awayImplied=1-(d.impliedProbability||0.5);
+    const homeTrue=d.trueProbability,awayTrue=1-(d.trueProbability||0.5);
     const isHomePick=d.pickSide==="home";
 
-    $("homeCardName").textContent=homeTeam; $("awayCardName").textContent=awayTeam;
+    $("homeCardName").textContent=homeTeam;$("awayCardName").textContent=awayTeam;
     $("homeCardRecord").textContent=mp?.homeStats?`${(mp.homeStats.win_rate*100).toFixed(0)}% WR · Str ${mp.homeStats.streak>=0?"+":""}${mp.homeStats.streak}`:"";
     $("awayCardRecord").textContent=mp?.awayStats?`${(mp.awayStats.win_rate*100).toFixed(0)}% WR · Str ${mp.awayStats.streak>=0?"+":""}${mp.awayStats.streak}`:"";
-    $("homeCardImplied").textContent=fPct(homeImplied,0);
-    $("awayCardImplied").textContent=fPct(awayImplied,0);
-    $("homeCardTrue").textContent=fPct(homeTrue,1);
-    $("awayCardTrue").textContent=fPct(awayTrue,1);
-    $("homeCardEdge").textContent=isHomePick?fPct(d.edge):"—";
-    $("awayCardEdge").textContent=!isHomePick?fPct(d.edge):"—";
-    $("homePickBadge").style.display=isHomePick?"block":"none";
-    $("awayPickBadge").style.display=!isHomePick?"block":"none";
-    selectTeam(selectedTeam); // refresh odds card for selected team
+    $("homeCardImplied").textContent=fPct(homeImplied,0);$("awayCardImplied").textContent=fPct(awayImplied,0);
+    $("homeCardTrue").textContent=fPct(homeTrue,1);$("awayCardTrue").textContent=fPct(awayTrue,1);
+    $("homeCardEdge").textContent=isHomePick?fPct(d.edge):"—";$("awayCardEdge").textContent=!isHomePick?fPct(d.edge):"—";
+    $("homePickBadge").style.display=isHomePick?"block":"none";$("awayPickBadge").style.display=!isHomePick?"block":"none";
+    selectTeam(selectedTeam);
 
-    // ── Win prob chart ─────────────────────────────────────
-    $("wpLabelHome").textContent=homeTeam.split(" ").pop();
-    $("wpLabelAway").textContent=awayTeam.split(" ").pop();
+    $("wpLabelHome").textContent=homeTeam.split(" ").pop();$("wpLabelAway").textContent=awayTeam.split(" ").pop();
     updateWinProbChart(homeImplied||0.5);
 
-    // ── AI learning status ─────────────────────────────────
     const wr=ls.overallWinRate!=null?(ls.overallWinRate*100).toFixed(1)+"%":"—";
-    setV("overallAcc",wr); setV("gradedCount",ls.gradedSnapshots||0);
-    $("accBadge").textContent=wr;
+    setV("overallAcc",wr);setV("gradedCount",ls.gradedSnapshots||0);$("accBadge").textContent=wr;
     const wrNum=ls.overallWinRate||0;
-    const bar=$("overallAccBar"); if(bar){bar.style.width=Math.min(wrNum*100,100)+"%";bar.className="acc-bar-fill"+(wrNum<0.55?" bad":wrNum<0.62?" warn":"");}
-    const bv=ls.byVerdict?.["Bet now"]; setV("betNowAcc",bv?.winRate!=null?(bv.winRate*100).toFixed(1)+"%":"—");
+    const bar=$("overallAccBar");if(bar){bar.style.width=Math.min(wrNum*100,100)+"%";bar.className="acc-bar-fill"+(wrNum<0.55?" bad":wrNum<0.62?" warn":"");}
+    const bv=ls.byVerdict?.["Bet now"];setV("betNowAcc",bv?.winRate!=null?(bv.winRate*100).toFixed(1)+"%":"—");
     setV("weightsStatus",ai.usingLearnedWeights?"Learned ✓":"Default");
     setV("statsBlend",typeof ai.statsBlendWeight==="number"?(ai.statsBlendWeight*100).toFixed(0)+"%":"—");
     setV("nbaStatus",mp?.nba_service_used?"Active ✓":"Offline");
 
-    // ── Signals ────────────────────────────────────────────
     renderSignals(ai.signals||null,d.pickSide||"home",ai.activeWeights||null,homeTeam,awayTeam);
-    $("sigSubtitle").textContent=`Pick: ${d.pick||"—"} · ${d.pickSide==="home"?"Green=Home":"Green=Home"} · sorted by weight`;
+    $("sigSubtitle").textContent=`Pick: ${d.pick||"—"} · sorted by weight`;
 
-    // ── Advanced stats ─────────────────────────────────────
     renderAdvStats(mp?.homeStats,mp?.awayStats,homeTeam,awayTeam);
     $("advSubtitle").textContent=mp?.nba_service_used?"Official NBA metrics (injury-adjusted)":"Estimated — NBA service offline";
 
-    // ── Injury impact ──────────────────────────────────────
     const injAdj=ai.injuryAdjustments||{};
-    $("homeInjTitle").textContent=homeTeam.split(" ").pop();
-    $("awayInjTitle").textContent=awayTeam.split(" ").pop();
-    const hnd=injAdj.home?.net_change||0, and_=injAdj.away?.net_change||0;
-    $("homeNetDelta").textContent=`Net adj: ${fSign(hnd)}`;
-    $("awayNetDelta").textContent=`Net adj: ${fSign(and_)}`;
+    $("homeInjTitle").textContent=homeTeam.split(" ").pop();$("awayInjTitle").textContent=awayTeam.split(" ").pop();
+    $("homeNetDelta").textContent=`Net adj: ${fSign(injAdj.home?.net_change||0)}`;
+    $("awayNetDelta").textContent=`Net adj: ${fSign(injAdj.away?.net_change||0)}`;
     renderInjuries(d.injuryStatus?.homeInjuries||[],"homeInjuries");
     renderInjuries(d.injuryStatus?.awayInjuries||[],"awayInjuries");
 
-    // ── Players ────────────────────────────────────────────
-    $("homePlayersH").textContent=homeTeam.split(" ").pop();
-    $("awayPlayersH").textContent=awayTeam.split(" ").pop();
+    $("homePlayersH").textContent=homeTeam.split(" ").pop();$("awayPlayersH").textContent=awayTeam.split(" ").pop();
     renderPlayers(mp?.homeStats?.players||[],"homePlayers");
     renderPlayers(mp?.awayStats?.players||[],"awayPlayers");
 
-    // ── Line movement ──────────────────────────────────────
     const hist=d.modelDetails?.historicalComparisons||{};
     const mv=(c,p)=>{if(typeof c!=="number"||typeof p!=="number")return"—";const delta=c-p;return`${delta>=0?"+":""}${(delta*100).toFixed(2)}%`;};
     setV("move2h",mv(d.impliedProbability,hist["2h"]?.homeMarketProb));
     setV("move24h",mv(d.impliedProbability,hist["24h"]?.homeMarketProb));
-    // Avg spread and total from bookmaker table
     const bmRows=d.bookmakerTable||[];
     const spreads=bmRows.map(b=>b.homeSpread).filter(v=>typeof v==="number");
     const totals=bmRows.map(b=>b.total).filter(v=>typeof v==="number");
-    const avgSpr=spreads.length?spreads.reduce((s,v)=>s+v,0)/spreads.length:null;
-    const avgTot=totals.length?totals.reduce((s,v)=>s+v,0)/totals.length:null;
-    setV("avgSpread",avgSpr!=null?avgSpr.toFixed(1):"—");
-    setV("avgTotal",avgTot!=null?avgTot.toFixed(1):"—");
+    setV("avgSpread",spreads.length?(spreads.reduce((s,v)=>s+v,0)/spreads.length).toFixed(1):"—");
+    setV("avgTotal",totals.length?(totals.reduce((s,v)=>s+v,0)/totals.length).toFixed(1):"—");
     setV("disagPenalty",fPct(d.modelDetails?.disagreementPenalty));
-    setV("refImpact","—");
-    $("refNames").textContent="";
+    setV("refImpact","—");$("refNames").textContent="";
 
-    // ── Best prices ────────────────────────────────────────
     setV("bestHome",`${d.modelDetails?.bestHomePrice??"-"} / ${fAm(d2a(d.modelDetails?.bestHomePrice))}`);
     setV("bestAway",`${d.modelDetails?.bestAwayPrice??"-"} / ${fAm(d2a(d.modelDetails?.bestAwayPrice))}`);
     setV("avgHome",`${d.modelDetails?.avgHomePrice??"-"}`);
     setV("avgAway",`${d.modelDetails?.avgAwayPrice??"-"}`);
 
-    // ── Edge chart ─────────────────────────────────────────
     const history=Array.isArray(d.history)?d.history:[];
     edgeChart.data.labels=history.map(p=>new Date(p.timestamp).toLocaleTimeString());
     edgeChart.data.datasets[0].data=history.map(p=>p.edge);
     edgeChart.update();
 
-    // ── Bm table ───────────────────────────────────────────
     renderBm(d.bookmakerTable||[]);
 
-    // ── Props ──────────────────────────────────────────────
     const ps=d.propSections||{};
-    renderProps(ps.points||[],"propsPoints","pts"); renderProps(ps.assists||[],"propsAssists","ast");
-    renderProps(ps.rebounds||[],"propsRebounds","reb"); renderProps(ps.pra||[],"propsPRA","PRA");
+    renderProps(ps.points||[],"propsPoints","pts");renderProps(ps.assists||[],"propsAssists","ast");
+    renderProps(ps.rebounds||[],"propsRebounds","reb");renderProps(ps.pra||[],"propsPRA","PRA");
 
-    // ── Play-by-play ───────────────────────────────────────
-    renderPbp(scoreState, homeTeam, awayTeam);
-
+    renderPbp(scoreState,homeTeam,awayTeam);
     $("statusMsg").textContent=`${awayTeam} @ ${homeTeam} · ${d.gameMode} · ${new Date(d.updatedAt||Date.now()).toLocaleTimeString()}`;
   }catch(e){$("statusMsg").textContent=`Error: ${e.message}`;}
 }
 
-/* ─── game select ────────────────────────────────────────── */
 $("gameSelect").addEventListener("change",async e=>{
   selId=e.target.value;
   gMode=$("gameSelect").options[$("gameSelect").selectedIndex]?.dataset?.mode||"pregame";
@@ -1013,7 +843,6 @@ $("gameSelect").addEventListener("change",async e=>{
   await loadGame();
 });
 
-/* ─── init ───────────────────────────────────────────────── */
 (async function(){await loadGames();await loadGame();})();
 </script>
 </body>
