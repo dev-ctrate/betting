@@ -489,11 +489,16 @@ async function fetchBdlTeamRecentStats(bdlTeamId) {
     const gameIds = games.map(g => g.id).filter(Boolean);
     if (!gameIds.length) return [];
 
-    // Step 2: get all player stats from those game IDs
-    // This returns stats for both teams — we filter to our team below
-    const idsQ   = gameIds.map(id => `game_ids[]=${id}`).join("&");
-    const sData  = await bdlFetch(`/stats?${idsQ}&per_page=300`);
-    const allRows = bdlRows(sData).filter(r => flt(r.min) > 1);
+    // Step 2: get all player stats from those game IDs (max 100 per page, fetch 2 pages)
+    const idsQ    = gameIds.map(id => `game_ids[]=${id}`).join("&");
+    const [p1, p2] = await Promise.allSettled([
+      bdlFetch(`/stats?${idsQ}&per_page=100`),
+      bdlFetch(`/stats?${idsQ}&per_page=100&page=2`),
+    ]);
+    const allRows = [
+      ...bdlRows(p1.status === "fulfilled" ? p1.value : []),
+      ...bdlRows(p2.status === "fulfilled" ? p2.value : []),
+    ].filter(r => flt(r.min) > 1);
 
     // Step 3: keep only rows belonging to our team
     const teamRows = allRows.filter(r => {
