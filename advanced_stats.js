@@ -469,35 +469,48 @@ async function fetchBdlSeasonAverages(playerIds) {
   return [];
 }
 
-// Source 2: BDL recent game stats aggregated per player
-// NOTE: BDL /stats does NOT support team_ids[] — must use player_ids[]
+// Source 2: BDL recent game stats — fetch by game_ids so we always get
+// whoever actually played, bypassing stale roster data
 async function fetchBdlTeamRecentStats(bdlTeamId) {
   if (!BDL_KEY || !bdlTeamId) return [];
   const season = getBdlSeason();
   const k = `bdl:teamstats:${bdlTeamId}:${season}`, h = cg(k); if (h) return h;
   try {
-    // Step 1: get roster player IDs (cached from earlier call)
-    const players = await fetchBdlTeamPlayers(bdlTeamId);
-    if (!players.length) { console.warn("[adv] No players found for team", bdlTeamId); return []; }
-    const playerIds = players.map(p => p.id).filter(Boolean).slice(0, 12);
-    if (!playerIds.length) return [];
-
-    // Step 2: query /stats with player_ids[] (this IS supported by BDL)
-    const idsQ = playerIds.map(id => `player_ids[]=${id}`).join("&");
-    const data  = await bdlFetch(
-      `/stats?${idsQ}&seasons[]=${season}&per_page=200&sort_by=game_date&direction=desc`
+    // Step 1: get the 8 most recent final games for this team
+    const gData = await bdlFetch(
+      `/games?team_ids[]=${bdlTeamId}&seasons[]=${season}&per_page=10`
     );
-    const rows = bdlRows(data);
-    if (!rows.length) return [];
+    const games = bdlRows(gData)
+      .filter(g => String(g.status || "").toLowerCase().includes("final"))
+      .slice(-8); // take most recent 8
 
-    // Step 3: aggregate last 10 games per player (rows already newest-first)
+    if (!games.length) { console.warn("[adv] No recent games for team", bdlTeamId); return []; }
+
+    const gameIds = games.map(g => g.id).filter(Boolean);
+    if (!gameIds.length) return [];
+
+    // Step 2: get all player stats from those game IDs
+    // This returns stats for both teams — we filter to our team below
+    const idsQ   = gameIds.map(id => `game_ids[]=${id}`).join("&");
+    const sData  = await bdlFetch(`/stats?${idsQ}&per_page=300`);
+    const allRows = bdlRows(sData).filter(r => flt(r.min) > 1);
+
+    // Step 3: keep only rows belonging to our team
+    const teamRows = allRows.filter(r => {
+      const tid = r.team?.id ?? r.team_id;
+      return tid === bdlTeamId || tid === String(bdlTeamId);
+    });
+
+    const rows = teamRows.length >= 5 ? teamRows : allRows; // fallback if team filter fails
+
+    // Step 4: aggregate last 8 games per player
     const byPlayer = {};
     for (const r of rows) {
-      if (flt(r.min) < 3) continue;
-      const id = r.player_id || r.player?.id;
+      if (flt(r.min) < 1) continue;
+      const id = r.player_id ?? r.player?.id;
       if (!id) continue;
       if (!byPlayer[id]) byPlayer[id] = { player: r.player, rows: [] };
-      if (byPlayer[id].rows.length < 10) byPlayer[id].rows.push(r);
+      byPlayer[id].rows.push(r);
     }
 
     const result = Object.values(byPlayer).map(({ player, rows: pRows }) => {
@@ -518,9 +531,9 @@ async function fetchBdlTeamRecentStats(bdlTeamId) {
         min:      avg("min"),  turnover: avg("turnover"),
         games:    pRows.length,
       };
-    }).filter(p => p.games >= 1 && p.min >= 3);
+    }).filter(p => p.min >= 3);
 
-    console.log(`[adv] BDL recent stats: ${result.length} players for team ${bdlTeamId}`);
+    console.log(`[adv] BDL recent stats via game_ids: ${result.length} players for team ${bdlTeamId}`);
     return cs(k, result, TTL_PLAYER);
   } catch (e) { console.warn("[adv] BDL team recent stats:", e.message); return []; }
 }
