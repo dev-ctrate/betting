@@ -297,7 +297,14 @@ async function fetchBdlTeamGames(bdlTeamId, season) {
 function aggregateBdlTeamGames(games, bdlTeamId) {
   if (!games?.length) return null;
 
-  const results = games.map(g => {
+  // Sort ascending by date so newest game is always last
+  const sorted = [...games].sort((a, b) => {
+    const da = new Date(a.date || a.datetime || 0).getTime();
+    const db = new Date(b.date || b.datetime || 0).getTime();
+    return da - db;
+  });
+
+  const results = sorted.map(g => {
     const isHome = g.home_team?.id === bdlTeamId || g.home_team_id === bdlTeamId;
     const myPts  = isHome ? g.home_team_score  : g.visitor_team_score;
     const oppPts = isHome ? g.visitor_team_score : g.home_team_score;
@@ -305,7 +312,7 @@ function aggregateBdlTeamGames(games, bdlTeamId) {
       myPts, oppPts, isHome,
       won:    myPts > oppPts,
       margin: myPts - oppPts,
-      date:   g.date || g.datetime,
+      date:   g.date || (g.datetime ? g.datetime.slice(0, 10) : null),
     };
   }).filter(r => Number.isFinite(r.myPts) && Number.isFinite(r.oppPts));
 
@@ -390,13 +397,14 @@ function buildAdvFromSources(sm, sd, bdlAgg) {
   const fg3a = flt(s.avgThreePointFieldGoalsAttempted || 0);
   const ftm  = flt(s.avgFreeThrowsMade                || 0);
   const fta  = flt(s.avgFreeThrowsAttempted           || 0);
-  const oreb = flt(s.avgOffRebounds                   || 0);
-  const dreb = flt(s.avgDefRebounds                   || 0);
-  const reb  = flt(s.avgRebounds || (oreb+dreb)       || 0);
-  const ast  = flt(s.avgAssists                       || 0);
-  const tov  = flt(s.avgTurnovers                     || 0);
-  const stl  = flt(s.avgSteals                        || 0);
-  const blk  = flt(s.avgBlocks                        || 0);
+  // ESPN uses many field name variants depending on endpoint/season — try all
+  const oreb = flt(s.avgOffRebounds || s.avgOffensiveRebounds || s.offReboundsPerGame || s.avgOffensiveReboundsPerGame || 0);
+  const dreb = flt(s.avgDefRebounds || s.avgDefensiveRebounds || s.defReboundsPerGame || s.avgDefensiveReboundsPerGame || 0);
+  const reb  = flt(s.avgRebounds || s.reboundsPerGame || (oreb+dreb) || 0);
+  const ast  = flt(s.avgAssists  || s.assistsPerGame  || 0);
+  const tov  = flt(s.avgTurnovers|| s.turnoversPerGame|| 0);
+  const stl  = flt(s.avgSteals   || s.stealsPerGame   || 0);
+  const blk  = flt(s.avgBlocks   || s.blocksPerGame   || 0);
 
   const ts_pct  = (fga+0.44*fta) > 0 ? pts  / (2*(fga+0.44*fta)) : 0;
   const efg_pct = fga > 0 ? (fgm+0.5*fg3m) / fga : 0;
@@ -455,40 +463,57 @@ async function fetchBdlSeasonAverages(playerIds) {
 }
 
 // Source 2: BDL recent game stats aggregated per player
+// NOTE: BDL /stats does NOT support team_ids[] — must use player_ids[]
 async function fetchBdlTeamRecentStats(bdlTeamId) {
   if (!BDL_KEY || !bdlTeamId) return [];
   const season = getBdlSeason();
   const k = `bdl:teamstats:${bdlTeamId}:${season}`, h = cg(k); if (h) return h;
   try {
-    // Get last 15 games worth of player stats for this team
-    const data = await bdlFetch(
-      `/stats?team_ids[]=${bdlTeamId}&seasons[]=${season}&per_page=150&sort_by=game_date&direction=desc`
+    // Step 1: get roster player IDs (cached from earlier call)
+    const players = await fetchBdlTeamPlayers(bdlTeamId);
+    if (!players.length) { console.warn("[adv] No players found for team", bdlTeamId); return []; }
+    const playerIds = players.map(p => p.id).filter(Boolean).slice(0, 12);
+    if (!playerIds.length) return [];
+
+    // Step 2: query /stats with player_ids[] (this IS supported by BDL)
+    const idsQ = playerIds.map(id => `player_ids[]=${id}`).join("&");
+    const data  = await bdlFetch(
+      `/stats?${idsQ}&seasons[]=${season}&per_page=200&sort_by=game_date&direction=desc`
     );
     const rows = bdlRows(data);
-    // Aggregate by player
+    if (!rows.length) return [];
+
+    // Step 3: aggregate last 10 games per player (rows already newest-first)
     const byPlayer = {};
     for (const r of rows) {
       if (flt(r.min) < 3) continue;
       const id = r.player_id || r.player?.id;
       if (!id) continue;
       if (!byPlayer[id]) byPlayer[id] = { player: r.player, rows: [] };
-      byPlayer[id].rows.push(r);
+      if (byPlayer[id].rows.length < 10) byPlayer[id].rows.push(r);
     }
-    // Build averages
-    const result = Object.values(byPlayer).map(({ player, rows }) => {
-      const avg = f => mean(rows.map(r => flt(r[f])).filter(v => v > 0));
+
+    const result = Object.values(byPlayer).map(({ player, rows: pRows }) => {
+      const avg = f => mean(pRows.map(r => flt(r[f])).filter(v => v >= 0));
+      const avgReb = () => mean(pRows.map(r => {
+        const rb = flt(r.reb, -1);
+        return rb >= 0 ? rb : flt(r.oreb, 0) + flt(r.dreb, 0);
+      }).filter(v => v >= 0));
+
       return {
-        id:   player?.id,
-        name: `${player?.first_name||""} ${player?.last_name||""}`.trim(),
-        pts:  avg("pts"), reb: mean(rows.map(r => flt(r.reb??(flt(r.oreb)+flt(r.dreb)))).filter(v=>v>=0)),
-        ast:  avg("ast"), stl: avg("stl"), blk: avg("blk"),
-        fgm:  avg("fgm"), fga: avg("fga"), fg3m: avg("fg3m"),
-        ftm:  avg("ftm"), fta: avg("fta"),
-        min:  avg("min"),
-        turnover: avg("turnover"),
-        games: rows.length,
+        id:       player?.id,
+        name:     `${player?.first_name || ""} ${player?.last_name || ""}`.trim(),
+        pts:      avg("pts"),  reb:      avgReb(),
+        ast:      avg("ast"),  stl:      avg("stl"),
+        blk:      avg("blk"),  fgm:      avg("fgm"),
+        fga:      avg("fga"),  fg3m:     avg("fg3m"),
+        ftm:      avg("ftm"),  fta:      avg("fta"),
+        min:      avg("min"),  turnover: avg("turnover"),
+        games:    pRows.length,
       };
     }).filter(p => p.games >= 2 && p.min >= 5);
+
+    console.log(`[adv] BDL recent stats: ${result.length} players for team ${bdlTeamId}`);
     return cs(k, result, TTL_PLAYER);
   } catch (e) { console.warn("[adv] BDL team recent stats:", e.message); return []; }
 }
