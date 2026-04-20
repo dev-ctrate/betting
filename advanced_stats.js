@@ -448,15 +448,22 @@ async function fetchBdlTeamPlayers(bdlTeamId) {
 async function fetchBdlSeasonAverages(playerIds) {
   if (!BDL_KEY || !playerIds.length) return [];
   const season = getBdlSeason();
-  const idsQ   = playerIds.slice(0,15).map(id=>`player_ids[]=${id}`).join("&");
   const k = `bdl:avgs:${season}:${playerIds.slice(0,5).join(",")}`, h = cg(k); if (h) return h;
 
-  // Try current season first, then previous
-  for (const s of [season, season-1]) {
+  // BDL /season_averages only accepts player_id (singular) — make individual calls
+  for (const s of [season, season - 1]) {
     try {
-      const data = await bdlFetch(`/season_averages?season=${s}&${idsQ}`);
-      const rows = bdlRows(data);
-      if (rows.length) return cs(k, rows, TTL_PLAYER);
+      const settled = await Promise.allSettled(
+        playerIds.slice(0, 12).map(id => bdlFetch(`/season_averages?season=${s}&player_id=${id}`))
+      );
+      const rows = settled
+        .filter(r => r.status === "fulfilled")
+        .flatMap(r => bdlRows(r.value))
+        .filter(Boolean);
+      if (rows.length >= 2) {
+        console.log(`[adv] BDL season avgs s=${s}: ${rows.length} players`);
+        return cs(k, rows, TTL_PLAYER);
+      }
     } catch {}
   }
   return [];
@@ -511,7 +518,7 @@ async function fetchBdlTeamRecentStats(bdlTeamId) {
         min:      avg("min"),  turnover: avg("turnover"),
         games:    pRows.length,
       };
-    }).filter(p => p.games >= 2 && p.min >= 5);
+    }).filter(p => p.games >= 1 && p.min >= 3);
 
     console.log(`[adv] BDL recent stats: ${result.length} players for team ${bdlTeamId}`);
     return cs(k, result, TTL_PLAYER);
