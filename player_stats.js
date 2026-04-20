@@ -1,350 +1,313 @@
 "use strict";
 
 /**
- * prop_model.js
+ * player_stats.js
  *
- * Independent player prop prediction engine.
- *
- * For each prop (player + stat type + line from sportsbook):
- *   1. Fetch rich player stats via player_stats.js
- *   2. Build 9 independent prediction features
- *   3. Weighted sigmoid → over probability
- *   4. Compare to sportsbook implied prob for edge
- *   5. Weights improve automatically via prop_learning.js
- *
- * Stat types supported:
- *   points | rebounds | assists | pra | blocks | steals | threes | turnovers
+ * Fetches rich player data for independent prop prediction:
+ *   - Season averages (BallDontLie)
+ *   - Last 5 / Last 10 game logs
+ *   - Home / Away splits
+ *   - vs Opponent history
+ *   - Minutes and usage trends
+ *   - Opponent defensive stats (ESPN)
  */
 
-const fs   = require("fs");
-const path = require("path");
-const { buildPlayerProfile } = require("./player_stats");
+const BDL_KEY = process.env.BALLDONTLIE_API_KEY || "";
 
-const WEIGHTS_FILE = path.join(__dirname, "data", "prop_weights.json");
+const TTL_PLAYER = 30 * 60 * 1000;
+const TTL_GAME   = 20 * 60 * 1000;
+const TTL_DEF    = 10 * 60 * 1000;
 
-// ─── Default feature weights (sum to ~1) ─────────────────────────────────────
-// These will be overwritten by learned weights after enough graded games
-const DEFAULT_W = {
-  seasonAvgDelta:  0.25,  // (season_avg - line) relative to line — most stable signal
-  l5AvgDelta:      0.22,  // recent 5 games average vs line — hot/cold streaks
-  l10AvgDelta:     0.13,  // 10 game average vs line — medium term form
-  hitRate5:        0.12,  // % of last 5 games hit over — direct hit rate
-  hitRate10:       0.09,  // % of last 10 games hit over
-  vsOppDelta:      0.06,  // historical performance vs this specific opponent
-  locationSplit:   0.05,  // home/away advantage for this stat
-  minsTrend:       0.05,  // more minutes recently = more stat opportunities
-  consistency:     0.03,  // low variance = more predictable outcome
+const _cache = new Map();
+const cg = k => {
+  const h = _cache.get(k);
+  if (!h) return null;
+  if (Date.now() > h.e) { _cache.delete(k); return null; }
+  return h.v;
+};
+const cs = (k, v, t) => { _cache.set(k, { v, e: Date.now() + t }); return v; };
+
+const flt   = (v, fb = 0)  => { const n = Number(v); return Number.isFinite(n) ? n : fb; };
+const fltN  = (v)           => { const n = Number(v); return Number.isFinite(n) ? n : null; };
+const norm  = s             => String(s || "").toLowerCase().replace(/[^a-z0-9 ]/g, "").replace(/\s+/g, " ").trim();
+const r2    = n             => (typeof n === "number" && Number.isFinite(n)) ? Math.round(n * 100) / 100 : null;
+
+const avg = arr => {
+  const ns = (arr || []).filter(v => Number.isFinite(v));
+  return ns.length ? ns.reduce((s, v) => s + v, 0) / ns.length : null;
 };
 
-const WEIGHT_BOUNDS = {
-  seasonAvgDelta: { lo: 0.05, hi: 0.60 },
-  l5AvgDelta:     { lo: 0.05, hi: 0.55 },
-  l10AvgDelta:    { lo: 0.02, hi: 0.40 },
-  hitRate5:       { lo: 0.02, hi: 0.35 },
-  hitRate10:      { lo: 0.01, hi: 0.25 },
-  vsOppDelta:     { lo: 0.00, hi: 0.20 },
-  locationSplit:  { lo: 0.00, hi: 0.20 },
-  minsTrend:      { lo: 0.00, hi: 0.20 },
-  consistency:    { lo: 0.00, hi: 0.15 },
+const stddev = arr => {
+  const ns = (arr || []).filter(v => Number.isFinite(v));
+  if (ns.length < 2) return null;
+  const m = ns.reduce((s, v) => s + v, 0) / ns.length;
+  return Math.sqrt(ns.map(v => (v - m) ** 2).reduce((s, v) => s + v, 0) / (ns.length - 1));
 };
 
-let PROP_W = { ...DEFAULT_W };
-
-function reloadPropWeights() {
-  try {
-    if (!fs.existsSync(WEIGHTS_FILE)) return;
-    const raw = JSON.parse(fs.readFileSync(WEIGHTS_FILE, "utf8"));
-    if (raw?.weights && Object.keys(raw.weights).length >= 5) {
-      PROP_W = { ...DEFAULT_W, ...raw.weights };
-      console.log("[prop_model] Loaded learned weights");
-    }
-  } catch {}
-}
-reloadPropWeights();
-setInterval(reloadPropWeights, 30 * 60 * 1000);
-
-// ─── Math ─────────────────────────────────────────────────────────────────────
-const clamp   = (x, lo, hi) => Math.max(lo, Math.min(hi, x));
-const sigmoid = x => 1 / (1 + Math.exp(-clamp(x, -50, 50)));
-const r4 = n => (typeof n === "number" && Number.isFinite(n)) ? Math.round(n * 10000) / 10000 : null;
-const r2 = n => (typeof n === "number" && Number.isFinite(n)) ? Math.round(n * 100) / 100 : null;
-const flt = (v, fb = 0) => { const n = Number(v); return Number.isFinite(n) ? n : fb; };
-
-// ─── Feature builder ──────────────────────────────────────────────────────────
-// All features are centred at 0 — positive = bullish for OVER
-function buildFeatures(profile) {
-  const { seasonAvg, l5Avg, l10Avg, vsOppAvg, hitRate5, hitRate10,
-          homeAvg, awayAvg, l5StdDev, l10StdDev, minsTrend, line } = profile;
-
-  const safeLine = Math.max(line || 1, 0.5);
-
-  // Delta features: (avg - line) / line
-  // If avg > line by 20%, feature = +0.20 → bullish for over
-  const seasonDelta = seasonAvg != null ? (seasonAvg - safeLine) / safeLine : 0;
-  const l5Delta     = l5Avg    != null ? (l5Avg    - safeLine) / safeLine : 0;
-  const l10Delta    = l10Avg   != null ? (l10Avg   - safeLine) / safeLine : 0;
-  const oppDelta    = vsOppAvg != null && vsOppAvg > 0
-                      ? (vsOppAvg - safeLine) / safeLine
-                      : 0;
-
-  // Hit rate centred at 0.5 — positive = tends to go over
-  const hr5  = hitRate5  != null ? hitRate5  - 0.5 : 0;
-  const hr10 = hitRate10 != null ? hitRate10 - 0.5 : 0;
-
-  // Location split: if home avg >> away avg, positive = home advantage
-  const locSplit = (homeAvg != null && awayAvg != null && safeLine > 0)
-    ? (homeAvg - awayAvg) / safeLine
-    : 0;
-
-  // Minutes trend: >1.0 means player is playing more recently
-  const minsBoost = flt(minsTrend, 1.0) - 1.0;
-
-  // Consistency: low std dev relative to line = more predictable
-  // Negative because we subtract from score — high variance = less signal
-  const stdDev  = flt(l5StdDev ?? l10StdDev, safeLine * 0.25);
-  const consScore = -Math.min(stdDev / safeLine, 1.0); // always 0 or negative
-
-  return {
-    seasonAvgDelta: clamp(seasonDelta,  -1.5, 1.5),
-    l5AvgDelta:     clamp(l5Delta,      -1.5, 1.5),
-    l10AvgDelta:    clamp(l10Delta,     -1.5, 1.5),
-    hitRate5:       clamp(hr5,          -0.5, 0.5),
-    hitRate10:      clamp(hr10,         -0.5, 0.5),
-    vsOppDelta:     clamp(oppDelta,     -1.0, 1.0),
-    locationSplit:  clamp(locSplit,     -0.6, 0.6),
-    minsTrend:      clamp(minsBoost,    -0.5, 0.5),
-    consistency:    clamp(consScore,    -1.0, 0.0),
-  };
+function getBdlSeason() {
+  const d = new Date(), m = d.getUTCMonth() + 1, y = d.getUTCFullYear();
+  return m >= 10 ? y : y - 1;
 }
 
-// ─── Prediction ───────────────────────────────────────────────────────────────
-function predictOverProb(features, weights) {
-  const w = weights || PROP_W;
-  let weightedSum = 0;
-  let totalWeight = 0;
-
-  for (const [k, feat] of Object.entries(features)) {
-    const wt = flt(w[k], 0);
-    weightedSum += feat * wt;
-    totalWeight += Math.abs(wt);
-  }
-
-  // Scale factor: 1.0 unit of weighted avg → meaningful probability shift
-  // 6.0 scale means 1.0 weighted delta → sigmoid(6) = 0.998 (very confident)
-  // In practice most deltas are 0.1-0.3, giving meaningful but not extreme shifts
-  const SCALE = 5.5;
-  const scaledScore = totalWeight > 0 ? (weightedSum / totalWeight) * SCALE : 0;
-
-  return clamp(sigmoid(scaledScore), 0.04, 0.96);
+// ─── BDL fetch ────────────────────────────────────────────────────────────────
+async function bdlFetch(endpoint) {
+  if (!BDL_KEY) throw new Error("Missing BALLDONTLIE_API_KEY");
+  const res = await fetch(`https://api.balldontlie.io/v1${endpoint}`, {
+    headers: { Authorization: BDL_KEY },
+    signal: AbortSignal.timeout(12000),
+  });
+  if (!res.ok) throw new Error(`BDL ${res.status} ${endpoint}`);
+  return res.json();
 }
 
-// ─── Confidence calculation ───────────────────────────────────────────────────
-function buildConfidence(overProb, profile, bookOverProb) {
-  // How far from 50/50 is our prediction
-  const edge = Math.abs(overProb - 0.5);
+const bdlRows = p => Array.isArray(p) ? p : Array.isArray(p?.data) ? p.data : [];
 
-  // Data quality score — having all sources = more reliable
-  let dataQuality = 0;
-  if (profile.l5Avg     != null) dataQuality += 0.04;
-  if (profile.l10Avg    != null) dataQuality += 0.03;
-  if (profile.homeAvg   != null) dataQuality += 0.02;
-  if (profile.vsOppAvg  != null) dataQuality += 0.02;
-  if (profile.hitRate5  != null) dataQuality += 0.02;
-  if (profile.hitRate10 != null) dataQuality += 0.01;
-
-  // Consistency bonus — predictable player = more confidence
-  const stdDev = profile.l5StdDev || (Math.abs((profile.l5Avg || profile.line) - profile.line) * 1.5);
-  const consistencyBonus = profile.line > 0
-    ? Math.max(0, 0.04 - (stdDev / profile.line) * 0.04)
-    : 0;
-
-  // Agreement bonus — if multiple signals agree
-  const agreementBonus = edge > 0.15 ? 0.03 : edge > 0.10 ? 0.01 : 0;
-
-  // AI vs book agreement bonus — when our model agrees with the book
-  const bookAgreement = bookOverProb != null
-    ? ((overProb > 0.5) === (bookOverProb > 0.5) ? 0.02 : -0.01)
-    : 0;
-
-  const rawConf = 0.50 + edge + dataQuality + consistencyBonus + agreementBonus + bookAgreement;
-  const finalConf = clamp(rawConf, 0.50, 0.93);
-
-  let label = "Low";
-  if (finalConf >= 0.75) label = "High";
-  else if (finalConf >= 0.62) label = "Medium";
-
-  return {
-    percent:    r4(finalConf),
-    label,
-    edge:       r4(edge),
-    dataQuality: r4(dataQuality),
-  };
-}
-
-// ─── Verdict builder ──────────────────────────────────────────────────────────
-function buildVerdict(pickProb, confidence, aiEdgeVsBook) {
-  const strong  = pickProb >= 0.65 && (confidence.label === "High"   || confidence.label === "Medium");
-  const medium  = pickProb >= 0.58 && confidence.label !== "Low";
-  const hasEdge = typeof aiEdgeVsBook === "number" && Math.abs(aiEdgeVsBook) >= 0.05;
-
-  if (strong && hasEdge) return "Bet now";
-  if (strong || (medium && hasEdge)) return "Watch";
-  return "Skip";
-}
-
-// ─── Main single prediction ───────────────────────────────────────────────────
-async function predictProp(playerName, statType, line, opponentTeam = null, bookOverProb = null) {
-  if (!playerName || line == null) {
-    return { player: playerName, statType, line, pick: null, error: "Missing input" };
-  }
+// ─── Player search ────────────────────────────────────────────────────────────
+async function findPlayer(name) {
+  if (!name) return null;
+  const k = `bdl:find:${norm(name)}`, h = cg(k);
+  if (h) return h;
 
   try {
-    const profile = await buildPlayerProfile(playerName, statType, line, opponentTeam);
+    const data  = await bdlFetch(`/players?search=${encodeURIComponent(name)}&per_page=10`);
+    const rows  = bdlRows(data);
+    if (!rows.length) return null;
 
-    if (!profile) {
-      return {
-        player: playerName, statType, line,
-        pick: null, overProb: 0.5,
-        confidence: { label: "Low", percent: 0.5, edge: 0 },
-        error: "Player not found in database",
-      };
+    const target = norm(name);
+    // Exact full name match first
+    let best = rows.find(p => norm(`${p.first_name} ${p.last_name}`) === target);
+    // Last name match fallback
+    if (!best) {
+      const lastName = target.split(" ").pop();
+      best = rows.find(p => norm(p.last_name) === lastName);
     }
+    if (!best) best = rows[0];
 
-    const features   = buildFeatures(profile);
-    const overProb   = predictOverProb(features, PROP_W);
-    const pick       = overProb >= 0.5 ? "over" : "under";
-    const pickProb   = overProb >= 0.5 ? overProb : 1 - overProb;
-    const confidence = buildConfidence(overProb, profile, bookOverProb);
-
-    // Edge vs what sportsbook implies
-    const aiEdgeVsBook = bookOverProb != null ? overProb - bookOverProb : null;
-    const verdict      = buildVerdict(pickProb, confidence, aiEdgeVsBook);
-
-    console.log(
-      `[prop_model] ${playerName} ${statType} ${line}: ${pick.toUpperCase()} ` +
-      `${(pickProb * 100).toFixed(1)}% | conf=${confidence.label} | ${verdict}`
-    );
-
-    return {
-      player:       playerName,
-      playerId:     profile.player?.id,
-      statType,
-      line,
-      // AI prediction
-      pick,
-      overProb:     r4(overProb),
-      pickProb:     r4(pickProb),
-      confidence,
-      verdict,
-      // Edge vs sportsbook
-      aiEdgeVsBook: aiEdgeVsBook != null ? r4(aiEdgeVsBook) : null,
-      // Player profile summary
-      profile: {
-        seasonAvg:  profile.seasonAvg,
-        l5Avg:      profile.l5Avg,
-        l10Avg:     profile.l10Avg,
-        vsOppAvg:   profile.vsOppAvg,
-        hitRate5:   profile.hitRate5  != null ? r4(profile.hitRate5)  : null,
-        hitRate10:  profile.hitRate10 != null ? r4(profile.hitRate10) : null,
-        homeAvg:    profile.homeAvg,
-        awayAvg:    profile.awayAvg,
-        l5StdDev:   profile.l5StdDev,
-        minsTrend:  r4(profile.minsTrend),
-        statValues: profile.statValues?.slice(0, 5),
-      },
-      // Raw features for learning
-      features: Object.fromEntries(
-        Object.entries(features).map(([k, v]) => [k, r4(v)])
-      ),
-    };
+    return cs(k, best, TTL_PLAYER);
   } catch (e) {
-    console.error("[prop_model] predictProp error:", e.message);
-    return {
-      player: playerName, statType, line,
-      pick: null, overProb: 0.5,
-      confidence: { label: "Low", percent: 0.5 },
-      error: e.message,
-    };
+    console.warn("[player_stats] findPlayer:", e.message);
+    return null;
   }
 }
 
-// ─── Bulk predictions for a game ─────────────────────────────────────────────
-// Takes propSections from the sportsbook, enhances with AI predictions
-async function predictGameProps(propSections, homeTeam = null, awayTeam = null) {
-  const statMap = {
-    points:   "points",
-    assists:  "assists",
-    rebounds: "rebounds",
-    pra:      "pra",
-  };
+// ─── Season averages ──────────────────────────────────────────────────────────
+async function getSeasonAverages(playerId) {
+  if (!playerId) return null;
+  const season = getBdlSeason();
+  const k = `bdl:avg:${playerId}:${season}`, h = cg(k);
+  if (h) return h;
 
-  const results = {};
-
-  for (const [section, statType] of Object.entries(statMap)) {
-    const rows = (propSections[section] || []).slice(0, 8);
-    if (!rows.length) { results[section] = []; continue; }
-
-    // Run predictions concurrently
-    const predictions = await Promise.allSettled(
-      rows.map(row =>
-        predictProp(row.player, statType, row.line, null, row.hitProbability)
-      )
-    );
-
-    results[section] = rows.map((bookRow, i) => {
-      const pred = predictions[i].status === "fulfilled" ? predictions[i].value : null;
-
-      if (!pred || !pred.pick) {
-        return {
-          ...bookRow,
-          aiPick:        null,
-          aiPickProb:    null,
-          aiConfidence:  null,
-          aiVerdict:     "Skip",
-          dataAvailable: false,
-        };
-      }
-
-      // Book implied over probability (de-vigged)
-      const bookOverProb = bookRow.hitProbability || 0.5;
-      const aiEdge = r4(pred.overProb - bookOverProb);
-
-      return {
-        // Sportsbook fields
-        player:       bookRow.player,
-        line:         bookRow.line,
-        overDecimal:  bookRow.overDecimal,
-        overAmerican: bookRow.overAmerican,
-        bookOverProb: r4(bookOverProb),
-        coverage:     bookRow.coverage,
-        // AI prediction
-        aiPick:       pred.pick,
-        aiOverProb:   pred.overProb,
-        aiPickProb:   pred.pickProb,
-        aiConfidence: pred.confidence,
-        aiVerdict:    pred.verdict,
-        aiEdge,
-        // Profile context
-        profile:      pred.profile,
-        features:     pred.features,
-        playerId:     pred.playerId,
-        dataAvailable: pred.error == null,
-        error:        pred.error || null,
-      };
-    });
+  // Try current season, fall back to previous
+  for (const s of [season, season - 1]) {
+    try {
+      const data = await bdlFetch(`/season_averages?player_ids[]=${playerId}&season=${s}`);
+      const rows = bdlRows(data);
+      if (rows.length) return cs(k, rows[0], TTL_PLAYER);
+    } catch (e) {
+      console.warn(`[player_stats] seasonAvg s=${s}:`, e.message);
+    }
   }
+  return null;
+}
 
-  return results;
+// ─── Recent game logs ─────────────────────────────────────────────────────────
+async function getRecentGames(playerId, limit = 15) {
+  if (!playerId) return [];
+  const season = getBdlSeason();
+  const k = `bdl:gl:${playerId}:${season}:${limit}`, h = cg(k);
+  if (h) return h;
+
+  try {
+    const data = await bdlFetch(
+      `/stats?player_ids[]=${playerId}&seasons[]=${season}&per_page=${limit}&sort_by=game_date&direction=desc`
+    );
+    const rows = bdlRows(data);
+    return cs(k, rows, TTL_GAME);
+  } catch (e) {
+    console.warn("[player_stats] recentGames:", e.message);
+    return [];
+  }
+}
+
+// ─── Vs opponent history ──────────────────────────────────────────────────────
+async function getVsOpponent(playerId, opponentTeamName) {
+  if (!playerId || !opponentTeamName) return [];
+  const season = getBdlSeason();
+  const k = `bdl:vsOpp:${playerId}:${norm(opponentTeamName)}:${season}`, h = cg(k);
+  if (h) return h;
+
+  try {
+    const data = await bdlFetch(
+      `/stats?player_ids[]=${playerId}&seasons[]=${season}&per_page=100`
+    );
+    const rows = bdlRows(data);
+    const oppNorm = norm(opponentTeamName);
+    const oppNick = oppNorm.split(" ").pop();
+
+    const filtered = rows.filter(g => {
+      const ht = norm(g.game?.home_team?.full_name || "");
+      const vt = norm(g.game?.visitor_team?.full_name || "");
+      return ht.includes(oppNick) || vt.includes(oppNick);
+    });
+
+    return cs(k, filtered, TTL_GAME);
+  } catch (e) {
+    console.warn("[player_stats] vsOpp:", e.message);
+    return [];
+  }
+}
+
+// ─── Opponent defensive stats (ESPN) ─────────────────────────────────────────
+const ESPN_TEAM_IDS = {
+  "Atlanta Hawks": "1",         "Boston Celtics": "2",       "Brooklyn Nets": "17",
+  "Charlotte Hornets": "30",    "Chicago Bulls": "4",         "Cleveland Cavaliers": "5",
+  "Dallas Mavericks": "6",      "Denver Nuggets": "7",        "Detroit Pistons": "8",
+  "Golden State Warriors": "9", "Houston Rockets": "10",      "Indiana Pacers": "11",
+  "Los Angeles Clippers": "12", "Los Angeles Lakers": "13",   "Memphis Grizzlies": "29",
+  "Miami Heat": "14",           "Milwaukee Bucks": "15",      "Minnesota Timberwolves": "16",
+  "New Orleans Pelicans": "3",  "New York Knicks": "18",      "Oklahoma City Thunder": "25",
+  "Orlando Magic": "19",        "Philadelphia 76ers": "20",   "Phoenix Suns": "21",
+  "Portland Trail Blazers": "22","Sacramento Kings": "23",    "San Antonio Spurs": "24",
+  "Toronto Raptors": "28",      "Utah Jazz": "26",            "Washington Wizards": "27",
+};
+
+function resolveEspnId(teamName) {
+  if (ESPN_TEAM_IDS[teamName]) return ESPN_TEAM_IDS[teamName];
+  const nm = norm(teamName);
+  const entry = Object.entries(ESPN_TEAM_IDS).find(([n]) => norm(n).includes(nm.split(" ").pop()));
+  return entry?.[1] || null;
+}
+
+async function getOpponentDefense(teamName) {
+  if (!teamName) return null;
+  const k = `espn:def:${norm(teamName)}`, h = cg(k);
+  if (h) return h;
+
+  const espnId = resolveEspnId(teamName);
+  if (!espnId) return null;
+
+  try {
+    const res = await fetch(
+      `https://site.api.espn.com/apis/site/v2/sports/basketball/nba/teams/${espnId}/statistics`,
+      { headers: { "User-Agent": "Mozilla/5.0", Accept: "application/json" }, signal: AbortSignal.timeout(8000) }
+    );
+    if (!res.ok) return null;
+    const data = await res.json();
+
+    const sm = {};
+    const cats = data?.results?.stats?.categories || data?.statistics?.splits?.categories || data?.statistics?.categories || [];
+    for (const cat of cats)
+      for (const s of cat.stats || [])
+        if (s.name) sm[s.name] = flt(s.value ?? s.displayValue);
+
+    return cs(k, sm, TTL_DEF);
+  } catch (e) {
+    return null;
+  }
+}
+
+// ─── Extract a specific stat from a BDL row ───────────────────────────────────
+function extractStat(row, statType) {
+  if (!row) return null;
+  const t = (statType || "").toLowerCase();
+
+  if (t === "points"    || t === "pts")   return fltN(row.pts);
+  if (t === "rebounds"  || t === "reb") {
+    const r = fltN(row.reb);
+    if (r !== null) return r;
+    const o = flt(row.oreb, 0), d = flt(row.dreb, 0);
+    return (o + d > 0) ? o + d : null;
+  }
+  if (t === "assists"   || t === "ast")   return fltN(row.ast);
+  if (t === "pra"       || t === "points_rebounds_assists") {
+    const p = fltN(row.pts), a = fltN(row.ast);
+    const r = fltN(row.reb) ?? (flt(row.oreb,0) + flt(row.dreb,0) > 0 ? flt(row.oreb,0)+flt(row.dreb,0) : null);
+    if (p === null || r === null || a === null) return null;
+    return p + r + a;
+  }
+  if (t === "blocks"    || t === "blk")   return fltN(row.blk);
+  if (t === "steals"    || t === "stl")   return fltN(row.stl);
+  if (t === "turnovers" || t === "tov")   return fltN(row.turnover ?? row.to);
+  if (t === "threes"    || t === "3pm")   return fltN(row.fg3m);
+  return null;
+}
+
+// ─── Build full player profile ────────────────────────────────────────────────
+async function buildPlayerProfile(playerName, statType, line, opponentTeam = null) {
+  const player = await findPlayer(playerName);
+  if (!player) return null;
+
+  const teamId = player.team?.id;
+
+  const [seasonAvgRaw, recentGames, oppGames, oppDef] = await Promise.allSettled([
+    getSeasonAverages(player.id),
+    getRecentGames(player.id, 15),
+    opponentTeam ? getVsOpponent(player.id, opponentTeam) : Promise.resolve([]),
+    opponentTeam ? getOpponentDefense(opponentTeam) : Promise.resolve(null),
+  ]).then(rs => rs.map(r => r.status === "fulfilled" ? r.value : null));
+
+  // Filter to games where player actually played meaningful minutes
+  const played = (recentGames || []).filter(g => flt(g.min) > 5);
+
+  // ── Stat extraction ──────────────────────────────────────────────────────
+  const allVals   = played.map(g => extractStat(g, statType)).filter(v => v !== null);
+  const l5        = allVals.slice(0, 5);
+  const l10       = allVals.slice(0, 10);
+
+  // ── Location splits ───────────────────────────────────────────────────────
+  const homeGames = played.filter(g => g.game?.home_team_id === teamId || g.game?.home_team?.id === teamId);
+  const awayGames = played.filter(g => g.game?.home_team_id !== teamId && g.game?.home_team?.id !== teamId);
+  const homeVals  = homeGames.map(g => extractStat(g, statType)).filter(v => v !== null);
+  const awayVals  = awayGames.map(g => extractStat(g, statType)).filter(v => v !== null);
+
+  // ── Vs opponent ───────────────────────────────────────────────────────────
+  const oppVals = (oppGames || []).map(g => extractStat(g, statType)).filter(v => v !== null);
+
+  // ── Minutes trend ─────────────────────────────────────────────────────────
+  const recentMins  = played.slice(0, 5).map(g => flt(g.min)).filter(v => v > 0);
+  const seasonMins  = flt(seasonAvgRaw?.min, 0);
+  const minsTrend   = recentMins.length && seasonMins > 0
+    ? avg(recentMins) / seasonMins
+    : 1.0;
+
+  // ── Season average for this stat ──────────────────────────────────────────
+  const seasonStatAvg = seasonAvgRaw ? extractStat(seasonAvgRaw, statType) : null;
+
+  return {
+    player,
+    statType,
+    line,
+    // Averages
+    seasonAvg:  r2(seasonStatAvg),
+    l5Avg:      r2(avg(l5)),
+    l10Avg:     r2(avg(l10)),
+    vsOppAvg:   r2(avg(oppVals)),
+    // Hit rates vs line
+    hitRate5:   l5.length  ? l5.filter(v  => v > line).length / l5.length  : null,
+    hitRate10:  l10.length ? l10.filter(v => v > line).length / l10.length : null,
+    // Consistency
+    l5StdDev:   r2(stddev(l5)),
+    l10StdDev:  r2(stddev(l10)),
+    // Splits
+    homeAvg:    r2(avg(homeVals)),
+    awayAvg:    r2(avg(awayVals)),
+    // Minutes
+    recentMins: r2(avg(recentMins)),
+    seasonMins,
+    minsTrend:  Number.isFinite(minsTrend) ? Math.round(minsTrend * 10000) / 10000 : 1.0,
+    // Opponent defense stats
+    oppDef: oppDef || null,
+    // Raw values for context
+    statValues: allVals.slice(0, 10),
+  };
 }
 
 module.exports = {
-  predictProp,
-  predictGameProps,
-  buildFeatures,
-  predictOverProb,
-  buildConfidence,
-  reloadPropWeights,
-  DEFAULT_PROP_WEIGHTS: DEFAULT_W,
-  WEIGHT_BOUNDS,
-  getPropWeights: () => PROP_W,
+  findPlayer,
+  getSeasonAverages,
+  getRecentGames,
+  getVsOpponent,
+  getOpponentDefense,
+  buildPlayerProfile,
+  extractStat,
 };
