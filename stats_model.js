@@ -100,7 +100,6 @@ async function computeIndependentWinProb(homeTeam, awayTeam, liveState=null, inj
   const hInj = computeInjuryImpact(hd, injCtx?.homeInjuries || [], homeOnOff || []);
   const aInj = computeInjuryImpact(ad, injCtx?.awayInjuries || [], awayOnOff || []);
 
-  // Team-specific HCA from actual home/away splits
   const hcaLogit = (() => {
     const LEAGUE = 0.112;
     const hw = hd?.home_win_rate, aw = hd?.away_win_rate;
@@ -168,9 +167,19 @@ async function computeIndependentWinProb(homeTeam, awayTeam, liveState=null, inj
     rest_days: d.rest_days||2, is_b2b: !!d.is_b2b,
     altitude_ft: d.altitude_ft||0,
     injury_adjustments: inj?.adjustments||[],
-    players: (d.players||[]).slice(0,5).map(p=>({
-      name: p.name, ts_pct: r4(p.ts_pct||0), usg_pct: r4(p.usg_pct||0),
-      pie: r4(p.pie||0), net_rtg: r4(p.net_rating||0), min: p.min||0
+    // ── Player stats with full box-score averages ──────────────────────────
+    players: (d.players||[]).slice(0,10).map(p=>({
+      name:    p.name,
+      pts:     r4(p.pts    ||0),
+      reb:     r4(p.reb    ||0),
+      ast:     r4(p.ast    ||0),
+      stl:     r4(p.stl    ||0),
+      blk:     r4(p.blk    ||0),
+      usg_pct: r4(p.usg_pct||0),
+      pie:     r4(p.pie    ||0),
+      ts_pct:  r4(p.ts_pct ||0),
+      net_rtg: r4(p.net_rating||0),
+      min:     r4(p.min    ||0),
     }))
   });
 
