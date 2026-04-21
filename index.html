@@ -747,7 +747,11 @@ async function loadGame(){
     }else{
       $("scoreDisplay").classList.add("score-hidden");$("heroSub").style.display="block";
       const hp=mp?.home_predicted_pts,ap=mp?.away_predicted_pts;
-      if(typeof hp==="number"&&typeof ap==="number"){
+      // Only show projected score if it agrees with market win probability direction
+      // Avoids confusing "stats say home wins by 36 but market says away 86%"
+      const scoreAgreesWithMarket = (typeof hp==="number" && typeof ap==="number") &&
+        ((hp > ap && homeMarketProb >= 0.45) || (ap > hp && awayMarketProb >= 0.45));
+      if(scoreAgreesWithMarket){
         $("predScore").textContent=`${awayTeam.split(" ").pop()} ${Math.round(ap)} — ${Math.round(hp)} ${homeTeam.split(" ").pop()}`;
         $("predScore").style.display="block";$("predScoreLabel").style.display="block";$("heroSub").style.display="none";
       }
@@ -768,11 +772,18 @@ async function loadGame(){
     $("homeCardName").textContent=homeTeam;$("awayCardName").textContent=awayTeam;
     $("homeCardRecord").textContent=mp?.homeStats?`${(mp.homeStats.win_rate*100).toFixed(0)}% WR · Str ${mp.homeStats.streak>=0?"+":""}${mp.homeStats.streak}`:"";
     $("awayCardRecord").textContent=mp?.awayStats?`${(mp.awayStats.win_rate*100).toFixed(0)}% WR · Str ${mp.awayStats.streak>=0?"+":""}${mp.awayStats.streak}`:"";
-    // Use modelDetails which always has home/away market prob correctly labelled
-    const homeMarketProb = d.modelDetails?.homeMarketProb   ?? (isHomePick ? d.impliedProbability : 1-(d.impliedProbability||0.5));
-    const awayMarketProb = d.modelDetails?.awayMarketProb   ?? (1 - homeMarketProb);
-    const homeTrueProb   = isHomePick ? d.trueProbability   : 1-(d.trueProbability||0.5);
-    const awayTrueProb   = 1 - homeTrueProb;
+    // Derive isHomePick from BOTH pickSide AND pick text to ensure they agree
+    const isHomePick = d.pickSide === "home" ||
+                       (d.pick||"").toLowerCase().includes((homeTeam||"").toLowerCase().split(" ").pop());
+
+    // Market probabilities — always home/away regardless of pick side
+    const homeMarketProb = d.modelDetails?.homeMarketProb
+      ?? (isHomePick ? d.impliedProbability : 1-(d.impliedProbability||0.5));
+    const awayMarketProb = 1 - (homeMarketProb||0.5);
+
+    // True probabilities — always home/away
+    const homeTrueProb = isHomePick ? d.trueProbability : 1-(d.trueProbability||0.5);
+    const awayTrueProb = 1 - homeTrueProb;
 
     $("homeCardName").textContent=homeTeam;$("awayCardName").textContent=awayTeam;
     $("homeCardRecord").textContent=mp?.homeStats?`${(mp.homeStats.win_rate*100).toFixed(0)}% WR · Str ${mp.homeStats.streak>=0?"+":""}${mp.homeStats.streak}`:"";
@@ -783,6 +794,8 @@ async function loadGame(){
     $("awayCardTrue").textContent=fPct(awayTrueProb,1);
     $("homeCardEdge").textContent=isHomePick?fPct(d.edge):"—";
     $("awayCardEdge").textContent=!isHomePick?fPct(d.edge):"—";
+    $("homePickBadge").style.display=isHomePick?"block":"none";
+    $("awayPickBadge").style.display=!isHomePick?"block":"none";
     $("homePickBadge").style.display=isHomePick?"block":"none";$("awayPickBadge").style.display=!isHomePick?"block":"none";
     selectTeam(selectedTeam);
 
