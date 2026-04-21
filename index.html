@@ -738,6 +738,16 @@ async function loadGame(){
 
     $("homeNameHero").textContent=homeTeam.split(" ").pop();
     $("awayNameHero").textContent=awayTeam.split(" ").pop();
+
+    // ── All probability calculations FIRST (used throughout) ─────────────────
+    const homeMarketProb = typeof d.homeMarketProb === "number" ? d.homeMarketProb
+      : typeof d.modelDetails?.homeMarketProb === "number" ? d.modelDetails.homeMarketProb
+      : 0.5;
+    const awayMarketProb = 1 - homeMarketProb;
+    const homeAiProb = typeof d.homeAiProb === "number" ? d.homeAiProb : homeMarketProb;
+    const awayAiProb = 1 - homeAiProb;
+    const isHomePick = d.pickSide === "home";
+
     if(isLive&&scoreState){
       $("scoreDisplay").classList.remove("score-hidden");$("heroSub").style.display="none";
       $("predScore").style.display="none";$("predScoreLabel").style.display="none";
@@ -747,11 +757,8 @@ async function loadGame(){
     }else{
       $("scoreDisplay").classList.add("score-hidden");$("heroSub").style.display="block";
       const hp=mp?.home_predicted_pts,ap=mp?.away_predicted_pts;
-      // Only show projected score if it agrees with the pick direction
-      // e.g. don't show "Lakers win by 8" when the pick is Rockets
-      const pickFavorsHome = isHomePick;
       const scoreFavorsHome = typeof hp==="number" && typeof ap==="number" && hp > ap;
-      const scoreAgreesPick = (pickFavorsHome && scoreFavorsHome) || (!pickFavorsHome && !scoreFavorsHome);
+      const scoreAgreesPick = (isHomePick && scoreFavorsHome) || (!isHomePick && !scoreFavorsHome);
       if(typeof hp==="number"&&typeof ap==="number"&&hp>0&&ap>0&&scoreAgreesPick){
         $("predScore").textContent=`${awayTeam.split(" ").pop()} ${Math.round(ap)} — ${Math.round(hp)} ${homeTeam.split(" ").pop()}`;
         $("predScore").style.display="block";$("predScoreLabel").style.display="block";$("heroSub").style.display="none";
@@ -760,20 +767,6 @@ async function loadGame(){
 
     $("matchup").textContent=`${awayTeam} @ ${homeTeam}`;
     $("pick").textContent=`Pick: ${d.pick||"—"}`;
-
-    // ── All probability calculations ──────────────────────────────────────────
-    // homeMarketProb = what sportsbooks think (display only)
-    const homeMarketProb = typeof d.homeMarketProb === "number" ? d.homeMarketProb
-      : typeof d.modelDetails?.homeMarketProb === "number" ? d.modelDetails.homeMarketProb
-      : 0.5;
-    const awayMarketProb = 1 - homeMarketProb;
-
-    // AI probabilities = pure stats model (what our AI thinks)
-    const homeAiProb = typeof d.homeAiProb === "number" ? d.homeAiProb : homeMarketProb;
-    const awayAiProb = 1 - homeAiProb;
-
-    // Pick is always from AI
-    const isHomePick = d.pickSide === "home";
 
     // Confidence from actual edge
     const finalEdgeAbs = Math.abs(d.edge||0);
