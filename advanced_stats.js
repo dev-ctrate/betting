@@ -284,13 +284,23 @@ async function fetchBdlTeamGames(bdlTeamId, season) {
   if (!BDL_KEY || !bdlTeamId) return [];
   const k = `bdl:tgames:${bdlTeamId}:${season}`, h = cg(k); if (h) return h;
   try {
-    const data  = await bdlFetch(`/games?team_ids[]=${bdlTeamId}&seasons[]=${season}&per_page=100`);
-    const games = bdlRows(data).filter(g =>
+    // Fetch last 100 games sorted newest-first so slice(-8) always gives most recent
+    const data  = await bdlFetch(
+      `/games?team_ids[]=${bdlTeamId}&seasons[]=${season}&per_page=100`
+    );
+    const all = bdlRows(data).filter(g =>
       String(g.status || "").toLowerCase().includes("final") &&
       typeof g.home_team_score === "number" &&
       typeof g.visitor_team_score === "number"
     );
-    return cs(k, games, TTL_GAME);
+    // Sort ascending by date so index 0 = oldest, last = most recent
+    all.sort((a, b) => {
+      const da = new Date(a.date || a.datetime || 0).getTime();
+      const db = new Date(b.date || b.datetime || 0).getTime();
+      return da - db;
+    });
+    console.log(`[adv] BDL games team=${bdlTeamId}: ${all.length} finals, most recent=${all[all.length-1]?.date}`);
+    return cs(k, all, TTL_GAME);
   } catch (e) { console.warn("[adv] BDL team games:", e.message); return []; }
 }
 
@@ -476,17 +486,19 @@ async function fetchBdlTeamRecentStats(bdlTeamId) {
   const season = getBdlSeason();
   const k = `bdl:teamstats:${bdlTeamId}:${season}`, h = cg(k); if (h) return h;
   try {
-    // Step 1: get the 8 most recent final games for this team
+    // Step 1: get the 8 most recent final games — fetch 30 so we have room to filter finals
     const gData = await bdlFetch(
-      `/games?team_ids[]=${bdlTeamId}&seasons[]=${season}&per_page=10`
+      `/games?team_ids[]=${bdlTeamId}&seasons[]=${season}&per_page=30`
     );
-    const games = bdlRows(gData)
+    const allGames = bdlRows(gData)
       .filter(g => String(g.status || "").toLowerCase().includes("final"))
-      .slice(-8); // take most recent 8
+      .sort((a, b) => new Date(b.date || b.datetime || 0) - new Date(a.date || a.datetime || 0))
+      .slice(0, 8); // newest 8 games
 
-    if (!games.length) { console.warn("[adv] No recent games for team", bdlTeamId); return []; }
+    if (!allGames.length) { console.warn("[adv] No recent games for team", bdlTeamId); return []; }
 
-    const gameIds = games.map(g => g.id).filter(Boolean);
+    const gameIds = allGames.map(g => g.id).filter(Boolean);
+    console.log(`[adv] Recent stats: using games from ${allGames[allGames.length-1]?.date} to ${allGames[0]?.date}`);
     if (!gameIds.length) return [];
 
     // Step 2: get all player stats from those game IDs (max 100 per page, fetch 2 pages)
