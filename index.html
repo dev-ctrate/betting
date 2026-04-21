@@ -224,9 +224,9 @@ canvas{display:block;width:100%;height:100%;background:transparent!important;}
     <div class="tc-name" id="homeCardName">Home Team</div>
     <div class="tc-record" id="homeCardRecord">—</div>
     <div class="tc-implied" id="homeCardImplied">—</div>
-    <div class="tc-implied-label">Win probability</div>
+    <div class="tc-implied-label">AI win probability</div>
     <div class="tc-stats">
-      <div class="tc-stat"><strong>True Prob</strong><span id="homeCardTrue">—</span></div>
+      <div class="tc-stat"><strong>Market</strong><span id="homeCardTrue">—</span></div>
       <div class="tc-stat"><strong>Edge</strong><span id="homeCardEdge">—</span></div>
     </div>
   </div>
@@ -236,9 +236,9 @@ canvas{display:block;width:100%;height:100%;background:transparent!important;}
     <div class="tc-name" id="awayCardName">Away Team</div>
     <div class="tc-record" id="awayCardRecord">—</div>
     <div class="tc-implied" id="awayCardImplied">—</div>
-    <div class="tc-implied-label">Win probability</div>
+    <div class="tc-implied-label">AI win probability</div>
     <div class="tc-stats">
-      <div class="tc-stat"><strong>True Prob</strong><span id="awayCardTrue">—</span></div>
+      <div class="tc-stat"><strong>Market</strong><span id="awayCardTrue">—</span></div>
       <div class="tc-stat"><strong>Edge</strong><span id="awayCardEdge">—</span></div>
     </div>
   </div>
@@ -747,7 +747,12 @@ async function loadGame(){
     }else{
       $("scoreDisplay").classList.add("score-hidden");$("heroSub").style.display="block";
       const hp=mp?.home_predicted_pts,ap=mp?.away_predicted_pts;
-      if(typeof hp==="number"&&typeof ap==="number"&&hp>0&&ap>0){
+      // Only show projected score if it agrees with the pick direction
+      // e.g. don't show "Lakers win by 8" when the pick is Rockets
+      const pickFavorsHome = isHomePick;
+      const scoreFavorsHome = typeof hp==="number" && typeof ap==="number" && hp > ap;
+      const scoreAgreesPick = (pickFavorsHome && scoreFavorsHome) || (!pickFavorsHome && !scoreFavorsHome);
+      if(typeof hp==="number"&&typeof ap==="number"&&hp>0&&ap>0&&scoreAgreesPick){
         $("predScore").textContent=`${awayTeam.split(" ").pop()} ${Math.round(ap)} — ${Math.round(hp)} ${homeTeam.split(" ").pop()}`;
         $("predScore").style.display="block";$("predScoreLabel").style.display="block";$("heroSub").style.display="none";
       }
@@ -756,24 +761,24 @@ async function loadGame(){
     $("matchup").textContent=`${awayTeam} @ ${homeTeam}`;
     $("pick").textContent=`Pick: ${d.pick||"—"}`;
 
-    // ── All probability calculations in one place ─────────────────────────────
-    // homeMarketProb = home team's actual market probability (ALWAYS home team)
-    const homeMarketProb = typeof d.modelDetails?.homeMarketProb === "number"
-      ? d.modelDetails.homeMarketProb
-      : d.pickSide === "home" ? (d.impliedProbability||0.5) : 1-(d.impliedProbability||0.5);
+    // ── All probability calculations ──────────────────────────────────────────
+    // homeMarketProb = what sportsbooks think (display only)
+    const homeMarketProb = typeof d.homeMarketProb === "number" ? d.homeMarketProb
+      : typeof d.modelDetails?.homeMarketProb === "number" ? d.modelDetails.homeMarketProb
+      : 0.5;
     const awayMarketProb = 1 - homeMarketProb;
 
-    // isHomePick = is the pick the home team?
+    // AI probabilities = pure stats model (what our AI thinks)
+    const homeAiProb = typeof d.homeAiProb === "number" ? d.homeAiProb : homeMarketProb;
+    const awayAiProb = 1 - homeAiProb;
+
+    // Pick is always from AI
     const isHomePick = d.pickSide === "home";
 
-    // homeTrueProb = our model's probability for the home team
-    const homeTrueProb = isHomePick ? (d.trueProbability||homeMarketProb) : 1-(d.trueProbability||awayMarketProb);
-    const awayTrueProb  = 1 - homeTrueProb;
-
-    // Confidence from the ACTUAL final edge (not the internal pregame edge)
+    // Confidence from actual edge
     const finalEdgeAbs = Math.abs(d.edge||0);
-    const realConfLabel = finalEdgeAbs >= 0.06 ? "High" : finalEdgeAbs >= 0.035 ? "Medium" : "Low";
-    const realConfPct   = finalEdgeAbs >= 0.06 ? 0.80   : finalEdgeAbs >= 0.035 ? 0.65     : 0.50;
+    const realConfLabel = finalEdgeAbs >= 0.10 ? "High" : finalEdgeAbs >= 0.05 ? "Medium" : "Low";
+    const realConfPct   = finalEdgeAbs >= 0.10 ? 0.80   : finalEdgeAbs >= 0.05 ? 0.65     : 0.50;
 
     setV("edgeVal",fPct(d.edge));setV("verdict",d.verdict||"—");setVerdictCls(d.verdict||"");
     setV("gameMode",d.gameMode||"—");
@@ -783,14 +788,16 @@ async function loadGame(){
 
     const ls=d.learningSummary||{};
 
-    // ── Team cards ─────────────────────────────────────────────────────────────
+    // ── Team cards — show AI probability as main, market as reference ──────────
     $("homeCardName").textContent=homeTeam;$("awayCardName").textContent=awayTeam;
     $("homeCardRecord").textContent=mp?.homeStats?`${(mp.homeStats.win_rate*100).toFixed(0)}% WR · Str ${mp.homeStats.streak>=0?"+":""}${mp.homeStats.streak}`:"";
     $("awayCardRecord").textContent=mp?.awayStats?`${(mp.awayStats.win_rate*100).toFixed(0)}% WR · Str ${mp.awayStats.streak>=0?"+":""}${mp.awayStats.streak}`:"";
-    $("homeCardImplied").textContent=fPct(homeMarketProb,0);
-    $("awayCardImplied").textContent=fPct(awayMarketProb,0);
-    $("homeCardTrue").textContent=fPct(homeTrueProb,1);
-    $("awayCardTrue").textContent=fPct(awayTrueProb,1);
+    // Main big % = AI probability
+    $("homeCardImplied").textContent=fPct(homeAiProb,0);
+    $("awayCardImplied").textContent=fPct(awayAiProb,0);
+    // "TRUE PROB" row = market (for reference)
+    $("homeCardTrue").textContent=fPct(homeMarketProb,1)+" mkt";
+    $("awayCardTrue").textContent=fPct(awayMarketProb,1)+" mkt";
     $("homeCardEdge").textContent=isHomePick?fPct(d.edge):"—";
     $("awayCardEdge").textContent=!isHomePick?fPct(d.edge):"—";
     $("homePickBadge").style.display=isHomePick?"block":"none";
@@ -798,7 +805,8 @@ async function loadGame(){
     selectTeam(selectedTeam);
 
     $("wpLabelHome").textContent=homeTeam.split(" ").pop();$("wpLabelAway").textContent=awayTeam.split(" ").pop();
-    updateWinProbChart(homeMarketProb||0.5);
+    updateWinProbChart(homeAiProb||0.5);
+    $("winProbSubtitle").textContent="AI win probability — pure stats model, no market influence";
 
     const wr=ls.overallWinRate!=null?(ls.overallWinRate*100).toFixed(1)+"%":"—";
     setV("overallAcc",wr);setV("gradedCount",ls.gradedSnapshots||0);$("accBadge").textContent=wr;
