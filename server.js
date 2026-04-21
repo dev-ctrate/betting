@@ -679,6 +679,9 @@ app.get("/odds", async (req, res) => {
         ...(marketModel.modelDetails||{}),
         historicalComparisons: histComps || {},
         propSignal,
+        // Always expose home/away market probs for UI display
+        homeMarketProb: r2(marketModel.modelDetails?.homeMarketProb ?? (pickSide==="home" ? marketImplied : 1-marketImplied)),
+        awayMarketProb: r2(marketModel.modelDetails?.awayMarketProb ?? (pickSide==="away" ? marketImplied : 1-marketImplied)),
       },
 
       bookmakerTable: marketModel.bookmakerTable || [],
