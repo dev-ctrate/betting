@@ -142,6 +142,13 @@ async function computeIndependentWinProb(homeTeam, awayTeam, liveState=null, inj
   statsProb = sigmoid(logit(clamp(statsProb, 0.01, 0.99)) + hcaLogit);
   statsProb = clamp(statsProb, 0.01, 0.99);
 
+  // Sanity clamp: stats model can't diverge more than 22% from market
+  // Prevents bad/stale data from producing absurd predictions
+  if (data?.matchup) {
+    const marketHomeProb = clamp(0.5 + sn(data.matchup.split_prob, 0.5) - 0.5, 0.20, 0.80);
+    statsProb = clamp(statsProb, marketHomeProb - 0.22, marketHomeProb + 0.22);
+  }
+
   const finalProb = liveState?.liveFound ? applyLiveAdj(statsProb, liveState) : statsProb;
 
   const sigDiag = {};
