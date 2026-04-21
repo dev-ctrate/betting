@@ -328,13 +328,26 @@ function aggregateBdlTeamGames(games, bdlTeamId) {
 
   if (!results.length) return null;
 
-  const pts    = results.map(r => r.myPts);
-  const opp    = results.map(r => r.oppPts);
-  const marg   = results.map(r => r.margin);
+  // ── RECENT FORM WEIGHTING ────────────────────────────────────────────────
+  // Exponential decay: most recent game = weight 1.0, each prior game = 0.88x
+  // This means last 5 games count ~3x more than games from the start of season
+  const n = results.length;
+  const weights = results.map((_, i) => Math.pow(0.88, n - 1 - i));
+  const totalW  = weights.reduce((s, w) => s + w, 0);
+  const wAvg    = (arr) => arr.reduce((s, v, i) => s + v * weights[i], 0) / totalW;
+
+  const pts   = results.map(r => r.myPts);
+  const opp   = results.map(r => r.oppPts);
+  const marg  = results.map(r => r.margin);
   const last5  = results.slice(-5);
   const last10 = results.slice(-10);
   const homeR  = results.filter(r => r.isHome);
   const awayR  = results.filter(r => !r.isHome);
+
+  // Weighted win rate (recent games count more)
+  const wWinRate = results.reduce((s, r, i) => s + (r.won ? 1 : 0) * weights[i], 0) / totalW;
+  const wr5  = last5.filter(r=>r.won).length  / Math.max(last5.length, 1);
+  const wr10 = last10.filter(r=>r.won).length / Math.max(last10.length, 1);
 
   // Streak
   let streak = 0;
@@ -344,7 +357,7 @@ function aggregateBdlTeamGames(games, bdlTeamId) {
     else break;
   }
 
-  // Rest days from most recent game
+  // Rest days
   let rest_days = 2, is_b2b = false;
   const lastDate = results[results.length - 1]?.date;
   if (lastDate) {
@@ -355,25 +368,23 @@ function aggregateBdlTeamGames(games, bdlTeamId) {
     } catch {}
   }
 
-  const wr = results.filter(r=>r.won).length / results.length;
-
   return {
-    // Team stats proxies
-    ptsFor:      mean(pts),
-    ptsAgainst:  mean(opp),
-    netPts:      mean(marg),
+    // Weighted stats (recent games count more)
+    ptsFor:      wAvg(pts),
+    ptsAgainst:  wAvg(opp),
+    netPts:      wAvg(marg),
     gamesPlayed: results.length,
-    // Form
-    win_rate:    r4(wr),
-    win_rate5:   r4(last5.filter(r=>r.won).length  / Math.max(last5.length, 1)),
-    win_rate10:  r4(last10.filter(r=>r.won).length / Math.max(last10.length, 1)),
-    avg_diff:    r4(mean(marg)),
+    // Form — weighted win rate is more accurate than raw
+    win_rate:    r4(wWinRate),
+    win_rate5:   r4(wr5),
+    win_rate10:  r4(wr10),
+    avg_diff:    r4(wAvg(marg)),
     avg_diff5:   r4(mean(last5.map(r=>r.margin))),
     avg_diff10:  r4(mean(last10.map(r=>r.margin))),
-    momentum:    r4(last5.filter(r=>r.won).length / Math.max(last5.length,1) - wr),
+    momentum:    r4(wr5 - wWinRate),
     streak,
-    avg_pts:         r4(mean(pts)),
-    avg_pts_allowed: r4(mean(opp)),
+    avg_pts:         r4(wAvg(pts)),
+    avg_pts_allowed: r4(wAvg(opp)),
     home_win_rate:   homeR.length ? r4(homeR.filter(r=>r.won).length / homeR.length) : null,
     away_win_rate:   awayR.length ? r4(awayR.filter(r=>r.won).length / awayR.length) : null,
     home_net_rtg:    homeR.length ? r4(mean(homeR.map(r=>r.margin))) : null,
@@ -427,11 +438,21 @@ function buildAdvFromSources(sm, sd, bdlAgg) {
   let pace = fga > 0 ? fga - oreb + tov + 0.44*fta : 0;
   if (pace < 85 || pace > 120) pace = 100;
 
+  // ── PACE-ADJUSTED RATINGS ─────────────────────────────────────────────────
+  // Express scoring as points per 100 possessions (standard NBA efficiency metric)
+  // Allows fair comparison between fast-paced and slow-paced teams
+  const LEAGUE_PACE = 98.5;
+  const paceFactor  = pace > 0 ? pace / 100 : 1;
+  const adj_off     = r4(pts / paceFactor);      // ORtg per 100 poss
+  const adj_def     = r4(opp_pts / paceFactor);  // DRtg per 100 poss
+
   const net_rating = pts - opp_pts;
+  const adj_net    = r4(adj_off - adj_def);
   const pie = clamp((net_rating+15)/30*0.12 + ts_pct*0.04, 0.01, 0.20);
 
   return {
     off_rating: r4(pts), def_rating: r4(opp_pts), net_rating: r4(net_rating),
+    adj_off_rating: adj_off, adj_def_rating: adj_def, adj_net_rating: adj_net,
     pace: r4(pace), pie: r4(pie),
     ts_pct: r4(ts_pct), efg_pct: r4(efg_pct), tov_pct: r4(tov_pct),
     oreb_pct: r4(oreb_pct), ast_to: r4(ast_to), ftr: r4(ftr), fg3_rate: r4(fg3_rate),
@@ -591,12 +612,28 @@ async function fetchEspnRosterStats(espnId) {
   } catch { return []; }
 }
 
-function buildPlayersFromStats(rawPlayers, teamAdv) {
+function buildPlayersFromStats(rawPlayers, teamAdv, injuredPlayers = []) {
   if (!rawPlayers?.length) return [];
-  const teamPts = teamAdv?.pts_per_game || 110;
+  const teamPts = teamAdv?.pts_per_game || teamAdv?.adj_off_rating || 110;
   const gamePts = (teamAdv?.pts_per_game||110) + (teamAdv?.opp_pts_per_game||110);
 
-  return rawPlayers.map(p => {
+  // ── INJURY FILTERING ──────────────────────────────────────────────────────
+  // Remove players who are OUT or DOUBTFUL — they won't contribute tonight
+  const injMap = {};
+  for (const inj of injuredPlayers || []) {
+    const name = extractInjName(inj);
+    if (!name) continue;
+    const t = JSON.stringify(inj).toLowerCase();
+    const severity = t.includes("out") ? 1.0 : t.includes("doubtful") ? 0.8 : t.includes("questionable") ? 0.4 : 0.2;
+    injMap[norm(name)] = severity;
+  }
+
+  const activePlayers = rawPlayers.filter(p => {
+    const sev = injMap[norm(p.name || "")];
+    return !sev || sev < 0.75; // keep if not injured or just questionable/probable
+  });
+
+  return activePlayers.map(p => {
     const pts = flt(p.pts), fga = flt(p.fga), fta = flt(p.fta);
     const fg3m= flt(p.fg3m), fgm = flt(p.fgm);
     const reb = flt(p.reb), ast = flt(p.ast);
@@ -627,7 +664,17 @@ function buildPlayersFromStats(rawPlayers, teamAdv) {
     };
   })
   .sort((a, b) => b.star_score - a.star_score)
-  .slice(0, 8);
+  .slice(0, 10);
+}
+
+// Helper to extract name from injury row
+function extractInjName(obj) {
+  if (!obj) return "";
+  if (obj.player && typeof obj.player === "object")
+    return `${obj.player.first_name||""} ${obj.player.last_name||""}`.trim();
+  for (const k of ["PlayerName","playerName","name","Name","full_name"])
+    if (typeof obj[k]==="string" && obj[k].length>1) return obj[k];
+  return "";
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -961,7 +1008,7 @@ function buildDeltas(home, away) {
 // ═══════════════════════════════════════════════════════════════════════════
 // ─── MAIN EXPORT ──────────────────────────────────────────────────────────
 // ═══════════════════════════════════════════════════════════════════════════
-async function getAdvancedMatchup(homeTeam, awayTeam) {
+async function getAdvancedMatchup(homeTeam, awayTeam, injCtx = {}) {
   const season    = getCurrentSeason();
   const prevSzn   = getPreviousSeason(season);
   const nbaHomeId = getNbaTeamId(homeTeam);
@@ -1086,8 +1133,8 @@ async function getAdvancedMatchup(homeTeam, awayTeam) {
 
   console.log(`[adv] Players — home: ${homePlayerRows.length}, away: ${awayPlayerRows.length}`);
 
-  const homePlayers = buildPlayersFromStats(homePlayerRows, homeAdv);
-  const awayPlayers = buildPlayersFromStats(awayPlayerRows, awayAdv);
+  const homePlayers = buildPlayersFromStats(homePlayerRows, homeAdv, injCtx?.homeInjuries || []);
+  const awayPlayers = buildPlayersFromStats(awayPlayerRows, awayAdv, injCtx?.awayInjuries || []);
 
   // ── Build final profiles ─────────────────────────────────────────────────
   const homeData = buildProfile(homeTeam, homeAdv, homeForm, clutchRows||[], hustleRows||[], homePlayers);
