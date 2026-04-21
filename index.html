@@ -768,14 +768,15 @@ async function loadGame(){
     $("homeCardName").textContent=homeTeam;$("awayCardName").textContent=awayTeam;
     $("homeCardRecord").textContent=mp?.homeStats?`${(mp.homeStats.win_rate*100).toFixed(0)}% WR · Str ${mp.homeStats.streak>=0?"+":""}${mp.homeStats.streak}`:"";
     $("awayCardRecord").textContent=mp?.awayStats?`${(mp.awayStats.win_rate*100).toFixed(0)}% WR · Str ${mp.awayStats.streak>=0?"+":""}${mp.awayStats.streak}`:"";
-    // Always compute home/away probs regardless of which side the pick is on
-    const homeMarketProb = isHomePick ? d.impliedProbability : 1 - (d.impliedProbability||0.5);
-    const awayMarketProb = isHomePick ? 1 - (d.impliedProbability||0.5) : d.impliedProbability;
-    const homeTrueProb   = isHomePick ? d.trueProbability : 1 - (d.trueProbability||0.5);
-    const awayTrueProb   = isHomePick ? 1 - (d.trueProbability||0.5) : d.trueProbability;
-    const homeEdgeVal    = isHomePick ? d.edge : -(d.edge||0);
-    const awayEdgeVal    = isHomePick ? -(d.edge||0) : d.edge;
+    // Use modelDetails which always has home/away market prob correctly labelled
+    const homeMarketProb = d.modelDetails?.homeMarketProb   ?? (isHomePick ? d.impliedProbability : 1-(d.impliedProbability||0.5));
+    const awayMarketProb = d.modelDetails?.awayMarketProb   ?? (1 - homeMarketProb);
+    const homeTrueProb   = isHomePick ? d.trueProbability   : 1-(d.trueProbability||0.5);
+    const awayTrueProb   = 1 - homeTrueProb;
 
+    $("homeCardName").textContent=homeTeam;$("awayCardName").textContent=awayTeam;
+    $("homeCardRecord").textContent=mp?.homeStats?`${(mp.homeStats.win_rate*100).toFixed(0)}% WR · Str ${mp.homeStats.streak>=0?"+":""}${mp.homeStats.streak}`:"";
+    $("awayCardRecord").textContent=mp?.awayStats?`${(mp.awayStats.win_rate*100).toFixed(0)}% WR · Str ${mp.awayStats.streak>=0?"+":""}${mp.awayStats.streak}`:"";
     $("homeCardImplied").textContent=fPct(homeMarketProb,0);
     $("awayCardImplied").textContent=fPct(awayMarketProb,0);
     $("homeCardTrue").textContent=fPct(homeTrueProb,1);
@@ -786,7 +787,7 @@ async function loadGame(){
     selectTeam(selectedTeam);
 
     $("wpLabelHome").textContent=homeTeam.split(" ").pop();$("wpLabelAway").textContent=awayTeam.split(" ").pop();
-    updateWinProbChart(homeImplied||0.5);
+    updateWinProbChart(homeMarketProb||0.5);
 
     const wr=ls.overallWinRate!=null?(ls.overallWinRate*100).toFixed(1)+"%":"—";
     setV("overallAcc",wr);setV("gradedCount",ls.gradedSnapshots||0);$("accBadge").textContent=wr;
