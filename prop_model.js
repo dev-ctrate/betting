@@ -25,15 +25,16 @@ const WEIGHTS_FILE = path.join(__dirname, "data", "prop_weights.json");
 // ─── Default feature weights (sum to ~1) ─────────────────────────────────────
 // These will be overwritten by learned weights after enough graded games
 const DEFAULT_W = {
-  seasonAvgDelta:  0.25,  // (season_avg - line) relative to line — most stable signal
-  l5AvgDelta:      0.22,  // recent 5 games average vs line — hot/cold streaks
-  l10AvgDelta:     0.13,  // 10 game average vs line — medium term form
-  hitRate5:        0.12,  // % of last 5 games hit over — direct hit rate
-  hitRate10:       0.09,  // % of last 10 games hit over
-  vsOppDelta:      0.06,  // historical performance vs this specific opponent
-  locationSplit:   0.05,  // home/away advantage for this stat
-  minsTrend:       0.05,  // more minutes recently = more stat opportunities
-  consistency:     0.03,  // low variance = more predictable outcome
+  seasonAvgDelta:  0.22,  // season average vs line
+  l5AvgDelta:      0.20,  // recent 5 games vs line
+  l10AvgDelta:     0.12,  // 10 game average vs line
+  hitRate5:        0.11,  // % of last 5 hit over
+  hitRate10:       0.08,  // % of last 10 hit over
+  vsOppDelta:      0.07,  // history vs this specific opponent
+  oppDefMatchup:   0.09,  // opponent defensive quality for this stat ← NEW
+  locationSplit:   0.05,  // home/away advantage
+  minsTrend:       0.04,  // minutes trend
+  consistency:     0.02,  // low variance = predictable
 };
 
 const WEIGHT_BOUNDS = {
@@ -43,6 +44,7 @@ const WEIGHT_BOUNDS = {
   hitRate5:       { lo: 0.02, hi: 0.35 },
   hitRate10:      { lo: 0.01, hi: 0.25 },
   vsOppDelta:     { lo: 0.00, hi: 0.20 },
+  oppDefMatchup:  { lo: 0.00, hi: 0.25 },
   locationSplit:  { lo: 0.00, hi: 0.20 },
   minsTrend:      { lo: 0.00, hi: 0.20 },
   consistency:    { lo: 0.00, hi: 0.15 },
@@ -70,39 +72,86 @@ const r4 = n => (typeof n === "number" && Number.isFinite(n)) ? Math.round(n * 1
 const r2 = n => (typeof n === "number" && Number.isFinite(n)) ? Math.round(n * 100) / 100 : null;
 const flt = (v, fb = 0) => { const n = Number(v); return Number.isFinite(n) ? n : fb; };
 
+// ─── Opponent defensive matchup ───────────────────────────────────────────────
+// How much harder/easier is it to score this stat against this opponent?
+// Positive = opponent allows MORE than average = easier game for player
+// Negative = opponent allows LESS = tougher game
+const LEAGUE_AVG_DEF = {
+  points:   112.0,  // league avg pts allowed per game
+  rebounds: 44.5,   // total rebounds per game
+  assists:  27.0,   // assists per game
+  pra:      183.5,  // pts+reb+ast combined
+  blocks:   5.2,
+  steals:   7.6,
+  threes:   13.5,
+};
+
+function buildOppDefFeature(oppDef, statType) {
+  if (!oppDef) return 0;
+  const t = (statType || "").toLowerCase();
+  const flt = (v, fb = 0) => { const n = Number(v); return Number.isFinite(n) ? n : fb; };
+
+  let oppAllowed = 0, leagueAvg = 0;
+
+  if (t === "points" || t === "pts") {
+    oppAllowed = flt(oppDef.avgPointsAllowed || oppDef.avgOpponentPoints || oppDef.oppAvgPoints || 0);
+    leagueAvg  = LEAGUE_AVG_DEF.points;
+  } else if (t === "rebounds" || t === "reb") {
+    // Use opponent's defensive rebound rate as proxy — high = harder for players to rebound
+    oppAllowed = flt(oppDef.avgDefRebounds || oppDef.avgDefensiveRebounds || 0);
+    leagueAvg  = 33.5; // avg defensive rebounds per game
+    // Invert: more defensive rebounds by opponent = harder to rebound against them
+    if (oppAllowed > 0) return clamp(-(oppAllowed - leagueAvg) / leagueAvg, -0.4, 0.4);
+  } else if (t === "assists" || t === "ast") {
+    // Teams that force turnovers = fewer assists
+    oppAllowed = flt(oppDef.avgSteals || oppDef.avgStealsPerGame || 0);
+    if (oppAllowed > 0) return clamp(-(oppAllowed - 7.6) / 7.6 * 2, -0.3, 0.3);
+  } else if (t === "pra") {
+    // Combined — use points allowed as proxy
+    oppAllowed = flt(oppDef.avgPointsAllowed || oppDef.avgOpponentPoints || 0);
+    leagueAvg  = LEAGUE_AVG_DEF.points;
+  } else if (t === "blocks" || t === "blk") {
+    return 0; // blocks by player not easily predictable from opp defense
+  } else if (t === "threes" || t === "3pm") {
+    oppAllowed = flt(oppDef.avgThreePointFieldGoalsAllowed || oppDef.oppThreesAllowed || 0);
+    leagueAvg  = LEAGUE_AVG_DEF.threes;
+  } else {
+    return 0;
+  }
+
+  if (!oppAllowed || !leagueAvg) return 0;
+  // Normalized: how much better/worse than average is this opponent defensively?
+  return clamp((oppAllowed - leagueAvg) / leagueAvg, -0.5, 0.5);
+}
+
 // ─── Feature builder ──────────────────────────────────────────────────────────
 // All features are centred at 0 — positive = bullish for OVER
 function buildFeatures(profile) {
   const { seasonAvg, l5Avg, l10Avg, vsOppAvg, hitRate5, hitRate10,
-          homeAvg, awayAvg, l5StdDev, l10StdDev, minsTrend, line } = profile;
+          homeAvg, awayAvg, l5StdDev, l10StdDev, minsTrend, line,
+          oppDef, statType } = profile;
 
   const safeLine = Math.max(line || 1, 0.5);
 
-  // Delta features: (avg - line) / line
-  // If avg > line by 20%, feature = +0.20 → bullish for over
   const seasonDelta = seasonAvg != null ? (seasonAvg - safeLine) / safeLine : 0;
   const l5Delta     = l5Avg    != null ? (l5Avg    - safeLine) / safeLine : 0;
   const l10Delta    = l10Avg   != null ? (l10Avg   - safeLine) / safeLine : 0;
   const oppDelta    = vsOppAvg != null && vsOppAvg > 0
-                      ? (vsOppAvg - safeLine) / safeLine
-                      : 0;
+                      ? (vsOppAvg - safeLine) / safeLine : 0;
 
-  // Hit rate centred at 0.5 — positive = tends to go over
   const hr5  = hitRate5  != null ? hitRate5  - 0.5 : 0;
   const hr10 = hitRate10 != null ? hitRate10 - 0.5 : 0;
 
-  // Location split: if home avg >> away avg, positive = home advantage
   const locSplit = (homeAvg != null && awayAvg != null && safeLine > 0)
-    ? (homeAvg - awayAvg) / safeLine
-    : 0;
+    ? (homeAvg - awayAvg) / safeLine : 0;
 
-  // Minutes trend: >1.0 means player is playing more recently
   const minsBoost = flt(minsTrend, 1.0) - 1.0;
 
-  // Consistency: low std dev relative to line = more predictable
-  // Negative because we subtract from score — high variance = less signal
-  const stdDev  = flt(l5StdDev ?? l10StdDev, safeLine * 0.25);
-  const consScore = -Math.min(stdDev / safeLine, 1.0); // always 0 or negative
+  const stdDev    = flt(l5StdDev ?? l10StdDev, safeLine * 0.25);
+  const consScore = -Math.min(stdDev / safeLine, 1.0);
+
+  // Opponent defensive matchup — how good/bad is this opponent at defending this stat
+  const oppDefScore = buildOppDefFeature(oppDef, statType || "");
 
   return {
     seasonAvgDelta: clamp(seasonDelta,  -1.5, 1.5),
@@ -111,6 +160,7 @@ function buildFeatures(profile) {
     hitRate5:       clamp(hr5,          -0.5, 0.5),
     hitRate10:      clamp(hr10,         -0.5, 0.5),
     vsOppDelta:     clamp(oppDelta,     -1.0, 1.0),
+    oppDefMatchup:  clamp(oppDefScore,  -0.5, 0.5),
     locationSplit:  clamp(locSplit,     -0.6, 0.6),
     minsTrend:      clamp(minsBoost,    -0.5, 0.5),
     consistency:    clamp(consScore,    -1.0, 0.0),
