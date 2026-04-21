@@ -87,7 +87,7 @@ function applyLiveAdj(pre, ls) {
 
 async function computeIndependentWinProb(homeTeam, awayTeam, liveState=null, injCtx={}) {
   let data = null;
-  try { data = await getAdvancedMatchup(homeTeam, awayTeam); }
+  try { data = await getAdvancedMatchup(homeTeam, awayTeam, injCtx); }
   catch (e) { console.warn("[stats_model]", e.message); }
 
   if (!data) {
