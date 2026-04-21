@@ -568,31 +568,40 @@ app.get("/odds", async (req, res) => {
       });
     }
 
-    // ── Apply learned weights ─────────────────────────────────────────────
-    const pickSide      = marketModel.pickSide;
-    const marketImplied = marketModel.impliedProbability;
+    // ── PURE AI PREDICTION — zero market interference ─────────────────────────
+    // Stats model is the ONLY source for pick and win probability.
+    // Market is used ONLY for edge calculation and display.
 
-    const learnedTrue = applyLearnedWeights({
-      marketProb:    marketImplied,
-      pickSide,
-      modelDetails:  marketModel.modelDetails,
-      statsHomeProb: statsResult ? statsResult.homeWinProb : null,
-      weights:       learnedWeights,
-    });
-    const calibrated = safeAC(learnedTrue);
-    const finalEdge  = calibrated - marketImplied;
+    const statsHomeProb = statsResult?.homeWinProb ?? null;
 
-    let statsEdge = null;
-    if (statsResult) {
-      const spp = pickSide === "home" ? statsResult.homeWinProb : 1 - statsResult.homeWinProb;
-      statsEdge = computeEdge(spp, marketImplied);
-    }
+    // Pick from stats model only
+    const pickSide = statsHomeProb !== null
+      ? (statsHomeProb >= 0.5 ? "home" : "away")
+      : marketModel.pickSide; // fallback only if stats completely unavailable
+    const pickTeam = pickSide === "home" ? featured.home_team : featured.away_team;
+    const pick     = `${pickTeam} to win`;
 
-    const finalVerdict = buildVerdict(finalEdge, marketModel.noBetFilter, marketModel.confidence);
+    // True probability = pure stats output, no market blending
+    const trueProb = statsHomeProb !== null
+      ? (pickSide === "home" ? statsHomeProb : 1 - statsHomeProb)
+      : marketModel.trueProbability;
+
+    // Market probability — for display and edge only
+    const homeMarketProb = r2(
+      marketModel.modelDetails?.homeMarketProb ??
+      (marketModel.pickSide === "home"
+        ? marketModel.impliedProbability
+        : 1 - (marketModel.impliedProbability || 0.5))
+    );
+    const marketImplied = pickSide === "home" ? homeMarketProb : 1 - homeMarketProb;
+
+    // Edge = how much AI disagrees with market (positive = AI more bullish on pick)
+    const finalEdge  = r2(trueProb - marketImplied);
+
+    const finalVerdict = buildVerdict(finalEdge, marketModel.noBetFilter, {});
 
     // ── Snapshot + edge history ───────────────────────────────────────────
     const ts      = new Date().toISOString();
-    const pick    = `${marketModel.pickTeam} to win`;
     const ek      = featured.id || gameId || `${featured.home_team}_${featured.away_team}`;
     const smoothed = addEdgeHist(ek, finalEdge, ts);
 
@@ -600,14 +609,14 @@ app.get("/odds", async (req, res) => {
       id: `${ek}_${ts}`, gameId: ek, timestamp: ts,
       commenceTime: featured.commence_time,
       homeTeam: featured.home_team, awayTeam: featured.away_team,
-      mode, pickSide, pickTeam: marketModel.pickTeam, pick,
+      mode, pickSide, pickTeam, pick,
       impliedProbability:        r2(marketImplied),
-      trueProbability:           r2(learnedTrue),
-      calibratedTrueProbability: r2(calibrated),
+      trueProbability:           r2(trueProb),
+      calibratedTrueProbability: r2(trueProb),
       rawEdge:  r2(finalEdge), edge: r2(smoothed), calibratedEdge: r2(finalEdge),
       sportsbookDecimal: r2(marketModel.sportsbookDecimal),
-      verdict: finalVerdict, confidenceLabel: marketModel.confidence?.label||"Low",
-      statsModelHomeProb: statsResult ? r2(statsResult.homeWinProb) : null,
+      verdict: finalVerdict,
+      statsModelHomeProb: statsHomeProb ? r2(statsHomeProb) : null,
       statsSignals: statsResult?.signals || null,
       ...(marketModel.modelDetails||{}),
       source: mode,
@@ -627,30 +636,38 @@ app.get("/odds", async (req, res) => {
       gameMode: mode,
       pick,
       verdict: finalVerdict,
-      confidence: { label: marketModel.confidence?.label||"Low", percent: r2(marketModel.confidence?.percent??null) },
+      // Confidence purely from AI edge (not market internal)
+      confidence: (() => {
+        const e = Math.abs(finalEdge);
+        const label = e >= 0.10 ? "High" : e >= 0.05 ? "Medium" : "Low";
+        const pct   = e >= 0.10 ? 0.80   : e >= 0.05 ? 0.65     : 0.50;
+        return { label, percent: r2(pct) };
+      })(),
       noBetFilter: marketModel.noBetFilter || {blocked:false,reasons:[]},
 
+      // AI probabilities (pure stats, no market)
+      pickSide,
+      trueProbability:           r2(trueProb),
+      homeAiProb:                r2(statsHomeProb ?? 0.5),
+      awayAiProb:                r2(1 - (statsHomeProb ?? 0.5)),
+
+      // Market probabilities (for display/edge only)
       impliedProbability:        r2(marketImplied),
-      trueProbability:           r2(learnedTrue),
-      calibratedTrueProbability: r2(calibrated),
-      impliedProbabilityFormats: { percent: r2(marketImplied), american: p2a(marketImplied) },
-      trueProbabilityFormats:    { percent: r2(calibrated),    american: p2a(calibrated)    },
+      homeMarketProb:            r2(homeMarketProb),
+      awayMarketProb:            r2(1 - homeMarketProb),
 
       edge:           r2(smoothed),
       rawEdge:        r2(finalEdge),
       calibratedEdge: r2(finalEdge),
 
       aiModel: {
-        activeWeights:       learnedWeights,
-        usingLearnedWeights: JSON.stringify(learnedWeights) !== JSON.stringify(DEFAULT_WEIGHTS),
-        statsBlendWeight:    r2(learnedWeights.statsBlend),
-        statsEdge:           statsEdge ? r2(statsEdge.edge) : null,
-        statsVerdict:        statsEdge?.verdict || null,
-        statsHomeWinProb:    statsResult ? r2(statsResult.homeWinProb) : null,
+        statsHomeWinProb:    statsHomeProb ? r2(statsHomeProb) : null,
+        statsAwayWinProb:    statsHomeProb ? r2(1-statsHomeProb) : null,
         signals:             statsResult?.signals || null,
         injuryAdjustments:   statsResult?.injuryAdjustments || null,
         matchupProfile:      statsResult?.matchupProfile || null,
         meta:                statsResult?.meta || null,
+        usingLearnedWeights: false, // market no longer influences pick
         propLearning: {
           total:    pls.total    || 0,
           graded:   pls.graded   || 0,
@@ -679,9 +696,8 @@ app.get("/odds", async (req, res) => {
         ...(marketModel.modelDetails||{}),
         historicalComparisons: histComps || {},
         propSignal,
-        // Always expose home/away market probs for UI display
-        homeMarketProb: r2(marketModel.modelDetails?.homeMarketProb ?? (pickSide==="home" ? marketImplied : 1-marketImplied)),
-        awayMarketProb: r2(marketModel.modelDetails?.awayMarketProb ?? (pickSide==="away" ? marketImplied : 1-marketImplied)),
+        homeMarketProb: r2(homeMarketProb),
+        awayMarketProb: r2(1 - homeMarketProb),
       },
 
       bookmakerTable: marketModel.bookmakerTable || [],
