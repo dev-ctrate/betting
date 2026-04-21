@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1.0"/>
-<title>Chaudhry Saab</title>
+<title>Edge Model</title>
 <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 <style>
 :root{--r-xl:26px;--r-lg:20px;--tf:180ms ease;--tm:320ms ease;}
@@ -189,7 +189,7 @@ canvas{display:block;width:100%;height:100%;background:transparent!important;}
 </div>
 
 <div class="card hero-card">
-  <h1>Allah Ke Bharosay</h1>
+  <h1>Edge Model</h1>
   <p class="subtle" id="heroSub">NBA Prediction Engine</p>
   <div class="score-display score-hidden" id="scoreDisplay">
     <div class="score-team">
@@ -768,9 +768,20 @@ async function loadGame(){
     $("homeCardName").textContent=homeTeam;$("awayCardName").textContent=awayTeam;
     $("homeCardRecord").textContent=mp?.homeStats?`${(mp.homeStats.win_rate*100).toFixed(0)}% WR · Str ${mp.homeStats.streak>=0?"+":""}${mp.homeStats.streak}`:"";
     $("awayCardRecord").textContent=mp?.awayStats?`${(mp.awayStats.win_rate*100).toFixed(0)}% WR · Str ${mp.awayStats.streak>=0?"+":""}${mp.awayStats.streak}`:"";
-    $("homeCardImplied").textContent=fPct(homeImplied,0);$("awayCardImplied").textContent=fPct(awayImplied,0);
-    $("homeCardTrue").textContent=fPct(homeTrue,1);$("awayCardTrue").textContent=fPct(awayTrue,1);
-    $("homeCardEdge").textContent=isHomePick?fPct(d.edge):"—";$("awayCardEdge").textContent=!isHomePick?fPct(d.edge):"—";
+    // Always compute home/away probs regardless of which side the pick is on
+    const homeMarketProb = isHomePick ? d.impliedProbability : 1 - (d.impliedProbability||0.5);
+    const awayMarketProb = isHomePick ? 1 - (d.impliedProbability||0.5) : d.impliedProbability;
+    const homeTrueProb   = isHomePick ? d.trueProbability : 1 - (d.trueProbability||0.5);
+    const awayTrueProb   = isHomePick ? 1 - (d.trueProbability||0.5) : d.trueProbability;
+    const homeEdgeVal    = isHomePick ? d.edge : -(d.edge||0);
+    const awayEdgeVal    = isHomePick ? -(d.edge||0) : d.edge;
+
+    $("homeCardImplied").textContent=fPct(homeMarketProb,0);
+    $("awayCardImplied").textContent=fPct(awayMarketProb,0);
+    $("homeCardTrue").textContent=fPct(homeTrueProb,1);
+    $("awayCardTrue").textContent=fPct(awayTrueProb,1);
+    $("homeCardEdge").textContent=isHomePick?fPct(d.edge):"—";
+    $("awayCardEdge").textContent=!isHomePick?fPct(d.edge):"—";
     $("homePickBadge").style.display=isHomePick?"block":"none";$("awayPickBadge").style.display=!isHomePick?"block":"none";
     selectTeam(selectedTeam);
 
