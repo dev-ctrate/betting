@@ -426,6 +426,104 @@ function buildVerdict(edge, noBet, conf) {
   return "Avoid";
 }
 
+// ── 2. KELLY CRITERION stake sizing ──────────────────────────────────────────
+// Tells you exactly how much to bet, not just whether to bet
+// Uses quarter-Kelly (25%) for safety with 5% bankroll cap
+function computeKelly(trueProb, decimalOdds) {
+  if (!trueProb || !decimalOdds || decimalOdds <= 1 || trueProb <= 0) return 0;
+  const b = decimalOdds - 1;
+  const q = 1 - trueProb;
+  const fullKelly = (b * trueProb - q) / b;
+  return Math.max(0, Math.min(fullKelly * 0.25, 0.05)); // quarter-Kelly, max 5%
+}
+
+// ── 6. REFEREE TENDENCIES ─────────────────────────────────────────────────────
+// High-foul refs inflate FT-dependent scorers and slow pace
+const HIGH_FOUL_REFS = new Set([
+  "Tony Brothers","Scott Foster","Ed Malloy","Rodney Mott",
+  "James Williams","Bill Kennedy","Zach Zarba"
+]);
+const LOW_FOUL_REFS = new Set([
+  "Marc Davis","Monty McCutchen","Josh Tiven","Kevin Scott"
+]);
+
+async function fetchGameRefs(gameId) {
+  if (!gameId) return null;
+  const k = `nba:refs:${gameId}`, h = cg(sideInfoCache, k); if (h) return h;
+  try {
+    const j = await fetchJson(
+      `https://stats.nba.com/stats/boxscoresummaryv2?GameID=${gameId}`,
+      { headers: {
+        "User-Agent": "Mozilla/5.0", "Referer": "https://www.nba.com/",
+        "x-nba-stats-origin": "stats", "x-nba-stats-token": "true",
+      }}
+    );
+    const refs = [];
+    for (const rs of j?.resultSets || []) {
+      if (rs.name === "Officials") {
+        const hdrs = rs.headers || [];
+        for (const row of rs.rowSet || []) {
+          const r = Object.fromEntries(hdrs.map((h, i) => [h, row[i]]));
+          refs.push(`${r.FIRST_NAME} ${r.LAST_NAME}`.trim());
+        }
+      }
+    }
+    const refData = {
+      names: refs,
+      highFoul:  refs.some(n => HIGH_FOUL_REFS.has(n)),
+      lowFoul:   refs.some(n => LOW_FOUL_REFS.has(n)),
+      // High-foul ref = more free throws = pace slows, FT-reliant scorers benefit
+      paceAdj:   refs.some(n => HIGH_FOUL_REFS.has(n)) ? -1.5 : refs.some(n => LOW_FOUL_REFS.has(n)) ? +1.5 : 0,
+      foulAdj:   refs.some(n => HIGH_FOUL_REFS.has(n)) ? 0.02  : refs.some(n => LOW_FOUL_REFS.has(n)) ? -0.01 : 0,
+    };
+    return cs(sideInfoCache, k, refData, 6 * 60 * 60 * 1000);
+  } catch { return null; }
+}
+
+// ── 7. TRAVEL FATIGUE ─────────────────────────────────────────────────────────
+const TEAM_TIMEZONES = {
+  "Los Angeles Lakers":-8,"Los Angeles Clippers":-8,"Golden State Warriors":-8,
+  "Sacramento Kings":-8,"Phoenix Suns":-7,"Denver Nuggets":-7,"Utah Jazz":-7,
+  "Portland Trail Blazers":-8,"Dallas Mavericks":-6,"Houston Rockets":-6,
+  "San Antonio Spurs":-6,"New Orleans Pelicans":-6,"Oklahoma City Thunder":-6,
+  "Memphis Grizzlies":-6,"Minnesota Timberwolves":-6,"Chicago Bulls":-6,
+  "Milwaukee Bucks":-6,"Indiana Pacers":-5,"Detroit Pistons":-5,
+  "Cleveland Cavaliers":-5,"Atlanta Hawks":-5,"Charlotte Hornets":-5,
+  "Orlando Magic":-5,"Miami Heat":-5,"Washington Wizards":-5,
+  "Philadelphia 76ers":-5,"New York Knicks":-5,"Brooklyn Nets":-5,
+  "Boston Celtics":-5,"Toronto Raptors":-5,
+};
+
+function computeTravelFatigue(homeTeam, awayTeam, homeForm, awayForm) {
+  const homeTZ = TEAM_TIMEZONES[homeTeam] || -6;
+  const awayTZ = TEAM_TIMEZONES[awayTeam] || -6;
+  const tzDiff = Math.abs(homeTZ - awayTZ);
+
+  // Away team traveling across many timezones + back-to-back = significant fatigue
+  const awayFatigue = (awayForm?.is_b2b ? 0.03 : 0) + (tzDiff >= 3 ? 0.02 : tzDiff >= 2 ? 0.01 : 0);
+  const homeFatigue = homeForm?.is_b2b ? 0.015 : 0;
+
+  return {
+    awayFatigue:   r2(awayFatigue),
+    homeFatigue:   r2(homeFatigue),
+    timezoneDiff:  tzDiff,
+    // Positive = helps home team (away team is fatigued)
+    netFatigueAdj: r2(awayFatigue - homeFatigue),
+  };
+}
+
+// ── 9. CORRELATED PARLAY DETECTION ───────────────────────────────────────────
+// Returns correlation score between game pick and player prop (0-1)
+function detectParlayCorrelation(pickTeam, propPlayer, propSection) {
+  // If we're betting a team to win AND a player from that same team to go over
+  // those are highly correlated (~0.7-0.85 depending on role)
+  const ptsCorrHigh = ["points", "pra"]; // strongly correlated with team winning
+  const ptsCorrMed  = ["assists"];        // moderately correlated
+  if (ptsCorrHigh.includes(propSection)) return 0.80;
+  if (ptsCorrMed.includes(propSection))  return 0.65;
+  return 0.55;
+}
+
 // ─── Routes ───────────────────────────────────────────────────────────────────
 app.get("/", (req, res) => res.sendFile(path.join(__dirname, "index.html")));
 
@@ -481,7 +579,7 @@ app.get("/odds", async (req, res) => {
     const lineupDate = (featured.commence_time||"").slice(0,10) || todayYmd();
 
     // ── Fetch everything concurrently ──────────────────────────────────────
-    const [props, histComps, injInfo, linInfo, liveRaw] = await Promise.allSettled([
+    const [props, histComps, injInfo, linInfo, liveRaw, refData] = await Promise.allSettled([
       getProps(featured.id),
       buildHistComps(featured.home_team, featured.away_team),
       bestInjuries(),
@@ -489,6 +587,8 @@ app.get("/odds", async (req, res) => {
       mode === "live"
         ? safeGetLive({gameId:featured.id, homeTeam:featured.home_team, awayTeam:featured.away_team})
         : Promise.resolve(null),
+      // 6. REFEREE TENDENCIES — fetch who's calling the game
+      fetchGameRefs(featured.id).catch(() => null),
     ]).then(rs => rs.map(r => r.status === "fulfilled" ? r.value : null));
 
     const injRows = injInfo?.rows || [];
@@ -500,34 +600,48 @@ app.get("/odds", async (req, res) => {
     // ── AI independent prop predictions ──────────────────────────────────
     let aiPropSections = rawPropSections;
     try {
-      aiPropSections = await predictGameProps(rawPropSections, featured.home_team, featured.away_team);
+      aiPropSections = await predictGameProps(
+        rawPropSections, featured.home_team, featured.away_team,
+        // 4. Pass injuries so cascade can boost teammates
+        { homeInjuries: injSummary?.homeInjuries || [], awayInjuries: injSummary?.awayInjuries || [] }
+      );
     } catch (e) {
       console.error("[server] AI props failed:", e.message);
       aiPropSections = rawPropSections;
     }
 
-    // ── Record prop snapshots for learning ────────────────────────────────
+    // ── Record prop snapshots for learning + 5. LINE MOVEMENT TRACKING ──────
     const gameDate  = (featured.commence_time || new Date().toISOString()).slice(0, 10);
     const statTypeMap = { points:"points", assists:"assists", rebounds:"rebounds", pra:"pra" };
     for (const [section, rows] of Object.entries(aiPropSections)) {
       for (const row of rows || []) {
         if (!row.playerId || row.line == null || !row.aiPick) continue;
+        const snapId = `${featured.id}_${row.playerId}_${section}`;
+        // Track first-seen line vs current line — significant move = sharp signal
+        const existingSnap = (snapshotLogStore[snapId] || [])[0];
+        const firstSeenLine = existingSnap?.line ?? row.line;
+        const lineMovement  = r2(row.line - firstSeenLine);
         recordPropSnap({
-          id:       `${featured.id}_${row.playerId}_${section}_${row.line}`,
-          gameId:   featured.id,
+          id:           `${snapId}_${row.line}`,
+          gameId:       featured.id,
           gameDate,
-          player:   row.player,
-          playerId: row.playerId,
-          statType: statTypeMap[section] || section,
-          line:     row.line,
-          pick:     row.aiPick,
-          overProb: row.aiOverProb,
-          pickProb: row.aiPickProb,
-          verdict:  row.aiVerdict,
-          features: row.features,
-          homeTeam: featured.home_team,
-          awayTeam: featured.away_team,
+          player:       row.player,
+          playerId:     row.playerId,
+          statType:     statTypeMap[section] || section,
+          line:         row.line,
+          firstSeenLine,
+          lineMovement,
+          pick:         row.aiPick,
+          overProb:     row.aiOverProb,
+          pickProb:     row.aiPickProb,
+          verdict:      row.aiVerdict,
+          features:     row.features,
+          homeTeam:     featured.home_team,
+          awayTeam:     featured.away_team,
         });
+        // Attach line movement to the prop row for display
+        row.lineMovement  = lineMovement;
+        row.firstSeenLine = firstSeenLine;
       }
     }
 
@@ -598,6 +712,38 @@ app.get("/odds", async (req, res) => {
     // Edge = how much AI disagrees with market (positive = AI more bullish on pick)
     const finalEdge  = r2(trueProb - marketImplied);
 
+    // ── 2. KELLY CRITERION stake sizing ──────────────────────────────────────
+    const bestDecimal = marketModel.sportsbookDecimal || 2.0;
+    const kellyFraction = computeKelly(trueProb, bestDecimal);
+    const kellyStake = {
+      fraction:    r2(kellyFraction),
+      units:       r2(kellyFraction * 100), // % of bankroll
+      label:       kellyFraction >= 0.04 ? "Strong bet" : kellyFraction >= 0.02 ? "Small bet" : "Pass",
+      explanation: kellyFraction > 0
+        ? `Bet ${(kellyFraction*100).toFixed(1)}% of bankroll at ${bestDecimal.toFixed(2)} odds`
+        : "No positive expected value",
+    };
+
+    // ── 7. TRAVEL FATIGUE ────────────────────────────────────────────────────
+    const homeForm = statsResult?.matchupProfile?.homeStats;
+    const awayForm = statsResult?.matchupProfile?.awayStats;
+    const travelFatigue = computeTravelFatigue(
+      featured.home_team, featured.away_team, homeForm, awayForm
+    );
+
+    // ── 6. REFEREE TENDENCIES ────────────────────────────────────────────────
+    const refs = refData || { names: [], highFoul: false, lowFoul: false, paceAdj: 0, foulAdj: 0 };
+
+    // ── 9. CORRELATED PARLAY DETECTION ───────────────────────────────────────
+    // Pre-calculate correlation between team pick and top prop
+    const topProp = Object.values(aiPropSections).flat().find(p => p.aiPickProb >= 0.65);
+    const parlayCorrelation = topProp ? {
+      player:      topProp.player,
+      statType:    Object.keys(aiPropSections).find(k => aiPropSections[k].includes(topProp)),
+      correlation: detectParlayCorrelation(pickTeam, topProp.player, topProp.statType),
+      warning:     "Betting team ML + same-team prop reduces diversification",
+    } : null;
+
     const finalVerdict = buildVerdict(finalEdge, marketModel.noBetFilter, {});
 
     // ── Snapshot + edge history ───────────────────────────────────────────
@@ -660,6 +806,18 @@ app.get("/odds", async (req, res) => {
       rawEdge:        r2(finalEdge),
       calibratedEdge: r2(finalEdge),
 
+      // ── 2. Kelly Criterion ──────────────────────────────────────────────
+      kellyStake,
+
+      // ── 6. Referee tendencies ───────────────────────────────────────────
+      referees: refs,
+
+      // ── 7. Travel fatigue ───────────────────────────────────────────────
+      travelFatigue,
+
+      // ── 9. Correlated parlay ────────────────────────────────────────────
+      parlayCorrelation,
+
       aiModel: {
         statsHomeWinProb:    statsHomeProb ? r2(statsHomeProb) : null,
         statsAwayWinProb:    statsHomeProb ? r2(1-statsHomeProb) : null,
@@ -667,7 +825,12 @@ app.get("/odds", async (req, res) => {
         injuryAdjustments:   statsResult?.injuryAdjustments || null,
         matchupProfile:      statsResult?.matchupProfile || null,
         meta:                statsResult?.meta || null,
-        usingLearnedWeights: false, // market no longer influences pick
+        usingLearnedWeights: false,
+        // 1. Playoff mode flag
+        playoffMode:         statsResult?.meta?.playoffMode ?? false,
+        // 3. Strength of schedule
+        sosHome:             statsResult?.meta?.sosHome ?? 1.0,
+        sosAway:             statsResult?.meta?.sosAway ?? 1.0,
         propLearning: {
           total:    pls.total    || 0,
           graded:   pls.graded   || 0,
