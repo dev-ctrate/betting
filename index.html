@@ -391,7 +391,7 @@ canvas{display:block;width:100%;height:100%;background:transparent!important;}
     <div class="prop-sec"><h3 style="margin-bottom:10px">Points</h3><div id="propsPoints">No data</div></div>
     <div class="prop-sec"><h3 style="margin-bottom:10px">Assists</h3><div id="propsAssists">No data</div></div>
     <div class="prop-sec"><h3 style="margin-bottom:10px">Rebounds</h3><div id="propsRebounds">No data</div></div>
-    <div class="prop-sec"><h3 style="margin-bottom:10px">PRA</h3><div id="propsPRA">No data</div></div>
+    <div class="prop-sec"><h3 style="margin-bottom:10px">3-Pointers</h3><div id="propsThrees">No data</div></div>
   </div>
 </div>
 
@@ -897,7 +897,7 @@ async function loadGame(){
 
     const ps=d.propSections||{};
     renderProps(ps.points||[],"propsPoints","pts");renderProps(ps.assists||[],"propsAssists","ast");
-    renderProps(ps.rebounds||[],"propsRebounds","reb");renderProps(ps.pra||[],"propsPRA","PRA");
+    renderProps(ps.rebounds||[],"propsRebounds","reb");renderProps(ps.threes||[],"propsThrees","3PM");
 
     renderPbp(scoreState,homeTeam,awayTeam);
     $("statusMsg").textContent=`${awayTeam} @ ${homeTeam} · ${d.gameMode} · ${new Date(d.updatedAt||Date.now()).toLocaleTimeString()}`;
