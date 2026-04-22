@@ -368,12 +368,20 @@ function aggregateBdlTeamGames(games, bdlTeamId) {
     } catch {}
   }
 
+  // ── 3. STRENGTH OF SCHEDULE proxy ────────────────────────────────────────
+  // Average opponent score relative to league average
+  // High = played against tough opponents, wins are more meaningful
+  const LEAGUE_AVG_OPP = 112.0;
+  const avgOppScore = mean(opp);
+  const sos_factor  = avgOppScore > 0 ? r4(avgOppScore / LEAGUE_AVG_OPP) : 1.0;
+
   return {
     // Weighted stats (recent games count more)
     ptsFor:      wAvg(pts),
     ptsAgainst:  wAvg(opp),
     netPts:      wAvg(marg),
     gamesPlayed: results.length,
+    sos_factor,
     // Form — weighted win rate is more accurate than raw
     win_rate:    r4(wWinRate),
     win_rate5:   r4(wr5),
@@ -945,6 +953,7 @@ function buildProfile(teamName, advStats, form, clutchRows, hustleRows, players)
     away_net_rtg:    f.away_net_rtg    ?? null,
     rest_days:       f.rest_days ?? 2,
     is_b2b:          f.is_b2b    ?? false,
+    sos_factor:      f.sos_factor ?? 1.0,
     altitude_ft: 0, timezone: "",
     pts_per_game:     e.pts_per_game     || off_rating,
     opp_pts_per_game: e.opp_pts_per_game || def_rating,
