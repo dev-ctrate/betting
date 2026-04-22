@@ -382,10 +382,6 @@ async function predictGameProps(propSections, homeTeam = null, awayTeam = null, 
     const rows = (propSections[section] || []).slice(0, 8);
     if (!rows.length) { results[section] = []; continue; }
 
-  for (const [section, statType] of Object.entries(statMap)) {
-    const rows = (propSections[section] || []).slice(0, 8);
-    if (!rows.length) { results[section] = []; continue; }
-
     const predictions = await Promise.allSettled(
       rows.map(row => {
         // Determine which team this player is on and pass their injuries
