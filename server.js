@@ -33,7 +33,7 @@ const SPORT_KEY           = "basketball_nba";
 const REGIONS             = "us";
 const ODDS_FORMAT         = "decimal";
 const FEATURED_MARKETS    = "h2h,spreads,totals";
-const PLAYER_PROP_MARKETS = ["player_points","player_rebounds","player_assists","player_threes","player_threes_made","player_three_pointers_made"].join(",");
+const PLAYER_PROP_MARKETS = ["player_points","player_rebounds","player_assists","player_points_rebounds_assists"].join(",");
 const HISTORICAL_LOOKBACKS = [{ label: "2h", ms: 2*60*60*1000 }, { label: "24h", ms: 24*60*60*1000 }];
 
 const currentCache    = new Map();
@@ -172,12 +172,9 @@ function buildProps(propsEvt) {
     "player_points":"points",
     "player_assists":"assists",
     "player_rebounds":"rebounds",
-    "player_threes":"threes",
-    "player_threes_made":"threes",
-    "player_three_pointers_made":"threes",
-    "player_threes_alternate":"threes",
+    "player_points_rebounds_assists":"pra",
   };
-  const sec = {points:[],assists:[],rebounds:[],threes:[]};
+  const sec = {points:[],assists:[],rebounds:[],pra:[]};
   for (const [mk,dk] of Object.entries(mm)) {
     const grouped = {};
     for (const o of gm[mk]||[]) {
@@ -199,7 +196,7 @@ function buildProps(propsEvt) {
       .sort((a,b)=>(b.coverage-a.coverage)||((b.pickProbability||0)-(a.pickProbability||0)))
       .slice(0,12);
   }
-  const all = [...sec.points,...sec.assists,...sec.rebounds,...sec.threes];
+  const all = [...sec.points,...sec.assists,...sec.rebounds,...sec.pra];
   if (!all.length) return {sections:sec, signal:{adj:0,depth:0}};
   let str=0, obs=0;
   for (const r of all) {
@@ -624,7 +621,7 @@ app.get("/odds", async (req, res) => {
 
     // ── Record prop snapshots for learning + 5. LINE MOVEMENT TRACKING ──────
     const gameDate  = (featured.commence_time || new Date().toISOString()).slice(0, 10);
-    const statTypeMap = { points:"points", assists:"assists", rebounds:"rebounds", threes:"threes" };
+    const statTypeMap = { points:"points", assists:"assists", rebounds:"rebounds", pra:"pra" };
     for (const [section, rows] of Object.entries(aiPropSections)) {
       for (const row of rows || []) {
         if (!row.playerId || row.line == null || !row.aiPick) continue;
