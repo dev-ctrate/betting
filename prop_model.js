@@ -373,7 +373,7 @@ async function predictGameProps(propSections, homeTeam = null, awayTeam = null, 
     points:   "points",
     assists:  "assists",
     rebounds: "rebounds",
-    threes:   "threes",
+    pra:      "pra",
   };
 
   const results = {};
