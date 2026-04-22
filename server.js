@@ -1,995 +1,917 @@
-"use strict";
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1.0"/>
+<title>Edge Model</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<style>
+:root{--r-xl:26px;--r-lg:20px;--tf:180ms ease;--tm:320ms ease;}
+body[data-theme="light"]{--bg:#f5f2eb;--bg2:#efe9df;--card:rgba(255,255,255,.62);--card-s:rgba(255,255,255,.82);--bdr:rgba(58,47,34,.08);--bdr2:rgba(58,47,34,.14);--txt:#1f1a16;--soft:#5b5248;--muted:#8a7f73;--acc:#8e7858;--acc-s:rgba(142,120,88,.12);--green:#5f7c63;--yellow:#a78c57;--red:#9a6761;--shadow:0 10px 30px rgba(31,26,22,.06);--ht:rgba(255,255,255,.72);--hb:rgba(255,255,255,.58);--ibg:rgba(255,255,255,.76);--mbg:rgba(255,255,255,.54);--sbg:rgba(255,255,255,.48);--thead:rgba(255,255,255,.44);--trow:rgba(255,255,255,.28);--trowa:rgba(255,255,255,.18);--cl:#8e7858;--cf:rgba(142,120,88,.08);--ct:rgba(36,31,27,.92);--cg:rgba(58,47,34,.08);--ctk:#8a7f73;--home-c:#2563eb;--away-c:#dc2626;}
+body[data-theme="dark"]{--bg:#12110f;--bg2:#181715;--card:rgba(28,26,23,.76);--card-s:rgba(36,33,29,.92);--bdr:rgba(255,255,255,.07);--bdr2:rgba(255,255,255,.12);--txt:#e8e3dc;--soft:#b7aea2;--muted:#8c8378;--acc:#b59a6a;--acc-s:rgba(181,154,106,.12);--green:#7fa886;--yellow:#bfa46a;--red:#b27a73;--shadow:0 14px 40px rgba(0,0,0,.32);--ht:rgba(36,33,29,.92);--hb:rgba(28,26,23,.86);--ibg:rgba(36,33,29,.92);--mbg:rgba(36,33,29,.76);--sbg:rgba(36,33,29,.80);--thead:rgba(36,33,29,.86);--trow:rgba(255,255,255,.035);--trowa:rgba(255,255,255,.018);--cl:#b59a6a;--cf:rgba(181,154,106,.09);--ct:rgba(20,18,16,.96);--cg:rgba(255,255,255,.07);--ctk:#8c8378;--home-c:#3b82f6;--away-c:#ef4444;}
+*{box-sizing:border-box;}html{scroll-behavior:smooth;}
+body{font-family:Inter,ui-sans-serif,system-ui,-apple-system,sans-serif;margin:0;padding:20px;color:var(--txt);background:radial-gradient(circle at top left,var(--acc-s),transparent 26%),radial-gradient(circle at bottom right,rgba(255,255,255,.02),transparent 20%),linear-gradient(180deg,var(--bg),var(--bg2));min-height:100vh;transition:background var(--tm),color var(--tm);}
+.wrap{max-width:1200px;margin:0 auto;}
+.topbar{display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;gap:10px;flex-wrap:wrap;}
+.acc-badge{background:var(--card-s);border:1px solid var(--bdr2);border-radius:12px;padding:6px 14px;font-size:12px;color:var(--soft);font-weight:600;}
+.acc-badge span{color:var(--green);font-size:14px;font-weight:700;}
+.theme-toggle{position:relative;width:62px;height:34px;border-radius:999px;border:1px solid var(--bdr2);background:var(--card-s);cursor:pointer;transition:background var(--tm),transform var(--tf);box-shadow:var(--shadow);padding:0;flex-shrink:0;}
+.theme-toggle:hover{transform:translateY(-1px);}
+.tt-track{position:absolute;inset:0;border-radius:inherit;overflow:hidden;}
+.tt-icon{position:absolute;top:50%;transform:translateY(-50%);font-size:12px;line-height:1;opacity:.85;pointer-events:none;color:var(--soft);}
+.tt-icon.sun{left:10px;}.tt-icon.moon{right:10px;}
+.tt-thumb{position:absolute;top:4px;left:4px;width:24px;height:24px;border-radius:50%;background:var(--acc);transition:transform var(--tm);box-shadow:0 4px 14px rgba(0,0,0,.16);}
+body[data-theme="dark"] .tt-thumb{transform:translateX(28px);}
+.card{background:var(--card);backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);border:1px solid var(--bdr);border-radius:var(--r-xl);padding:22px;margin-bottom:16px;box-shadow:var(--shadow);transition:background var(--tm),border-color var(--tm);}
+.hero-card{background:linear-gradient(180deg,var(--ht),var(--hb)),var(--card-s);text-align:center;}
+h1,h2,h3,p{margin:0 0 8px 0;}
+h1{font-size:clamp(26px,4vw,38px);font-weight:700;letter-spacing:-.035em;}
+h2{font-size:18px;font-weight:600;letter-spacing:-.02em;}
+h3{font-size:12px;font-weight:600;color:var(--soft);text-align:left;text-transform:uppercase;letter-spacing:.05em;}
+.subtle{color:var(--muted);font-size:13px;line-height:1.5;}
+label{display:block;margin-bottom:8px;color:var(--soft);font-size:13px;font-weight:600;text-align:center;}
+select{width:100%;padding:12px 16px;border-radius:14px;border:1px solid var(--bdr2);background:var(--ibg);color:var(--txt);font-size:14px;outline:none;text-align:center;text-align-last:center;}
+.msg{background:var(--mbg);border:1px solid var(--bdr);padding:12px 16px;border-radius:16px;margin-top:12px;color:var(--soft);text-align:center;font-size:13px;}
+.g2{display:grid;grid-template-columns:1fr 1fr;gap:12px;}
+.g3{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;}
+.g4{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;}
+.g6{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:10px;}
+.stat{background:var(--sbg);border:1px solid var(--bdr);border-radius:var(--r-lg);padding:14px;min-height:78px;text-align:center;}
+.stat strong{display:block;color:var(--muted);font-size:10px;font-weight:600;letter-spacing:.07em;text-transform:uppercase;margin-bottom:6px;}
+.stat p{font-size:18px;font-weight:600;letter-spacing:-.02em;color:var(--txt);margin:0;}
+.stat .sub{font-size:11px;color:var(--muted);margin-top:3px;}
+.bet{color:var(--green);font-weight:700;}.watch{color:var(--yellow);font-weight:700;}.avoid{color:var(--red);font-weight:700;}
+.low{color:var(--red);}.medium{color:var(--yellow);}.high{color:var(--green);}
+.score-display{display:flex;align-items:center;justify-content:center;gap:20px;margin:10px 0;flex-wrap:wrap;}
+.score-team{display:flex;flex-direction:column;align-items:center;gap:6px;min-width:100px;}
+.score-logo{width:56px;height:56px;object-fit:contain;filter:drop-shadow(0 2px 6px rgba(0,0,0,.15));}
+.score-logo-placeholder{width:56px;height:56px;border-radius:50%;background:var(--acc-s);border:2px solid var(--bdr2);display:flex;align-items:center;justify-content:center;font-size:18px;font-weight:700;color:var(--acc);}
+.score-name{font-size:12px;font-weight:600;color:var(--soft);text-transform:uppercase;letter-spacing:.06em;}
+.score-pts{font-size:42px;font-weight:800;letter-spacing:-.04em;color:var(--txt);line-height:1;}
+.score-sep{font-size:28px;font-weight:300;color:var(--muted);}
+.score-period{font-size:12px;color:var(--muted);font-weight:500;background:var(--sbg);border:1px solid var(--bdr);border-radius:8px;padding:3px 10px;margin:4px auto 0;}
+.score-hidden{opacity:0;pointer-events:none;}
+.team-selector{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:16px;}
+.team-card{background:var(--card);border:2px solid var(--bdr);border-radius:20px;padding:18px 14px;cursor:pointer;transition:all .2s ease;display:flex;flex-direction:column;align-items:center;gap:10px;text-align:center;position:relative;box-shadow:var(--shadow);}
+.team-card:hover{border-color:var(--acc);transform:translateY(-2px);}
+.team-card.active-home{border-color:var(--home-c);background:rgba(37,99,235,.06);}
+.team-card.active-away{border-color:var(--away-c);background:rgba(220,38,38,.06);}
+.team-card.inactive{opacity:.55;}
+.tc-logo{width:62px;height:62px;object-fit:contain;filter:drop-shadow(0 2px 8px rgba(0,0,0,.15));}
+.tc-logo-ph{width:62px;height:62px;border-radius:50%;background:var(--acc-s);border:2px solid var(--bdr2);display:flex;align-items:center;justify-content:center;font-size:22px;font-weight:800;color:var(--acc);}
+.tc-name{font-size:14px;font-weight:700;color:var(--txt);}
+.tc-record{font-size:11px;color:var(--muted);}
+.tc-badge{position:absolute;top:10px;right:10px;background:var(--acc);color:#fff;font-size:10px;font-weight:700;padding:3px 8px;border-radius:6px;letter-spacing:.04em;}
+.tc-stats{display:grid;grid-template-columns:1fr 1fr;gap:6px;width:100%;margin-top:4px;}
+.tc-stat{background:var(--sbg);border:1px solid var(--bdr);border-radius:10px;padding:6px;text-align:center;}
+.tc-stat strong{display:block;font-size:9px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;margin-bottom:2px;}
+.tc-stat span{font-size:14px;font-weight:700;color:var(--txt);}
+.tc-implied{font-size:22px;font-weight:800;color:var(--txt);margin-top:2px;}
+.tc-implied-label{font-size:11px;color:var(--muted);}
+.winprob-wrap{position:relative;height:180px;margin-top:10px;}
+.winprob-label-home{position:absolute;top:6px;left:10px;font-size:11px;font-weight:600;color:var(--home-c);}
+.winprob-label-away{position:absolute;bottom:6px;left:10px;font-size:11px;font-weight:600;color:var(--away-c);}
+.winprob-pct{position:absolute;top:50%;right:10px;transform:translateY(-50%);font-size:20px;font-weight:800;color:var(--txt);}
+.main-stats{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:10px;margin-top:14px;}
+.sig-wrap{display:flex;flex-direction:column;gap:6px;margin-top:10px;}
+.sig-row{display:grid;grid-template-columns:150px 1fr 38px;align-items:center;gap:8px;}
+.sig-name{font-size:11px;color:var(--soft);text-align:right;font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.sig-bar{position:relative;height:15px;border-radius:8px;overflow:hidden;background:var(--bdr2);}
+.sig-home{position:absolute;left:50%;top:0;height:100%;border-radius:0 8px 8px 0;transition:width .4s ease;}
+.sig-away{position:absolute;right:50%;top:0;height:100%;border-radius:8px 0 0 8px;transition:width .4s ease;}
+.sig-mid{position:absolute;left:50%;top:0;width:1px;height:100%;background:var(--muted);opacity:.3;}
+.sig-val{font-size:10px;color:var(--muted);text-align:left;font-weight:700;}
+.adv-tbl{width:100%;border-collapse:separate;border-spacing:0;font-size:12px;margin-top:10px;}
+.adv-tbl th{padding:8px 10px;color:var(--muted);font-size:10px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;background:var(--thead);border-bottom:1px solid var(--bdr);text-align:center;}
+.adv-tbl th:first-child{text-align:left;border-top-left-radius:12px;}
+.adv-tbl th:last-child{border-top-right-radius:12px;}
+.adv-tbl td{padding:8px 10px;text-align:center;border-bottom:1px solid var(--bdr);color:var(--soft);background:var(--trow);font-size:12px;}
+.adv-tbl tr:nth-child(even) td{background:var(--trowa);}
+.adv-tbl td:first-child{text-align:left;color:var(--muted);font-size:10px;font-weight:600;letter-spacing:.05em;text-transform:uppercase;}
+.adv-tbl td.better{color:var(--green);font-weight:700;}
+.adv-tbl td.worse{color:var(--red);}
+.props-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px;}
+.prop-sec{background:var(--sbg);border:1px solid var(--bdr);padding:14px;border-radius:var(--r-lg);text-align:left;}
+.prop-item{padding:10px 0;border-bottom:1px solid var(--bdr);display:flex;flex-direction:column;gap:5px;}
+.prop-item:last-child{border-bottom:none;}
+.prop-player{font-size:13px;font-weight:700;color:var(--txt);}
+.prop-detail{display:flex;align-items:center;justify-content:space-between;gap:6px;}
+.prop-line{font-size:12px;color:var(--soft);}
+.prop-pick{font-size:12px;font-weight:700;padding:2px 8px;border-radius:6px;}
+.prop-pick.over{background:rgba(95,124,99,.18);color:var(--green);}
+.prop-pick.under{background:rgba(154,103,97,.18);color:var(--red);}
+.prop-conf-bar{flex:1;height:6px;border-radius:3px;background:var(--bdr2);overflow:hidden;max-width:80px;}
+.prop-conf-fill{height:100%;border-radius:3px;transition:width .4s ease;}
+.prop-conf-pct{font-size:11px;font-weight:700;min-width:36px;text-align:right;}
+.prop-odds{font-size:11px;color:var(--muted);}
+.chart-shell{position:relative;height:200px;margin-top:10px;}
+canvas{display:block;width:100%;height:100%;background:transparent!important;}
+.pbp-card{background:var(--card);backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);border:1px solid var(--bdr);border-radius:var(--r-xl);padding:0;margin-bottom:16px;box-shadow:var(--shadow);overflow:hidden;}
+.pbp-header{display:flex;align-items:center;justify-content:space-between;padding:16px 20px;border-bottom:1px solid var(--bdr);background:var(--thead);}
+.pbp-header h2{margin:0;font-size:16px;}
+.pbp-live-dot{width:8px;height:8px;border-radius:50%;background:var(--red);animation:pulse 1.5s infinite;display:inline-block;margin-right:6px;}
+@keyframes pulse{0%,100%{opacity:1;transform:scale(1);}50%{opacity:.5;transform:scale(1.3);}}
+.pbp-scoreboard{display:flex;align-items:center;justify-content:center;gap:24px;padding:14px 20px;border-bottom:1px solid var(--bdr);background:var(--mbg);}
+.pbp-team{display:flex;align-items:center;gap:10px;}
+.pbp-logo{width:36px;height:36px;object-fit:contain;}
+.pbp-logo-ph{width:36px;height:36px;border-radius:50%;background:var(--acc-s);display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:700;color:var(--acc);}
+.pbp-team-name{font-size:13px;font-weight:600;color:var(--soft);}
+.pbp-team-score{font-size:28px;font-weight:800;color:var(--txt);}
+.pbp-sep{font-size:14px;color:var(--muted);display:flex;flex-direction:column;align-items:center;gap:2px;}
+.pbp-period{font-size:11px;font-weight:600;color:var(--muted);background:var(--sbg);border:1px solid var(--bdr);padding:2px 8px;border-radius:6px;}
+.pbp-clock{font-size:16px;font-weight:700;color:var(--txt);}
+.pbp-feed{height:320px;overflow-y:auto;padding:8px 0;scrollbar-width:thin;scrollbar-color:var(--bdr2) transparent;}
+.pbp-feed::-webkit-scrollbar{width:4px;}.pbp-feed::-webkit-scrollbar-thumb{background:var(--bdr2);border-radius:2px;}
+.pbp-play{display:grid;grid-template-columns:52px 28px 1fr;align-items:start;gap:0;padding:8px 16px;border-bottom:1px solid var(--bdr);transition:background .15s;}
+.pbp-play:hover{background:var(--sbg);}
+.pbp-play.scoring{background:rgba(95,124,99,.06);}
+.pbp-play.scoring:hover{background:rgba(95,124,99,.10);}
+.pbp-play-time{font-size:11px;color:var(--muted);font-weight:600;padding-top:1px;}
+.pbp-play-team{width:24px;height:24px;object-fit:contain;}
+.pbp-play-team-ph{width:24px;height:24px;border-radius:50%;background:var(--acc-s);display:flex;align-items:center;justify-content:center;font-size:8px;font-weight:700;color:var(--acc);}
+.pbp-play-desc{font-size:12px;color:var(--soft);line-height:1.4;padding-top:3px;}
+.pbp-play-desc strong{color:var(--txt);}
+.pbp-play-score{font-size:11px;font-weight:700;color:var(--acc);margin-top:2px;}
+.pbp-empty{text-align:center;padding:40px 20px;color:var(--muted);font-size:13px;}
+.pbp-period-marker{text-align:center;padding:6px;font-size:10px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);background:var(--thead);border-bottom:1px solid var(--bdr);}
 
-const express  = require("express");
-const path     = require("path");
-const learning = require("./learning");
-const { buildEliteLiveModel }    = require("./live_model");
-const { getLiveTrackerData }     = require("./live_tracker");
-const { buildElitePregameModel } = require("./pregame_model");
-const { computeIndependentWinProb, computeEdge } = require("./stats_model");
-const { startAutoGradeScheduler }                = require("./auto_grader");
-const { loadLearnedWeights, applyLearnedWeights, DEFAULT_WEIGHTS } = require("./weight_learner");
-const { predictGameProps }       = require("./prop_model");
-const {
-  recordPropSnap,
-  getPropLearningSummary,
-  gradeUngraded:          gradeProps,
-  startPropGradeScheduler,
-  getPropSnapshots,
-}                                = require("./prop_learning");
+/* ── PLAYERS — 7 stat columns ────────────────────────────────────────── */
+.pl-hdr,.pl-row{display:grid;grid-template-columns:1fr repeat(7,42px);gap:3px;padding:5px 0;font-size:11px;}
+.pl-hdr{border-bottom:1px solid var(--bdr);font-size:9px;font-weight:600;letter-spacing:.05em;text-transform:uppercase;color:var(--muted);padding-bottom:6px;}
+.pl-row{border-bottom:1px solid var(--bdr);}
+.pl-row:last-child{border-bottom:none;}
+.pl-name{color:var(--txt);font-weight:500;text-align:left;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.pl-val{color:var(--soft);text-align:center;}
 
-let buildModelReview;
-try { buildModelReview = require("./model_review").buildModelReview; }
-catch { buildModelReview = () => ({}); }
+.inj-box{background:var(--sbg);border:1px solid var(--bdr);border-radius:var(--r-lg);padding:14px;}
+.inj-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;}
+.inj-title{font-size:11px;font-weight:700;color:var(--soft);text-transform:uppercase;letter-spacing:.05em;}
+.inj-delta{font-size:12px;font-weight:700;}
+.pill{display:inline-block;padding:4px 9px;border-radius:999px;background:var(--card-s);border:1px solid var(--bdr);color:var(--soft);font-size:10px;margin:2px;}
+.pill.out{border-color:rgba(154,103,97,.5);color:var(--red);}
+.pill.dtd{border-color:rgba(167,140,87,.5);color:var(--yellow);}
+.bm-tbl{width:100%;border-collapse:separate;border-spacing:0;font-size:12px;}
+.bm-tbl thead th{padding:9px 10px;color:var(--muted);font-size:10px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;background:var(--thead);border-bottom:1px solid var(--bdr);text-align:center;}
+.bm-tbl thead th:first-child{border-top-left-radius:12px;text-align:left;}
+.bm-tbl thead th:last-child{border-top-right-radius:12px;}
+.bm-tbl tbody td{padding:9px 10px;text-align:center;border-bottom:1px solid var(--bdr);color:var(--soft);background:var(--trow);}
+.bm-tbl tbody tr:nth-child(even) td{background:var(--trowa);}
+.bm-tbl tbody td:first-child{text-align:left;font-size:11px;}
+.opt-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-top:10px;}
+.opt-cell{background:var(--sbg);border:1px solid var(--bdr);border-radius:12px;padding:10px;text-align:center;}
+.opt-cell strong{display:block;color:var(--muted);font-size:9px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;margin-bottom:4px;}
+.opt-cell span{font-size:15px;font-weight:700;color:var(--txt);}
+.acc-bar-wrap{width:100%;height:6px;border-radius:3px;background:var(--bdr2);overflow:hidden;margin:4px 0;}
+.acc-bar-fill{height:100%;border-radius:3px;background:var(--green);}
+.acc-bar-fill.warn{background:var(--yellow);}
+.acc-bar-fill.bad{background:var(--red);}
 
-const app  = express();
-const PORT = process.env.PORT || 3000;
-
-const ODDS_API_KEY         = process.env.ODDS_API_KEY        || "";
-const BALLDONTLIE_API_KEY  = process.env.BALLDONTLIE_API_KEY || "";
-const FANTASYNERDS_API_KEY = process.env.FANTASYNERDS_API_KEY || "";
-
-const SPORT_KEY           = "basketball_nba";
-const REGIONS             = "us";
-const ODDS_FORMAT         = "decimal";
-const FEATURED_MARKETS    = "h2h,spreads,totals";
-const PLAYER_PROP_MARKETS = ["player_points","player_rebounds","player_assists","player_points_rebounds_assists"].join(",");
-const HISTORICAL_LOOKBACKS = [{ label: "2h", ms: 2*60*60*1000 }, { label: "24h", ms: 24*60*60*1000 }];
-
-const currentCache    = new Map();
-const historicalCache = new Map();
-const sideInfoCache   = new Map();
-const edgeHistoryStore  = {};
-const snapshotLogStore  = {};
-
-const CURRENT_TTL    = 25 * 1000;
-const HISTORICAL_TTL = 30 * 60 * 1000;
-const SIDEINFO_TTL   = 10 * 60 * 1000;
-const SNAP_RET       = 500;
-
-let learnedWeights = loadLearnedWeights();
-setInterval(() => { learnedWeights = loadLearnedWeights(); }, 30 * 60 * 1000);
-
-app.use(express.json());
-process.on("unhandledRejection", r => console.error("UNHANDLED:", r));
-process.on("uncaughtException",  e => console.error("UNCAUGHT:", e));
-
-// ─── helpers ──────────────────────────────────────────────────────────────────
-const clamp   = (x, a, b) => Math.max(a, Math.min(b, x));
-const r2      = n => (typeof n === "number" && Number.isFinite(n)) ? Math.round(n * 100) / 100 : null;
-const avg     = vs => { const ns = (vs||[]).filter(v => typeof v==="number"&&Number.isFinite(v)); return ns.length ? ns.reduce((s,v)=>s+v,0)/ns.length : null; };
-const wAvg    = ps => { if(!ps.length) return null; let n=0,d=0; for(const p of ps){n+=p.value*p.weight;d+=p.weight;} return d===0?null:n/d; };
-const noVig   = (a,b) => { if(!a||!b||a<=1||b<=1) return{a:0.5,b:0.5}; const ra=1/a,rb=1/b,t=ra+rb; return{a:ra/t,b:rb/t}; };
-const d2a     = d => { if(typeof d!=="number"||!Number.isFinite(d)||d<=1) return null; return d>=2?Math.round((d-1)*100):Math.round(-100/(d-1)); };
-const p2d     = p => (typeof p==="number"&&Number.isFinite(p)&&p>0&&p<1) ? 1/p : null;
-const p2a     = p => d2a(p2d(p));
-const normTeam= s => String(s||"").toLowerCase().replace(/[^a-z0-9 ]/g,"").replace(/\s+/g," ").trim();
-const teamsMatch = (e,h,a) => normTeam(e?.home_team)===normTeam(h) && normTeam(e?.away_team)===normTeam(a);
-const buildMode = t => Date.now() >= new Date(t).getTime() ? "live" : "pregame";
-const fmtClock  = s => { if(typeof s!=="number"||!Number.isFinite(s)) return "-"; return `${Math.floor(s/60)}:${String(Math.floor(s%60)).padStart(2,"0")}`; };
-const toIso     = ms => new Date(ms).toISOString();
-const todayYmd  = () => new Date().toISOString().slice(0, 10);
-
-// ─── cache ────────────────────────────────────────────────────────────────────
-const cg = (m,k) => { const h=m.get(k); if(!h) return null; if(Date.now()>h.e){m.delete(k);return null;} return h.v; };
-const cs = (m,k,v,t) => m.set(k, {v, e: Date.now()+t});
-
-// ─── fetch ────────────────────────────────────────────────────────────────────
-async function fetchJson(url, opts={}) {
-  const ctrl = new AbortController(), t = setTimeout(()=>ctrl.abort(), 12000);
-  try {
-    const res = await fetch(url, {...opts, signal: ctrl.signal}), txt = await res.text();
-    if (!res.ok) throw new Error(`${res.status}: ${txt.slice(0,200)}`);
-    try { return JSON.parse(txt); } catch { throw new Error(`Bad JSON: ${txt.slice(0,200)}`); }
-  } catch(e) { throw new Error(`fetchJson ${url}: ${e.message}`); }
-  finally { clearTimeout(t); }
+@media(max-width:900px){
+  body{padding:12px;}
+  .g2,.g3,.g4,.g6,.main-stats,.props-grid,.team-selector{grid-template-columns:1fr;}
+  .sig-row{grid-template-columns:100px 1fr 32px;}
+  .pl-hdr,.pl-row{grid-template-columns:1fr repeat(4,36px);}
+  .winprob-wrap{height:140px;}
+  .pbp-feed{height:260px;}
+  .adv-tbl{font-size:11px;}
+  .opt-grid{grid-template-columns:1fr 1fr;}
 }
+</style>
+</head>
+<body data-theme="light">
+<div class="wrap">
 
-const oddsUrl = (p,q) => `https://api.the-odds-api.com${p}?${new URLSearchParams(q)}`;
-const reqOdds = () => !!ODDS_API_KEY;
-const reqBdl  = () => !!BALLDONTLIE_API_KEY;
-const reqFn   = () => !!FANTASYNERDS_API_KEY;
+<div class="topbar">
+  <div class="acc-badge">Model Acc: <span id="accBadge">—</span></div>
+  <button class="theme-toggle" id="themeToggle" aria-label="Toggle theme">
+    <span class="tt-track"><span class="tt-icon sun">☀</span><span class="tt-icon moon">☾</span><span class="tt-thumb"></span></span>
+  </button>
+</div>
 
-// ─── Odds API ─────────────────────────────────────────────────────────────────
-async function getEvents() {
-  const k="events", h=cg(currentCache,k); if(h) return h;
-  const d = await fetchJson(oddsUrl(`/v4/sports/${SPORT_KEY}/events`, {apiKey:ODDS_API_KEY}));
-  cs(currentCache,k,d,CURRENT_TTL); return d;
-}
-async function getBoard() {
-  const k="board", h=cg(currentCache,k); if(h) return h;
-  const d = await fetchJson(oddsUrl(`/v4/sports/${SPORT_KEY}/odds`, {apiKey:ODDS_API_KEY,regions:REGIONS,markets:FEATURED_MARKETS,oddsFormat:ODDS_FORMAT}));
-  cs(currentCache,k,d,CURRENT_TTL); return d;
-}
-async function resolveFeatured({gameId,homeTeam,awayTeam}) {
-  if (gameId) {
-    try {
-      const k=`f:${gameId}`, h=cg(currentCache,k);
-      if (h&&h.home_team) return h;
-      const d = await fetchJson(oddsUrl(`/v4/sports/${SPORT_KEY}/events/${gameId}/odds`, {apiKey:ODDS_API_KEY,regions:REGIONS,markets:FEATURED_MARKETS,oddsFormat:ODDS_FORMAT}));
-      cs(currentCache,k,d,CURRENT_TTL); if(d?.home_team) return d;
-    } catch(e) { if(!String(e.message||"").match(/422|INVALID/)) throw e; }
-  }
-  if (!homeTeam||!awayTeam) throw new Error("Missing team fallback");
-  const board = await getBoard();
-  const m = (board||[]).find(e => teamsMatch(e,homeTeam,awayTeam));
-  if (!m) throw new Error(`No event for ${awayTeam} @ ${homeTeam}`);
-  return m;
-}
-async function getHistSnap(dateIso) {
-  const k=`hist:${dateIso}`, h=cg(historicalCache,k); if(h) return h;
-  const d = await fetchJson(oddsUrl(`/v4/historical/sports/${SPORT_KEY}/odds`, {apiKey:ODDS_API_KEY,regions:REGIONS,markets:FEATURED_MARKETS,oddsFormat:ODDS_FORMAT,date:dateIso}));
-  cs(historicalCache,k,d,HISTORICAL_TTL); return d;
-}
-async function getProps(evtId) {
-  if (!evtId) return {bookmakers:[]};
-  const k=`props:${evtId}`, h=cg(currentCache,k); if(h) return h;
-  const url = oddsUrl(`/v4/sports/${SPORT_KEY}/events/${evtId}/odds`, {apiKey:ODDS_API_KEY,regions:REGIONS,markets:PLAYER_PROP_MARKETS,oddsFormat:ODDS_FORMAT});
-  try { const d=await fetchJson(url); cs(currentCache,k,d,CURRENT_TTL); return d; }
-  catch(e) { console.error("props:", e.message); return {bookmakers:[]}; }
-}
+<div class="card hero-card">
+  <h1>Edge Model</h1>
+  <p class="subtle" id="heroSub">NBA Prediction Engine</p>
+  <div class="score-display score-hidden" id="scoreDisplay">
+    <div class="score-team">
+      <div id="awayLogoHero" class="score-logo-placeholder">A</div>
+      <div class="score-name" id="awayNameHero">Away</div>
+      <div class="score-pts" id="awayScoreHero">—</div>
+    </div>
+    <div style="display:flex;flex-direction:column;align-items:center;gap:4px;">
+      <div class="score-sep">—</div>
+      <div class="score-period" id="periodDisplay">Q1 12:00</div>
+    </div>
+    <div class="score-team">
+      <div id="homeLogoHero" class="score-logo-placeholder">H</div>
+      <div class="score-name" id="homeNameHero">Home</div>
+      <div class="score-pts" id="homeScoreHero">—</div>
+    </div>
+  </div>
+  <p id="predScore" style="font-size:26px;font-weight:800;color:var(--acc);display:none;margin:6px 0 2px;"></p>
+  <p id="predScoreLabel" style="font-size:12px;color:var(--muted);display:none;">Projected final score</p>
+</div>
 
-// ─── Historical comparisons ───────────────────────────────────────────────────
-async function buildHistComps(homeTeam, awayTeam) {
-  const out = {};
-  for (const lb of HISTORICAL_LOOKBACKS) {
-    try {
-      const snap  = await getHistSnap(toIso(Date.now()-lb.ms));
-      const found = (snap?.data||snap||[]).find(e => teamsMatch(e,homeTeam,awayTeam));
-      if (!found) { out[lb.label]=null; continue; }
-      const hPP=[], aPP=[];
-      for (const bm of found?.bookmakers||[]) {
-        const h2h = bm.markets?.find(m=>m.key==="h2h");
-        if (!h2h) continue;
-        const ho=h2h.outcomes?.find(o=>o.name===found.home_team), ao=h2h.outcomes?.find(o=>o.name===found.away_team);
-        if (ho&&ao&&ho.price>1&&ao.price>1) {
-          const nv=noVig(ho.price,ao.price);
-          hPP.push({value:nv.a,weight:1}); aPP.push({value:nv.b,weight:1});
-        }
-      }
-      const hMP = wAvg(hPP), aMP = wAvg(aPP);
-      if (hMP) out[lb.label] = { homeMarketProb:r2(hMP), awayMarketProb:r2(aMP) };
-      else out[lb.label] = null;
-    } catch { out[lb.label] = null; }
-  }
-  return out;
-}
+<div class="card">
+  <label for="gameSelect">Select NBA game</label>
+  <select id="gameSelect"></select>
+  <div id="statusMsg" class="msg">Loading...</div>
+</div>
 
-// ─── Props (sportsbook de-vig) ────────────────────────────────────────────────
-function buildProps(propsEvt) {
-  const gm = {};
-  for (const bm of propsEvt?.bookmakers||[])
-    for (const mkt of bm.markets||[]) {
-      if (!gm[mkt.key]) gm[mkt.key] = [];
-      for (const o of mkt.outcomes||[])
-        gm[mkt.key].push({book:bm.key, player:o.description||"", side:o.name||"", point:o.point??null, price:o.price??null});
-    }
-  const mm = {"player_points":"points","player_assists":"assists","player_rebounds":"rebounds","player_threes":"threes","player_threes_made":"threes"};
-  const sec = {points:[],assists:[],rebounds:[],threes:[]};
-  for (const [mk,dk] of Object.entries(mm)) {
-    const grouped = {};
-    for (const o of gm[mk]||[]) {
-      const key = `${o.player}__${o.point}`;
-      if (!grouped[key]) grouped[key] = {player:o.player, point:o.point, overPrices:[], underPrices:[]};
-      if ((o.side||"").toLowerCase()==="over"  && typeof o.price==="number") grouped[key].overPrices.push(o.price);
-      if ((o.side||"").toLowerCase()==="under" && typeof o.price==="number") grouped[key].underPrices.push(o.price);
-    }
-    sec[dk] = Object.values(grouped).map(item => {
-      const ao=avg(item.overPrices), au=avg(item.underPrices);
-      let hp=null;
-      if (typeof ao==="number"&&typeof au==="number") hp=noVig(ao,au).a;
-      else if (typeof ao==="number") hp=1/ao;
-      const dec = hp!=null ? (hp>0.5 ? {pick:"over",probability:hp} : {pick:"under",probability:1-hp}) : null;
-      return {player:item.player, line:r2(item.point), overDecimal:r2(ao), overAmerican:d2a(ao),
-              hitProbability:r2(hp), coverage:item.overPrices.length+item.underPrices.length,
-              pick:dec?.pick||null, pickProbability:r2(dec?.probability)};
-    }).filter(r=>r.player&&typeof r.line==="number")
-      .sort((a,b)=>(b.coverage-a.coverage)||((b.pickProbability||0)-(a.pickProbability||0)))
-      .slice(0,12);
-  }
-  const all = [...sec.points,...sec.assists,...sec.rebounds,...sec.threes];
-  if (!all.length) return {sections:sec, signal:{adj:0,depth:0}};
-  let str=0, obs=0;
-  for (const r of all) {
-    str += clamp((r.coverage-1)*0.0015,0,0.01) + clamp((r.line||0)*0.0005,0,0.02) + clamp(((r.hitProbability||0.5)-0.5)*0.05,-0.015,0.015);
-    obs++;
-  }
-  return {sections:sec, signal:{adj:clamp((str/Math.max(obs,1))*0.4,0,0.01), depth:obs}};
-}
+<div class="team-selector" id="teamSelector">
+  <div class="team-card active-home" id="homeCard" onclick="selectTeam('home')">
+    <span class="tc-badge" id="homePickBadge" style="display:none">PICK</span>
+    <div id="homeLogoCard" class="tc-logo-ph">H</div>
+    <div class="tc-name" id="homeCardName">Home Team</div>
+    <div class="tc-record" id="homeCardRecord">—</div>
+    <div class="tc-implied" id="homeCardImplied">—</div>
+    <div class="tc-implied-label">AI win probability</div>
+    <div class="tc-stats">
+      <div class="tc-stat"><strong>Market</strong><span id="homeCardTrue">—</span></div>
+      <div class="tc-stat"><strong>Edge</strong><span id="homeCardEdge">—</span></div>
+    </div>
+  </div>
+  <div class="team-card inactive" id="awayCard" onclick="selectTeam('away')">
+    <span class="tc-badge" id="awayPickBadge" style="display:none">PICK</span>
+    <div id="awayLogoCard" class="tc-logo-ph">A</div>
+    <div class="tc-name" id="awayCardName">Away Team</div>
+    <div class="tc-record" id="awayCardRecord">—</div>
+    <div class="tc-implied" id="awayCardImplied">—</div>
+    <div class="tc-implied-label">AI win probability</div>
+    <div class="tc-stats">
+      <div class="tc-stat"><strong>Market</strong><span id="awayCardTrue">—</span></div>
+      <div class="tc-stat"><strong>Edge</strong><span id="awayCardEdge">—</span></div>
+    </div>
+  </div>
+</div>
 
-// ─── Injury helpers ───────────────────────────────────────────────────────────
-const TEAM_ALIASES = {
-  "Atlanta Hawks":["hawks","atl","atlanta"],
-  "Boston Celtics":["celtics","bos","boston"],
-  "Brooklyn Nets":["nets","bkn","brooklyn"],
-  "Charlotte Hornets":["hornets","cha","charlotte"],
-  "Chicago Bulls":["bulls","chi","chicago"],
-  "Cleveland Cavaliers":["cavaliers","cavs","cle","cleveland"],
-  "Dallas Mavericks":["mavericks","mavs","dal","dallas"],
-  "Denver Nuggets":["nuggets","den","denver"],
-  "Detroit Pistons":["pistons","det","detroit"],
-  "Golden State Warriors":["warriors","gsw","golden state","golden"],
-  "Houston Rockets":["rockets","hou","houston"],
-  "Indiana Pacers":["pacers","ind","indiana"],
-  "Los Angeles Clippers":["clippers","lac","la clippers"],
-  "Los Angeles Lakers":["lakers","lal","la lakers"],
-  "Memphis Grizzlies":["grizzlies","mem","memphis"],
-  "Miami Heat":["heat","mia","miami"],
-  "Milwaukee Bucks":["bucks","mil","milwaukee"],
-  "Minnesota Timberwolves":["timberwolves","wolves","min","minnesota"],
-  "New Orleans Pelicans":["pelicans","nop","new orleans"],
-  "New York Knicks":["knicks","nyk","new york"],
-  "Oklahoma City Thunder":["thunder","okc","oklahoma"],
-  "Orlando Magic":["magic","orl","orlando"],
-  "Philadelphia 76ers":["76ers","sixers","phi","philadelphia","phila"],
-  "Phoenix Suns":["suns","phx","phoenix"],
-  "Portland Trail Blazers":["trail blazers","blazers","por","portland"],
-  "Sacramento Kings":["kings","sac","sacramento"],
-  "San Antonio Spurs":["spurs","sas","san antonio"],
-  "Toronto Raptors":["raptors","tor","toronto"],
-  "Utah Jazz":["jazz","uta","utah"],
-  "Washington Wizards":["wizards","was","washington"],
+<div class="card">
+  <h2 id="matchup" style="text-align:center">Waiting for selection</h2>
+  <p id="pick" style="text-align:center;color:var(--soft);margin-top:4px;">Pick: —</p>
+  <div class="main-stats">
+    <div class="stat"><strong>Edge</strong><p id="edgeVal">—</p></div>
+    <div class="stat"><strong>Verdict</strong><p id="verdict">—</p></div>
+    <div class="stat"><strong>Mode</strong><p id="gameMode">—</p></div>
+    <div class="stat"><strong>Confidence</strong><p id="confLabel">—</p><p class="sub" id="confPct">—</p></div>
+    <div class="stat"><strong>Books</strong><p id="bookCount">—</p></div>
+  </div>
+  <!-- 2. Kelly Criterion -->
+  <div class="main-stats" style="margin-top:8px">
+    <div class="stat"><strong>Kelly Stake</strong><p id="kellyVal" style="color:var(--green)">—</p><p class="sub" id="kellyLabel">—</p></div>
+    <div class="stat"><strong>Travel</strong><p id="travelFatigueVal">—</p></div>
+    <div class="stat"><strong>Ref Impact</strong><p id="refImpact">—</p><p class="sub" id="refNames"></p></div>
+    <div class="stat"><strong>Season</strong><p id="weightsStatus">—</p></div>
+    <div class="stat"><strong>SOS</strong><p id="sosDisplay">—</p></div>
+  </div>
+  <!-- 9. Correlated parlay warning -->
+  <div id="parlayWarning" style="display:none;margin-top:8px;padding:8px 14px;background:rgba(167,140,87,.15);border:1px solid var(--yellow);border-radius:12px;font-size:12px;color:var(--yellow)"></div>
+</div>
+
+<div class="card" id="oddsCard">
+  <h2>Odds / Probability — <span id="selectedTeamName" style="color:var(--acc)">Select a team above</span></h2>
+  <div class="g4" style="margin-top:12px;">
+    <div class="stat"><strong>Best Odds</strong><p id="oddsDecimal">—</p><p class="sub" id="oddsAm">—</p></div>
+    <div class="stat"><strong>Implied Prob</strong><p id="impliedPct">—</p><p class="sub" id="impliedAm">—</p></div>
+    <div class="stat"><strong>True Prob</strong><p id="truePct">—</p><p class="sub" id="trueAm">—</p></div>
+    <div class="stat"><strong>Stake</strong><p id="stakeTier">—</p><p class="sub" id="stakeFrac">—</p></div>
+  </div>
+</div>
+
+<div class="card">
+  <h2>Win Probability</h2>
+  <p class="subtle" id="winProbSubtitle">Live probability of each team winning</p>
+  <div class="winprob-wrap">
+    <div class="winprob-label-home" id="wpLabelHome">Home</div>
+    <div class="winprob-label-away" id="wpLabelAway">Away</div>
+    <div class="winprob-pct" id="wpCurrentPct">—</div>
+    <canvas id="winProbChart"></canvas>
+  </div>
+</div>
+
+<div class="card">
+  <h2>AI Learning Status</h2>
+  <p class="subtle">Self-calibrates after every graded game</p>
+  <div class="opt-grid">
+    <div class="opt-cell"><strong>Overall Acc</strong><span id="overallAcc">—</span><div class="acc-bar-wrap"><div class="acc-bar-fill" id="overallAccBar" style="width:0%"></div></div></div>
+    <div class="opt-cell"><strong>Bet Now Acc</strong><span id="betNowAcc">—</span></div>
+    <div class="opt-cell"><strong>Graded Games</strong><span id="gradedCount">—</span></div>
+    <div class="opt-cell"><strong>Weights</strong><span id="weightsStatus">—</span></div>
+    <div class="opt-cell"><strong>Stats Blend</strong><span id="statsBlend">—</span></div>
+    <div class="opt-cell"><strong>NBA Service</strong><span id="nbaStatus">—</span></div>
+  </div>
+</div>
+
+<div class="card">
+  <h2>Signal Breakdown <span style="font-size:12px;color:var(--muted);font-weight:400">22 independent signals</span></h2>
+  <p class="subtle" id="sigSubtitle">Green = home, Red = away. Width = signal strength. Sorted by weight.</p>
+  <div class="sig-wrap" id="sigGrid"></div>
+</div>
+
+<div class="card">
+  <h2>Advanced Stats</h2>
+  <p class="subtle" id="advSubtitle">Official NBA metrics — injury-adjusted</p>
+  <table class="adv-tbl">
+    <thead><tr><th>Metric</th><th id="homeTH">Home</th><th id="awayTH">Away</th><th>Edge</th></tr></thead>
+    <tbody id="advBody"></tbody>
+  </table>
+</div>
+
+<div class="card">
+  <h2>Injury Impact</h2>
+  <div class="g2">
+    <div class="inj-box">
+      <div class="inj-header"><span class="inj-title" id="homeInjTitle">Home</span><span id="homeNetDelta" style="font-size:11px;color:var(--muted)">Net: —</span></div>
+      <div id="homeInjuries">No injuries</div>
+    </div>
+    <div class="inj-box">
+      <div class="inj-header"><span class="inj-title" id="awayInjTitle">Away</span><span id="awayNetDelta" style="font-size:11px;color:var(--muted)">Net: —</span></div>
+      <div id="awayInjuries">No injuries</div>
+    </div>
+  </div>
+</div>
+
+<!-- PLAYER IMPACT -->
+<div class="card">
+  <h2>Player Impact</h2>
+  <div class="g2">
+    <div>
+      <h3 id="homePlayersH" style="text-align:center;margin-bottom:6px">Home</h3>
+      <div class="pl-hdr">
+        <span>Player</span><span>PTS</span><span>REB</span><span>AST</span><span>STL</span><span>BLK</span><span>±</span><span>USG</span>
+      </div>
+      <div id="homePlayers"></div>
+    </div>
+    <div>
+      <h3 id="awayPlayersH" style="text-align:center;margin-bottom:6px">Away</h3>
+      <div class="pl-hdr">
+        <span>Player</span><span>PTS</span><span>REB</span><span>AST</span><span>STL</span><span>BLK</span><span>±</span><span>USG</span>
+      </div>
+      <div id="awayPlayers"></div>
+    </div>
+  </div>
+</div>
+
+<div class="card">
+  <h2>Line Movement</h2>
+  <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-top:10px;">
+    <div class="stat"><strong>2h Move</strong><p id="move2h">—</p></div>
+    <div class="stat"><strong>24h Move</strong><p id="move24h">—</p></div>
+    <div class="stat"><strong>Avg Spread</strong><p id="avgSpread">—</p></div>
+    <div class="stat"><strong>Avg Total</strong><p id="avgTotal">—</p></div>
+    <div class="stat"><strong>Disagreement</strong><p id="disagPenalty">—</p></div>
+    <div class="stat"><strong>Ref Impact</strong><p id="refImpact">—</p><p class="sub" id="refNames"></p></div>
+  </div>
+</div>
+
+<div class="card">
+  <h2>Market Prices</h2>
+  <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-top:10px;">
+    <div class="stat"><strong>Best Home</strong><p id="bestHome">—</p></div>
+    <div class="stat"><strong>Best Away</strong><p id="bestAway">—</p></div>
+    <div class="stat"><strong>Avg Home</strong><p id="avgHome">—</p></div>
+    <div class="stat"><strong>Avg Away</strong><p id="avgAway">—</p></div>
+  </div>
+</div>
+
+<div class="card">
+  <h2>Edge — Last 15 Minutes</h2>
+  <div class="chart-shell"><canvas id="edgeChart"></canvas></div>
+</div>
+
+<div class="card">
+  <h2>Bookmaker Comparison</h2>
+  <table class="bm-tbl">
+    <thead><tr><th>Book</th><th>Home</th><th>Away</th><th>Spread</th><th>Total</th></tr></thead>
+    <tbody id="bmBody"></tbody>
+  </table>
+</div>
+
+<div class="card">
+  <h2>Player Props <span style="font-size:12px;color:var(--muted);font-weight:400">— AI confidence scores</span></h2>
+  <div class="props-grid">
+    <div class="prop-sec"><h3 style="margin-bottom:10px">Points</h3><div id="propsPoints">No data</div></div>
+    <div class="prop-sec"><h3 style="margin-bottom:10px">Assists</h3><div id="propsAssists">No data</div></div>
+    <div class="prop-sec"><h3 style="margin-bottom:10px">Rebounds</h3><div id="propsRebounds">No data</div></div>
+    <div class="prop-sec"><h3 style="margin-bottom:10px">3-Pointers</h3><div id="propsThrees">No data</div></div>
+  </div>
+</div>
+
+<div class="pbp-card" id="pbpCard">
+  <div class="pbp-header">
+    <h2 style="text-align:left;display:flex;align-items:center;"><span class="pbp-live-dot" id="pbpDot" style="display:none"></span>Play by Play</h2>
+    <span style="font-size:11px;color:var(--muted)" id="pbpStatus">Waiting for game...</span>
+  </div>
+  <div class="pbp-scoreboard" id="pbpScoreboard">
+    <div class="pbp-team">
+      <div id="pbpAwayLogo" class="pbp-logo-ph">A</div>
+      <div>
+        <div class="pbp-team-name" id="pbpAwayName">Away</div>
+        <div class="pbp-team-score" id="pbpAwayScore">—</div>
+      </div>
+    </div>
+    <div class="pbp-sep">
+      <div class="pbp-clock" id="pbpClock">—</div>
+      <div class="pbp-period" id="pbpPeriod">—</div>
+    </div>
+    <div class="pbp-team">
+      <div>
+        <div class="pbp-team-name" id="pbpHomeName">Home</div>
+        <div class="pbp-team-score" id="pbpHomeScore">—</div>
+      </div>
+      <div id="pbpHomeLogo" class="pbp-logo-ph">H</div>
+    </div>
+  </div>
+  <div class="pbp-feed" id="pbpFeed">
+    <div class="pbp-empty">Select a live game to see play-by-play</div>
+  </div>
+</div>
+
+</div><!-- /wrap -->
+
+<script>
+const NBA_TEAMS = {
+  "Atlanta Hawks":{id:1610612737,abbr:"ATL"},"Boston Celtics":{id:1610612738,abbr:"BOS"},
+  "Brooklyn Nets":{id:1610612751,abbr:"BKN"},"Charlotte Hornets":{id:1610612766,abbr:"CHA"},
+  "Chicago Bulls":{id:1610612741,abbr:"CHI"},"Cleveland Cavaliers":{id:1610612739,abbr:"CLE"},
+  "Dallas Mavericks":{id:1610612742,abbr:"DAL"},"Denver Nuggets":{id:1610612743,abbr:"DEN"},
+  "Detroit Pistons":{id:1610612765,abbr:"DET"},"Golden State Warriors":{id:1610612744,abbr:"GSW"},
+  "Houston Rockets":{id:1610612745,abbr:"HOU"},"Indiana Pacers":{id:1610612754,abbr:"IND"},
+  "Los Angeles Clippers":{id:1610612746,abbr:"LAC"},"Los Angeles Lakers":{id:1610612747,abbr:"LAL"},
+  "Memphis Grizzlies":{id:1610612763,abbr:"MEM"},"Miami Heat":{id:1610612748,abbr:"MIA"},
+  "Milwaukee Bucks":{id:1610612749,abbr:"MIL"},"Minnesota Timberwolves":{id:1610612750,abbr:"MIN"},
+  "New Orleans Pelicans":{id:1610612740,abbr:"NOP"},"New York Knicks":{id:1610612752,abbr:"NYK"},
+  "Oklahoma City Thunder":{id:1610612760,abbr:"OKC"},"Orlando Magic":{id:1610612753,abbr:"ORL"},
+  "Philadelphia 76ers":{id:1610612755,abbr:"PHI"},"Phoenix Suns":{id:1610612756,abbr:"PHX"},
+  "Portland Trail Blazers":{id:1610612757,abbr:"POR"},"Sacramento Kings":{id:1610612758,abbr:"SAC"},
+  "San Antonio Spurs":{id:1610612759,abbr:"SAS"},"Toronto Raptors":{id:1610612761,abbr:"TOR"},
+  "Utah Jazz":{id:1610612762,abbr:"UTA"},"Washington Wizards":{id:1610612764,abbr:"WAS"},
 };
-
-function getTeamTokens(name) {
-  const nm = normTeam(name);
-  const aliases = TEAM_ALIASES[name] || [];
-  const tokens = new Set([nm, ...aliases]);
-  const last = nm.split(" ").pop();
-  if (last && last.length > 3) tokens.add(last);
-  return [...tokens].filter(Boolean);
+function logoUrl(name){const t=NBA_TEAMS[name];if(!t)return null;return`https://cdn.nba.com/logos/nba/${t.id}/global/L/logo.svg`;}
+function abbr(name){return NBA_TEAMS[name]?.abbr||name?.split(" ").pop()?.slice(0,3).toUpperCase()||"?";}
+function setLogo(elId,teamName,size=62){
+  const el=document.getElementById(elId);if(!el)return;
+  const url=logoUrl(teamName);
+  if(url){const img=document.createElement("img");img.src=url;img.style.cssText=`width:${size}px;height:${size}px;object-fit:contain;`;img.alt=teamName;img.onerror=()=>{img.style.display="none";el.style.display="flex";el.textContent=abbr(teamName);};el.parentNode.replaceChild(img,el);img.id=elId;}
+  else{el.textContent=abbr(teamName);}
 }
 
-function rowBelongsToTeam(row, teamName) {
-  const teamFields = [
-    row?.team?.full_name, row?.team?.abbreviation,
-    row?.player?.team?.full_name, row?.player?.team?.abbreviation,
-    row?.TeamName, row?.team_name, row?.teamName,
-  ].filter(Boolean);
-  const tokens = getTeamTokens(teamName);
-  for (const field of teamFields) {
-    const fn = normTeam(String(field));
-    if (tokens.some(t => fn === t || fn.includes(t))) return true;
-  }
-  const nm  = normTeam(teamName);
-  const j   = JSON.stringify(row).toLowerCase();
-  const last = nm.split(" ").pop();
-  if (last && last.length >= 4 && j.includes(`"${last}"`)) return true;
-  if (j.includes(nm.replace(/[^a-z0-9]/g," ").trim())) return true;
-  return false;
+let selId=null,gMode="pregame",rfTimer=null,edgeChart=null,wpChart=null;
+let selectedTeam="home",lastData=null,winProbHistory=[];
+const $=id=>document.getElementById(id);
+
+// Theme
+const css=n=>getComputedStyle(document.body).getPropertyValue(n).trim();
+const setTheme=t=>{document.body.setAttribute("data-theme",t);localStorage.setItem("edge_th",t);[edgeChart,wpChart].forEach(c=>{if(c)refreshChartTheme(c);});};
+const getSavedTheme=()=>{const s=localStorage.getItem("edge_th");return s==="light"||s==="dark"?s:"light";};
+$("themeToggle").addEventListener("click",()=>setTheme(document.body.getAttribute("data-theme")==="light"?"dark":"light"));
+setTheme(getSavedTheme());
+
+// Formatters
+const fPct=(v,d=1)=>typeof v==="number"?`${(v*100).toFixed(d)}%`:"—";
+const fNum=(v,d=1)=>typeof v==="number"?v.toFixed(d):"—";
+const fAm=v=>typeof v==="number"&&v!==null?(v>0?`+${v}`:`${v}`):"—";
+const fSign=(v,d=1)=>typeof v==="number"?(v>=0?`+${v.toFixed(d)}`:v.toFixed(d)):"—";
+const d2a=d=>{if(typeof d!=="number"||!isFinite(d)||d<=1)return null;return d>=2?Math.round((d-1)*100):Math.round(-100/(d-1));};
+
+// Format player name as "D.Mitchell"
+function fmtName(name){
+  const parts=(name||"").trim().split(" ");
+  if(parts.length>=2) return `${parts[0].charAt(0)}.${parts.slice(1).join(" ")}`;
+  return name||"—";
 }
 
-const nbdl = p => Array.isArray(p) ? p : Array.isArray(p?.data) ? p.data : [];
+// Charts
+function buildEdgeChart(){
+  edgeChart=new Chart($("edgeChart").getContext("2d"),{type:"line",
+    data:{labels:[],datasets:[{label:"Edge",data:[],borderColor:css("--cl"),backgroundColor:css("--cf"),fill:true,tension:.34,pointRadius:0,borderWidth:2}]},
+    options:{responsive:true,maintainAspectRatio:false,animation:{duration:250},
+      plugins:{legend:{display:false},tooltip:{backgroundColor:css("--ct"),titleColor:"#f5efe6",bodyColor:"#f5efe6",borderColor:css("--bdr"),borderWidth:1,displayColors:false,callbacks:{label:c=>`Edge: ${(c.parsed.y*100).toFixed(2)}%`}}},
+      scales:{x:{grid:{display:false},border:{display:false},ticks:{color:css("--ctk"),maxRotation:0,autoSkip:true,maxTicksLimit:7,font:{size:10}}},
+        y:{grid:{color:css("--cg")},border:{display:false},ticks:{color:css("--ctk"),callback:v=>(v*100).toFixed(1)+"%",font:{size:10}}}}}});
+}
+function buildWinProbChart(){
+  wpChart=new Chart($("winProbChart").getContext("2d"),{type:"line",
+    data:{labels:[],datasets:[
+      {label:"Home Win%",data:[],borderColor:css("--home-c"),backgroundColor:"rgba(37,99,235,.08)",fill:{target:"origin",above:"rgba(37,99,235,.10)",below:"rgba(220,38,38,.10)"},tension:.35,pointRadius:0,borderWidth:2.5},
+      {label:"50%",data:[],borderColor:css("--muted"),borderDash:[4,4],pointRadius:0,borderWidth:1,fill:false},
+    ]},
+    options:{responsive:true,maintainAspectRatio:false,animation:{duration:250},
+      plugins:{legend:{display:false},tooltip:{backgroundColor:css("--ct"),titleColor:"#f5efe6",bodyColor:"#f5efe6",borderColor:css("--bdr"),borderWidth:1,displayColors:false,callbacks:{label:c=>c.datasetIndex===0?`Home Win: ${(c.parsed.y*100).toFixed(1)}%`:"50% baseline"}}},
+      scales:{x:{grid:{display:false},border:{display:false},ticks:{color:css("--ctk"),maxRotation:0,autoSkip:true,maxTicksLimit:6,font:{size:10}}},
+        y:{grid:{color:css("--cg")},border:{display:false},min:0,max:1,
+          ticks:{color:css("--ctk"),callback:v=>v===0.5?"50%":(v*100).toFixed(0)+"%",font:{size:10}}}}}});
+}
+function refreshChartTheme(c){
+  if(!c)return;
+  c.options.plugins.tooltip.backgroundColor=css("--ct");c.options.plugins.tooltip.borderColor=css("--bdr");
+  c.options.scales.x.ticks.color=css("--ctk");c.options.scales.y.ticks.color=css("--ctk");
+  if(c.options.scales.y.grid)c.options.scales.y.grid.color=css("--cg");
+  c.update();
+}
+buildEdgeChart();buildWinProbChart();
 
-async function getBdlInjuries() {
-  if (!reqBdl()) return {available:false, rows:[], source:"none"};
-  const k="bdl:inj", h=cg(sideInfoCache,k); if(h) return h;
-  try {
-    const r = await fetchJson("https://api.balldontlie.io/v1/player_injuries?per_page=100", {headers:{Authorization:BALLDONTLIE_API_KEY}});
-    const v = {available:true, rows:nbdl(r), source:"balldontlie"};
-    cs(sideInfoCache,k,v,SIDEINFO_TTL); return v;
-  } catch(e) { console.error("bdl inj:", e.message); return {available:false,rows:[],source:"none"}; }
-}
-async function getBdlLineups(d="") {
-  if (!reqBdl()) return {available:false,rows:[],source:"none"};
-  const date=d||todayYmd(), k=`bdl:lu:${date}`, h=cg(sideInfoCache,k); if(h) return h;
-  try {
-    const r = await fetchJson(`https://api.balldontlie.io/v1/lineups?dates[]=${encodeURIComponent(date)}&per_page=100`, {headers:{Authorization:BALLDONTLIE_API_KEY}});
-    const v = {available:true, rows:nbdl(r), source:"balldontlie"};
-    cs(sideInfoCache,k,v,SIDEINFO_TTL); return v;
-  } catch(e) { return {available:false,rows:[],source:"none"}; }
-}
-async function getFnInjuries() {
-  if (!reqFn()) return {available:false,rows:[],source:"none"};
-  const k="fn:inj", h=cg(sideInfoCache,k); if(h) return h;
-  try {
-    const r = await fetchJson(`https://api.fantasynerds.com/v1/nba/injuries?apikey=${encodeURIComponent(FANTASYNERDS_API_KEY)}`);
-    const rows = Array.isArray(r) ? r : Array.isArray(r?.data) ? r.data : [];
-    const v = {available:true, rows, source:"fantasynerds"};
-    cs(sideInfoCache,k,v,SIDEINFO_TTL); return v;
-  } catch { return {available:false,rows:[],source:"none"}; }
-}
-async function bestInjuries() {
-  const b = await getBdlInjuries().catch(()=>({available:false,rows:[]}));
-  if (b.available && b.rows.length) return b;
-  return getFnInjuries().catch(()=>({available:false,rows:[],source:"none"}));
-}
-async function bestLineups(d="") {
-  return getBdlLineups(d).catch(()=>({available:false,rows:[],source:"none"}));
-}
-
-function extractPlayerName(obj) {
-  if (!obj) return "";
-  if (obj.player && typeof obj.player === "object") {
-    const full = `${obj.player.first_name||""} ${obj.player.last_name||""}`.trim();
-    if (full.length > 1) return full;
-  }
-  for (const k of ["PlayerName","playerName","name","Name","full_name","player_name"])
-    if (typeof obj[k]==="string" && obj[k].length>1) return obj[k];
-  return "";
-}
-function injSeverity(r) {
-  const t = JSON.stringify(r).toLowerCase();
-  if (t.includes("out"))          return 1.0;
-  if (t.includes("doubtful"))     return 0.8;
-  if (t.includes("questionable")) return 0.5;
-  if (t.includes("probable"))     return 0.2;
-  return 0.4;
-}
-function depthRole(r) {
-  const t = JSON.stringify(r).toLowerCase();
-  if (t.includes("starter")||t.includes('"1"')||t.includes("1st")) return 1.0;
-  if (t.includes("2nd")||t.includes('"2"')) return 0.55;
-  if (t.includes("3rd")||t.includes('"3"')) return 0.25;
-  return 0.45;
+function updateWinProbChart(homeProb){
+  const ts=new Date().toLocaleTimeString();
+  winProbHistory.push({ts,homeProb});
+  winProbHistory=winProbHistory.filter((_,i)=>i>=winProbHistory.length-40);
+  const labels=winProbHistory.map(p=>p.ts),vals=winProbHistory.map(p=>p.homeProb),base=new Array(labels.length).fill(0.5);
+  wpChart.data.labels=labels;wpChart.data.datasets[0].data=vals;wpChart.data.datasets[1].data=base;wpChart.update();
+  const cur=vals[vals.length-1];$("wpCurrentPct").textContent=typeof cur==="number"?(cur*100).toFixed(0)+"%":"—";
 }
 
-function summarizeInjury(homeTeam, awayTeam, injRows, linRows) {
-  const homeInj = injRows.filter(r => rowBelongsToTeam(r, homeTeam));
-  const awayInj = injRows.filter(r => rowBelongsToTeam(r, awayTeam));
-  const homeLin = linRows.filter(r => rowBelongsToTeam(r, homeTeam));
-  const awayLin = linRows.filter(r => rowBelongsToTeam(r, awayTeam));
-
-  function calcPenalty(inj, lin) {
-    let penalty=0, startersOut=0, projStarters=0;
-    for (const i of inj) {
-      const sev = injSeverity(i);
-      const pn  = extractPlayerName(i).toLowerCase();
-      const lm  = pn ? lin.find(r => JSON.stringify(r).toLowerCase().includes(pn)) : null;
-      const rw  = lm ? depthRole(lm) : 0.4;
-      penalty += 0.005 + sev*0.012 + rw*0.010;
-      if (sev >= 0.8 && rw >= 0.8) startersOut++;
-    }
-    for (const l of lin) if (depthRole(l) >= 0.8) projStarters++;
-    return {
-      penalty:          clamp(penalty, 0, 0.12),
-      startersOut,
-      starterCertainty: lin.length ? clamp(projStarters/5, 0, 1) : 0,
-    };
-  }
-
-  const hc = calcPenalty(homeInj, homeLin);
-  const ac = calcPenalty(awayInj, awayLin);
-
-  return {
-    available:            injRows.length > 0 || linRows.length > 0,
-    homeInjuriesCount:    homeInj.length,
-    awayInjuriesCount:    awayInj.length,
-    homePenalty:          hc.penalty,
-    awayPenalty:          ac.penalty,
-    homeStartersOut:      hc.startersOut,
-    awayStartersOut:      ac.startersOut,
-    homeStarterCertainty: hc.starterCertainty,
-    awayStarterCertainty: ac.starterCertainty,
-    lineupRowsCount:      homeLin.length + awayLin.length,
-    homeInjuries:         homeInj,
-    awayInjuries:         awayInj,
-    lineups:              [...homeLin, ...awayLin],
-  };
+function selectTeam(side){
+  selectedTeam=side;
+  $("homeCard").className="team-card"+(side==="home"?" active-home":" inactive");
+  $("awayCard").className="team-card"+(side==="away"?" active-away":" inactive");
+  if(lastData)updateOddsCard(lastData);
+}
+function updateOddsCard(d){
+  const isHome=selectedTeam==="home";
+  const teamName=isHome?d.homeTeam:d.awayTeam;
+  $("selectedTeamName").textContent=teamName||"—";
+  const implied=isHome?d.impliedProbability:1-(d.impliedProbability||0.5);
+  const trueP=isHome?d.trueProbability:1-(d.trueProbability||0.5);
+  const edge=isHome?d.edge:-d.edge;
+  const decimal=isHome?d.oddsFormats?.decimal:null;
+  setV("oddsDecimal",typeof decimal==="number"?decimal.toFixed(2):"—");
+  setV("oddsAm",fAm(d2a(decimal)));
+  setV("impliedPct",fPct(implied));
+  setV("impliedAm",fAm(d.impliedProbabilityFormats?.american));
+  setV("truePct",fPct(trueP));
+  setV("trueAm","");
+  setV("stakeTier",d.stakeSuggestion?.tier||"—");
+  setV("stakeFrac",typeof d.stakeSuggestion?.fraction==="number"?`${(d.stakeSuggestion.fraction*100).toFixed(0)}% unit`:"—");
 }
 
-// ─── Live tracker ─────────────────────────────────────────────────────────────
-async function safeGetLive({gameId, homeTeam, awayTeam}) {
-  try {
-    return await getLiveTrackerData({gameId, homeTeam, awayTeam})
-      || {liveFound:false, homeScore:0, awayScore:0, period:1, clockSec:720, clock:"12:00"};
-  } catch(e) {
-    console.error("liveTracker:", e.message);
-    return {liveFound:false, homeScore:0, awayScore:0, period:1, clockSec:720, clock:"12:00"};
+const SIG_LABELS={officialNetRating:"Net Rating (Off.)",injuryAdjNetRating:"Inj-Adj Net Rtg",predictedSpread:"Predicted Spread",pie:"PIE (Official)",recentForm:"Recent Form",clutch:"Clutch",starPower:"Star Power",shooting:"Shooting TS%",turnover:"Turnovers",rest:"Rest/Schedule",hustle:"Hustle",rebound:"Rebounding",shotQuality:"Shot Quality",h2h:"H2H Record",momentum:"Momentum",referee:"Referee",travelFatigue:"Travel Fatigue",opponentMatchup:"Opp Matchup",splits:"Splits",pace:"Pace",threePointVariance:"3PT Variance",defense:"Defense"};
+
+function renderSignals(signals,pickSide,weights,homeTeam,awayTeam){
+  const g=$("sigGrid");g.innerHTML="";if(!signals)return;
+  const hn=(homeTeam||"Home").split(" ").pop(),an=(awayTeam||"Away").split(" ").pop();
+  const header=document.createElement("div");
+  header.style.cssText="display:grid;grid-template-columns:150px 1fr 38px;gap:8px;align-items:center;margin-bottom:6px;padding-bottom:6px;border-bottom:1px solid var(--bdr);";
+  header.innerHTML=`<span></span><div style="display:flex;justify-content:space-between;padding:0 2px;"><span style="font-size:10px;font-weight:700;color:var(--home-c)">${hn}</span><span style="font-size:10px;font-weight:700;color:var(--away-c)">${an}</span></div><span></span>`;
+  g.appendChild(header);
+  const sorted=Object.entries(signals).sort((a,b)=>(weights?.[b[0]]||0)-(weights?.[a[0]]||0));
+  for(const[k,s]of sorted){
+    const p=typeof s.prob==="number"?s.prob:0.5;
+    const hp=pickSide==="home"?p:1-p;
+    const he=Math.max(0,(hp-0.5)*2*38),ae=Math.max(0,(0.5-hp)*2*38);
+    const row=document.createElement("div");row.className="sig-row";
+    row.title=`${SIG_LABELS[k]||k}: ${Math.round(hp*100)}% ${hn}`;
+    row.innerHTML=`<span class="sig-name">${SIG_LABELS[k]||k}</span>
+      <div class="sig-bar"><div class="sig-mid"></div>
+        <div class="sig-home" style="width:${he}%;background:var(--home-c);opacity:.70"></div>
+        <div class="sig-away" style="width:${ae}%;background:var(--away-c);opacity:.70"></div>
+      </div>
+      <span class="sig-val">${Math.round(hp*100)}%</span>`;
+    g.appendChild(row);
   }
 }
 
-// ─── Edge / snapshot ──────────────────────────────────────────────────────────
-function addEdgeHist(gid, edge, ts) {
-  if (!edgeHistoryStore[gid]) edgeHistoryStore[gid] = [];
-  let sm = edge;
-  if (edgeHistoryStore[gid].length > 0) {
-    const prev = edgeHistoryStore[gid].at(-1).edge;
-    sm = prev * 0.55 + edge * 0.45;
+const ADV_ROWS=[
+  {k:"ORtg (Adj)",hk:"adj_off_rating",fmt:v=>fNum(v,1),hb:true},
+  {k:"DRtg (Adj)",hk:"adj_def_rating",fmt:v=>fNum(v,1),hb:false},
+  {k:"Net Rtg",hk:"adj_net_rating",fmt:fSign,hb:true},
+  {k:"Pace",hk:"pace",fmt:v=>fNum(v,1),hb:null},
+  {k:"PIE",hk:"pie",fmt:v=>fPct(v,2),hb:true},
+  {k:"TS%",hk:"ts_pct",fmt:v=>fPct(v,1),hb:true},
+  {k:"eFG%",hk:"efg_pct",fmt:v=>fPct(v,1),hb:true},
+  {k:"TOV%",hk:"tov_pct",fmt:v=>fNum(v,1)+"%",hb:false},
+  {k:"OREB%",hk:"oreb_pct",fmt:v=>fPct(v,1),hb:true},
+  {k:"AST/TO",hk:"ast_to",fmt:v=>fNum(v,2),hb:true},
+  {k:"Clutch W%",hk:"clutch_w_pct",fmt:v=>fPct(v,1),hb:true},
+  {k:"Clutch ±",hk:"clutch_pm",fmt:fSign,hb:true},
+  {k:"Hustle",hk:"hustle_score",fmt:v=>fNum(v,1),hb:true},
+  {k:"FT Rate",hk:"ftr",fmt:v=>fPct(v,1),hb:true},
+  {k:"3PA Rate",hk:"fg3_rate",fmt:v=>fPct(v,1),hb:null},
+  {k:"Rest Days",hk:"rest_days",fmt:v=>v+"d",hb:true},
+  {k:"Streak",hk:"streak",fmt:v=>v>=0?"+"+v:String(v),hb:true},
+];
+function renderAdvStats(h,a,ht,at){
+  $("homeTH").textContent=(ht||"Home").split(" ").pop();
+  $("awayTH").textContent=(at||"Away").split(" ").pop();
+  const body=$("advBody");body.innerHTML="";if(!h&&!a)return;
+  const nonZero=new Set(["adj_off_rating","adj_def_rating","adj_net_rating","pace","ts_pct","efg_pct","oreb_pct","pie"]);
+  const isValid=(key,val)=>{if(!Number.isFinite(val))return false;if(nonZero.has(key)&&val===0)return false;return true;};
+  for(const r of ADV_ROWS){
+    const hv=h?.[r.hk],av=a?.[r.hk],hn=Number(hv),an=Number(av);
+    const hOk=isValid(r.hk,hn),aOk=isValid(r.hk,an),ok=hOk&&aOk;
+    let hc="",ac="",et="—";
+    if(ok&&r.hb!==null){const hw=r.hb?hn>an:hn<an;hc=hw?"better":"worse";ac=hw?"worse":"better";const d=hn-an;et=d>=0?`+${d.toFixed(2)}`:d.toFixed(2);}
+    const tr=document.createElement("tr");
+    tr.innerHTML=`<td>${r.k}</td><td class="${hc}">${hOk?r.fmt(hn):"—"}</td><td class="${ac}">${aOk?r.fmt(an):"—"}</td><td>${et}</td>`;
+    body.appendChild(tr);
   }
-  edgeHistoryStore[gid].push({timestamp:ts, edge:sm});
-  const cut = Date.now() - 15*60*1000;
-  edgeHistoryStore[gid] = edgeHistoryStore[gid].filter(p => new Date(p.timestamp).getTime() >= cut);
-  return sm;
-}
-function logSnap(gid, snap) {
-  if (!snapshotLogStore[gid]) snapshotLogStore[gid] = [];
-  snapshotLogStore[gid].push(snap);
-  if (snapshotLogStore[gid].length > SNAP_RET)
-    snapshotLogStore[gid] = snapshotLogStore[gid].slice(-SNAP_RET);
 }
 
-// ─── Learning wrappers ────────────────────────────────────────────────────────
-const safeLS  = () => typeof learning.getLearningSummary    === "function" ? learning.getLearningSummary()    : {};
-const safeCT  = () => typeof learning.getCalibrationTable   === "function" ? learning.getCalibrationTable()   : {};
-const safeBCT = () => typeof learning.buildCalibrationTable === "function" ? learning.buildCalibrationTable() : {};
-const safeRS  = s  => { if (typeof learning.recordSnapshot  === "function") learning.recordSnapshot(s); };
-const safeGS  = () => typeof learning.getSnapshots          === "function" ? learning.getSnapshots()          : [];
-const safeUGR = p  => typeof learning.updateGameResult      === "function" ? learning.updateGameResult(p)     : 0;
-const safeAC  = p  => typeof learning.applyCalibration      === "function" ? learning.applyCalibration(p)     : p;
-
-const stakeLabel = raw => {
-  const text = String(raw||"No bet");
-  const map  = {"No bet":0, "0.5u":0.5, "1u":1, "1.5u":1.5};
-  return {tier:text, fraction:Object.prototype.hasOwnProperty.call(map,text)?map[text]:0};
-};
-
-function buildOddsFormats(d) {
-  if (typeof d!=="number"||!Number.isFinite(d)||d<=1) return {decimal:null,american:null,impliedPercent:null};
-  return {decimal:r2(d), american:d2a(d), impliedPercent:r2(1/d)};
+function renderProps(rows,id,unit){
+  const el=$(id);if(!Array.isArray(rows)||!rows.length){el.innerHTML='<div style="color:var(--muted);font-size:12px;padding:8px 0">No data</div>';return;}
+  el.innerHTML=rows.slice(0,7).map(r=>{
+    const pct=typeof r.aiPickProb==="number"?r.aiPickProb:typeof r.pickProbability==="number"?r.pickProbability:typeof r.hitProbability==="number"?r.hitProbability:0.5;
+    const pick=r.aiPick||r.pick||"?";
+    const conf=r.aiConfidence?.label||"Low";
+    const pickCls=pick.toLowerCase()==="over"?"over":"under";
+    const barW=Math.round(Math.abs(pct-0.5)*2*100);
+    const barColor=pct>=0.72?"var(--green)":pct>=0.62?"var(--yellow)":"var(--red)";
+    const confIcon=conf==="High"?"🔥 HIGH":conf==="Medium"?"◉ MED":"◎ LOW";
+    const lineLabel=r.line!=null?`${r.line} ${unit}`:"";
+    const aiEdge=typeof r.aiEdge==="number"?`edge ${r.aiEdge>=0?"+":""}${(r.aiEdge*100).toFixed(1)}%`:"";
+    return`<div class="prop-item">
+      <div class="prop-player">${r.player||"—"} <span style="font-size:10px;color:var(--muted);font-weight:400">${lineLabel?`· ${lineLabel}`:""}</span></div>
+      <div class="prop-detail">
+        <span class="prop-line">Book: ${r.bookOverProb!=null?(r.bookOverProb*100).toFixed(0)+"%":r.line??"-"}</span>
+        <span class="prop-pick ${pickCls}">${pick.toUpperCase()}</span>
+        <div class="prop-conf-bar"><div class="prop-conf-fill" style="width:${barW}%;background:${barColor}"></div></div>
+        <span class="prop-conf-pct" style="color:${barColor}">${(pct*100).toFixed(0)}%</span>
+      </div>
+      <div class="prop-odds">${confIcon}${aiEdge?` · AI ${aiEdge}`:""}</div>
+    </div>`;
+  }).join("");
 }
 
-function buildVerdict(edge, noBet, conf) {
-  if (noBet?.blocked) return "Avoid";
-  if (edge >= 0.045 && (conf?.percent||0) >= 0.62) return "Bet now";
-  if (edge >= 0.02)  return "Watch";
-  return "Avoid";
+function renderPbp(scoreState,homeTeam,awayTeam){
+  const isLive=scoreState?.liveFound;
+  $("pbpDot").style.display=isLive?"inline-block":"none";
+  $("pbpStatus").textContent=isLive?"LIVE":"Not live yet";
+  $("pbpHomeName").textContent=(homeTeam||"Home").split(" ").pop();
+  $("pbpAwayName").textContent=(awayTeam||"Away").split(" ").pop();
+  $("pbpHomeScore").textContent=isLive?(scoreState.homeScore??"-"):"-";
+  $("pbpAwayScore").textContent=isLive?(scoreState.awayScore??"-"):"-";
+  $("pbpClock").textContent=scoreState?.clock||scoreState?.formattedClock||"—";
+  $("pbpPeriod").textContent=scoreState?.period?`Q${scoreState.period}`:"—";
+  setLogo("pbpHomeLogo",homeTeam,36);setLogo("pbpAwayLogo",awayTeam,36);
+  const feed=$("pbpFeed");
+  if(!isLive){feed.innerHTML=`<div class="pbp-empty">${scoreState?.isFinal?"Game has ended":"Game not live yet"}</div>`;return;}
+  const plays=scoreState?.recentPlays||scoreState?.plays||[];
+  if(!plays.length){feed.innerHTML=`<div class="pbp-period-marker">PERIOD ${scoreState.period||1}</div><div class="pbp-play scoring"><span class="pbp-play-time">${scoreState.formattedClock||"—"}</span><div class="pbp-play-team-ph">${abbr(homeTeam)}</div><div class="pbp-play-desc">Live · Score: ${scoreState.awayScore??0}—${scoreState.homeScore??0}</div></div>`;return;}
+  const homeNick=(homeTeam||"").split(" ").pop(),awayNick=(awayTeam||"").split(" ").pop();
+  let lastPeriod=null;
+  const items=plays.slice(0,50).map(play=>{
+    const desc=play.description||play.text||play.event||play.msg||"";if(!desc)return"";
+    const isHome=typeof play.isHomeTeam==="boolean"?play.isHomeTeam:(play.team?.full_name||play.team?.name||play.team_name||"").includes(homeNick);
+    const isScoring=play.isScore||(play.points||play.pts||play.score_value||0)>0||/makes|dunk|layup|jumper|three/i.test(desc);
+    const period=play.period||play.quarter||"",time=play.clock||play.time||"";
+    const hScore=play.homeScore,aScore=play.awayScore;
+    const scoreCtx=(typeof hScore==="number"&&typeof aScore==="number")?` <span style="opacity:0.5;font-size:10px">${awayNick} ${aScore}–${hScore} ${homeNick}</span>`:"";
+    let periodHeader="";
+    if(period&&period!==lastPeriod){lastPeriod=period;periodHeader=`<div class="pbp-period-marker">QUARTER ${period}</div>`;}
+    const teamDot=isHome?`<div class="pbp-play-team-ph">${homeNick.slice(0,3).toUpperCase()}</div>`:`<div class="pbp-play-team-ph">${awayNick.slice(0,3).toUpperCase()}</div>`;
+    return`${periodHeader}<div class="pbp-play${isScoring?" scoring":""}"><span class="pbp-play-time">${time||""}</span>${teamDot}<div><div class="pbp-play-desc">${desc}${isScoring?scoreCtx:""}</div></div></div>`;
+  }).filter(Boolean);
+  feed.innerHTML=items.join("")||'<div class="pbp-empty">No play data yet</div>';
 }
 
-// ── 2. KELLY CRITERION stake sizing ──────────────────────────────────────────
-// Tells you exactly how much to bet, not just whether to bet
-// Uses quarter-Kelly (25%) for safety with 5% bankroll cap
-function computeKelly(trueProb, decimalOdds) {
-  if (!trueProb || !decimalOdds || decimalOdds <= 1 || trueProb <= 0) return 0;
-  const b = decimalOdds - 1;
-  const q = 1 - trueProb;
-  const fullKelly = (b * trueProb - q) / b;
-  return Math.max(0, Math.min(fullKelly * 0.25, 0.05)); // quarter-Kelly, max 5%
+// ── PLAYER IMPACT: name as "D.Mitchell", 10 players, stats columns ────────────
+function renderPlayers(players, id) {
+  const el=$(id); el.innerHTML="";
+  if(!Array.isArray(players)||!players.length){
+    el.innerHTML='<div style="color:var(--muted);font-size:11px;padding:4px 0">No data</div>';
+    return;
+  }
+  for(const p of players.slice(0,10)){
+    const parts=(p.name||"").trim().split(" ");
+    const displayName=parts.length>=2?`${parts[0].charAt(0)}.${parts.slice(1).join(" ")}`:p.name||"—";
+    const row=document.createElement("div"); row.className="pl-row";
+    const n=v=>(typeof v==="number"&&v>0)?v.toFixed(1):"—";
+    const pm=v=>(typeof v==="number")?(v>=0?"+"+v.toFixed(1):v.toFixed(1)):"—";
+    const usg=v=>(typeof v==="number"&&v>0)?(v*100).toFixed(0)+"%":"—";
+    row.innerHTML=`
+      <span class="pl-name" title="${p.name||""}">${displayName}</span>
+      <span class="pl-val" style="font-weight:600;color:var(--txt)">${n(p.pts)}</span>
+      <span class="pl-val">${n(p.reb)}</span>
+      <span class="pl-val">${n(p.ast)}</span>
+      <span class="pl-val">${n(p.stl)}</span>
+      <span class="pl-val">${n(p.blk)}</span>
+      <span class="pl-val" style="color:${typeof p.net_rtg==="number"&&p.net_rtg>=0?"var(--green)":"var(--red)"}">${pm(p.net_rtg)}</span>
+      <span class="pl-val" style="color:var(--muted)">${usg(p.usg_pct)}</span>`;
+    el.appendChild(row);
+  }
 }
 
-// ── 6. REFEREE TENDENCIES ─────────────────────────────────────────────────────
-// High-foul refs inflate FT-dependent scorers and slow pace
-const HIGH_FOUL_REFS = new Set([
-  "Tony Brothers","Scott Foster","Ed Malloy","Rodney Mott",
-  "James Williams","Bill Kennedy","Zach Zarba"
-]);
-const LOW_FOUL_REFS = new Set([
-  "Marc Davis","Monty McCutchen","Josh Tiven","Kevin Scott"
-]);
+function renderInjuries(injuries,id){
+  const el=$(id);el.innerHTML="";
+  if(!Array.isArray(injuries)||!injuries.length){el.innerHTML='<span style="color:var(--muted);font-size:11px">None listed</span>';return;}
+  for(const i of injuries.slice(0,5)){
+    const name=extractPName(i),t=JSON.stringify(i).toLowerCase();
+    const cls=t.includes("out")?"out":t.includes("doubtful")||t.includes("questionable")?"dtd":"";
+    const st=t.includes("out")?"OUT":t.includes("doubtful")?"DTB":t.includes("questionable")?"Q":"P";
+    const pill=document.createElement("span");pill.className=`pill ${cls}`;
+    pill.textContent=`${name||"Unknown"} · ${st}`;
+    el.appendChild(pill);
+  }
+}
+function extractPName(o){if(!o)return"";for(const k of["PlayerName","playerName","name","Name","player","full_name"])if(typeof o[k]==="string")return o[k];if(o.player&&typeof o.player==="object")return`${o.player.first_name||""} ${o.player.last_name||""}`.trim();return"";}
 
-async function fetchGameRefs(gameId) {
-  if (!gameId) return null;
-  const k = `nba:refs:${gameId}`, h = cg(sideInfoCache, k); if (h) return h;
-  try {
-    const j = await fetchJson(
-      `https://stats.nba.com/stats/boxscoresummaryv2?GameID=${gameId}`,
-      { headers: {
-        "User-Agent": "Mozilla/5.0", "Referer": "https://www.nba.com/",
-        "x-nba-stats-origin": "stats", "x-nba-stats-token": "true",
-      }}
-    );
-    const refs = [];
-    for (const rs of j?.resultSets || []) {
-      if (rs.name === "Officials") {
-        const hdrs = rs.headers || [];
-        for (const row of rs.rowSet || []) {
-          const r = Object.fromEntries(hdrs.map((h, i) => [h, row[i]]));
-          refs.push(`${r.FIRST_NAME} ${r.LAST_NAME}`.trim());
-        }
-      }
-    }
-    const refData = {
-      names: refs,
-      highFoul:  refs.some(n => HIGH_FOUL_REFS.has(n)),
-      lowFoul:   refs.some(n => LOW_FOUL_REFS.has(n)),
-      // High-foul ref = more free throws = pace slows, FT-reliant scorers benefit
-      paceAdj:   refs.some(n => HIGH_FOUL_REFS.has(n)) ? -1.5 : refs.some(n => LOW_FOUL_REFS.has(n)) ? +1.5 : 0,
-      foulAdj:   refs.some(n => HIGH_FOUL_REFS.has(n)) ? 0.02  : refs.some(n => LOW_FOUL_REFS.has(n)) ? -0.01 : 0,
-    };
-    return cs(sideInfoCache, k, refData, 6 * 60 * 60 * 1000);
-  } catch { return null; }
+function renderBm(rows){
+  const body=$("bmBody");body.innerHTML="";
+  if(!Array.isArray(rows)||!rows.length){body.innerHTML=`<tr><td colspan="5" style="text-align:center;padding:12px;color:var(--muted)">No data</td></tr>`;return;}
+  for(const r of rows){
+    const tr=document.createElement("tr");
+    tr.innerHTML=`<td>${r.book||"—"}</td><td>${r.homePrice??"-"} / ${fAm(d2a(r.homePrice))}</td><td>${r.awayPrice??"-"} / ${fAm(d2a(r.awayPrice))}</td><td>${r.homeSpread??"-"}</td><td>${r.total??"-"}</td>`;
+    body.appendChild(tr);
+  }
 }
 
-// ── 7. TRAVEL FATIGUE ─────────────────────────────────────────────────────────
-const TEAM_TIMEZONES = {
-  "Los Angeles Lakers":-8,"Los Angeles Clippers":-8,"Golden State Warriors":-8,
-  "Sacramento Kings":-8,"Phoenix Suns":-7,"Denver Nuggets":-7,"Utah Jazz":-7,
-  "Portland Trail Blazers":-8,"Dallas Mavericks":-6,"Houston Rockets":-6,
-  "San Antonio Spurs":-6,"New Orleans Pelicans":-6,"Oklahoma City Thunder":-6,
-  "Memphis Grizzlies":-6,"Minnesota Timberwolves":-6,"Chicago Bulls":-6,
-  "Milwaukee Bucks":-6,"Indiana Pacers":-5,"Detroit Pistons":-5,
-  "Cleveland Cavaliers":-5,"Atlanta Hawks":-5,"Charlotte Hornets":-5,
-  "Orlando Magic":-5,"Miami Heat":-5,"Washington Wizards":-5,
-  "Philadelphia 76ers":-5,"New York Knicks":-5,"Brooklyn Nets":-5,
-  "Boston Celtics":-5,"Toronto Raptors":-5,
-};
+function setV(id,val,cls){const el=$(id);if(!el)return;el.textContent=val;if(cls){el.className="";el.classList.add(cls);}}
+function setVerdictCls(v){const el=$("verdict");el.className="";if(v==="Bet now")el.classList.add("bet");else if(v==="Watch")el.classList.add("watch");else el.classList.add("avoid");}
+function setConfCls(l){const el=$("confLabel");el.className="";if(l==="High")el.classList.add("high");else if(l==="Medium")el.classList.add("medium");else el.classList.add("low");}
 
-function computeTravelFatigue(homeTeam, awayTeam, homeForm, awayForm) {
-  const homeTZ = TEAM_TIMEZONES[homeTeam] || -6;
-  const awayTZ = TEAM_TIMEZONES[awayTeam] || -6;
-  const tzDiff = Math.abs(homeTZ - awayTZ);
+async function fetchJson(url){const r=await fetch(url);const d=await r.json();if(!r.ok||d.error)throw new Error(d.error||"Error");return d;}
 
-  // Away team traveling across many timezones + back-to-back = significant fatigue
-  const awayFatigue = (awayForm?.is_b2b ? 0.03 : 0) + (tzDiff >= 3 ? 0.02 : tzDiff >= 2 ? 0.01 : 0);
-  const homeFatigue = homeForm?.is_b2b ? 0.015 : 0;
-
-  return {
-    awayFatigue:   r2(awayFatigue),
-    homeFatigue:   r2(homeFatigue),
-    timezoneDiff:  tzDiff,
-    // Positive = helps home team (away team is fatigued)
-    netFatigueAdj: r2(awayFatigue - homeFatigue),
-  };
+async function loadGames(){
+  try{
+    const d=await fetchJson("/games");
+    const sel=$("gameSelect");sel.innerHTML="";
+    if(!d.games?.length){sel.innerHTML='<option value="">No games</option>';selId=null;$("statusMsg").textContent="No games available.";return;}
+    for(const g of d.games){const o=document.createElement("option");o.value=g.id;o.textContent=g.label;o.dataset.mode=g.mode||"pregame";sel.appendChild(o);}
+    if(!selId||!d.games.some(g=>g.id===selId))selId=d.games[0].id;
+    sel.value=selId;
+    gMode=d.games.find(g=>g.id===selId)?.mode||"pregame";
+    $("statusMsg").textContent=`${d.games.length} game(s) loaded.`;
+    setRefreshTimer();
+  }catch(e){$("statusMsg").textContent=`Failed: ${e.message}`;}
 }
 
-// ── 9. CORRELATED PARLAY DETECTION ───────────────────────────────────────────
-// Returns correlation score between game pick and player prop (0-1)
-function detectParlayCorrelation(pickTeam, propPlayer, propSection) {
-  // If we're betting a team to win AND a player from that same team to go over
-  // those are highly correlated (~0.7-0.85 depending on role)
-  const ptsCorrHigh = ["points", "threes"]; // strongly correlated with team winning
-  const ptsCorrMed  = ["assists"];        // moderately correlated
-  if (ptsCorrHigh.includes(propSection)) return 0.80;
-  if (ptsCorrMed.includes(propSection))  return 0.65;
-  return 0.55;
-}
+function setRefreshTimer(){if(rfTimer)clearInterval(rfTimer);rfTimer=setInterval(loadGame,gMode==="live"?30000:gMode==="pregame"?60000:300000);}
 
-// ─── Routes ───────────────────────────────────────────────────────────────────
-app.get("/", (req, res) => res.sendFile(path.join(__dirname, "index.html")));
+async function loadGame(){
+  if(!selId)return;
+  try{
+    const d=await fetchJson(`/odds?gameId=${encodeURIComponent(selId)}`);
+    lastData=d;gMode=d.gameMode||"pregame";setRefreshTimer();
+    const homeTeam=d.homeTeam||"Home",awayTeam=d.awayTeam||"Away";
+    const mp=d.aiModel?.matchupProfile,ai=d.aiModel||{},scoreState=d.scoreState;
+    const isLive=gMode==="live";
 
-app.get("/health", (req, res) => {
-  const s   = safeLS();
-  const pls = getPropLearningSummary();
-  res.json({
-    status: "ok",
-    oddsKey: reqOdds(), bdlKey: reqBdl(), fnKey: reqFn(),
-    learning: {
-      total:   s.totalSnapshots  || 0,
-      graded:  s.gradedSnapshots || 0,
-      winRate: s.overallWinRate  != null ? (s.overallWinRate*100).toFixed(1)+"%" : "n/a",
-    },
-    propLearning: {
-      total:    pls.total    || 0,
-      graded:   pls.graded   || 0,
-      accuracy: pls.accuracy != null ? (pls.accuracy*100).toFixed(1)+"%" : "n/a",
-    },
-    learnedWeightsActive: JSON.stringify(learnedWeights) !== JSON.stringify(DEFAULT_WEIGHTS),
-    ts: new Date().toISOString(),
-  });
-});
+    setLogo("homeLogoHero",homeTeam,52);setLogo("awayLogoHero",awayTeam,52);
+    setLogo("homeLogoCard",homeTeam,60);setLogo("awayLogoCard",awayTeam,60);
 
-app.get("/games", async (req, res) => {
-  try {
-    if (!reqOdds()) return res.status(400).json({error:"Missing ODDS_API_KEY", games:[]});
-    const evts = await getEvents(), now = Date.now(), nxt = now + 24*60*60*1000;
-    const games = (evts||[])
-      .filter(e => new Date(e.commence_time).getTime() <= nxt)
-      .map(e => ({
-        id: e.id, label: `${e.away_team} @ ${e.home_team}`,
-        homeTeam: e.home_team, awayTeam: e.away_team,
-        commenceTime: e.commence_time, mode: buildMode(e.commence_time),
-      }));
-    res.json({games});
-  } catch(e) { res.status(500).json({error:e.message, games:[]}); }
-});
+    $("homeNameHero").textContent=homeTeam.split(" ").pop();
+    $("awayNameHero").textContent=awayTeam.split(" ").pop();
 
-// ─── Main /odds route ─────────────────────────────────────────────────────────
-app.get("/odds", async (req, res) => {
-  try {
-    if (!reqOdds()) return res.status(400).json({error:"Missing ODDS_API_KEY"});
+    // ── All probability calculations FIRST (used throughout) ─────────────────
+    const homeMarketProb = typeof d.homeMarketProb === "number" ? d.homeMarketProb
+      : typeof d.modelDetails?.homeMarketProb === "number" ? d.modelDetails.homeMarketProb
+      : 0.5;
+    const awayMarketProb = 1 - homeMarketProb;
+    const homeAiProb = typeof d.homeAiProb === "number" ? d.homeAiProb : homeMarketProb;
+    const awayAiProb = 1 - homeAiProb;
+    const isHomePick = d.pickSide === "home";
 
-    const gameId   = req.query.gameId   || "";
-    const homeTeam = req.query.homeTeam || "";
-    const awayTeam = req.query.awayTeam || "";
-    if (!gameId && (!homeTeam||!awayTeam))
-      return res.status(400).json({error:"Need gameId or homeTeam+awayTeam"});
-
-    const featured   = await resolveFeatured({gameId, homeTeam, awayTeam});
-    const mode       = buildMode(featured.commence_time);
-    const lineupDate = (featured.commence_time||"").slice(0,10) || todayYmd();
-
-    // ── Fetch everything concurrently ──────────────────────────────────────
-    const [props, histComps, injInfo, linInfo, liveRaw, refData] = await Promise.allSettled([
-      getProps(featured.id),
-      buildHistComps(featured.home_team, featured.away_team),
-      bestInjuries(),
-      bestLineups(lineupDate),
-      mode === "live"
-        ? safeGetLive({gameId:featured.id, homeTeam:featured.home_team, awayTeam:featured.away_team})
-        : Promise.resolve(null),
-      // 6. REFEREE TENDENCIES — fetch who's calling the game
-      fetchGameRefs(featured.id).catch(() => null),
-    ]).then(rs => rs.map(r => r.status === "fulfilled" ? r.value : null));
-
-    const injRows = injInfo?.rows || [];
-    const linRows = linInfo?.rows || [];
-
-    // ── Sportsbook de-vigged prop sections ────────────────────────────────
-    const { sections: rawPropSections, signal: propSignal } = buildProps(props || {bookmakers:[]});
-
-    // ── AI independent prop predictions ──────────────────────────────────
-    let aiPropSections = rawPropSections;
-    try {
-      aiPropSections = await predictGameProps(
-        rawPropSections, featured.home_team, featured.away_team,
-        // 4. Pass injuries so cascade can boost teammates
-        { homeInjuries: injSummary?.homeInjuries || [], awayInjuries: injSummary?.awayInjuries || [] }
-      );
-    } catch (e) {
-      console.error("[server] AI props failed:", e.message);
-      aiPropSections = rawPropSections;
-    }
-
-    // ── Record prop snapshots for learning + 5. LINE MOVEMENT TRACKING ──────
-    const gameDate  = (featured.commence_time || new Date().toISOString()).slice(0, 10);
-    const statTypeMap = { points:"points", assists:"assists", rebounds:"rebounds", threes:"threes" };
-    for (const [section, rows] of Object.entries(aiPropSections)) {
-      for (const row of rows || []) {
-        if (!row.playerId || row.line == null || !row.aiPick) continue;
-        const snapId = `${featured.id}_${row.playerId}_${section}`;
-        // Track first-seen line vs current line — significant move = sharp signal
-        const existingSnap = (snapshotLogStore[snapId] || [])[0];
-        const firstSeenLine = existingSnap?.line ?? row.line;
-        const lineMovement  = r2(row.line - firstSeenLine);
-        recordPropSnap({
-          id:           `${snapId}_${row.line}`,
-          gameId:       featured.id,
-          gameDate,
-          player:       row.player,
-          playerId:     row.playerId,
-          statType:     statTypeMap[section] || section,
-          line:         row.line,
-          firstSeenLine,
-          lineMovement,
-          pick:         row.aiPick,
-          overProb:     row.aiOverProb,
-          pickProb:     row.aiPickProb,
-          verdict:      row.aiVerdict,
-          features:     row.features,
-          homeTeam:     featured.home_team,
-          awayTeam:     featured.away_team,
-        });
-        // Attach line movement to the prop row for display
-        row.lineMovement  = lineMovement;
-        row.firstSeenLine = firstSeenLine;
+    if(isLive&&scoreState){
+      $("scoreDisplay").classList.remove("score-hidden");$("heroSub").style.display="none";
+      $("predScore").style.display="none";$("predScoreLabel").style.display="none";
+      $("homeScoreHero").textContent=scoreState.homeScore??"-";
+      $("awayScoreHero").textContent=scoreState.awayScore??"-";
+      $("periodDisplay").textContent=scoreState.period?`Q${scoreState.period} ${scoreState.formattedClock||scoreState.clock||""}`.trim():(scoreState.isFinal?"Final":"Live");
+    }else{
+      $("scoreDisplay").classList.add("score-hidden");$("heroSub").style.display="block";
+      const hp=mp?.home_predicted_pts,ap=mp?.away_predicted_pts;
+      const scoreFavorsHome = typeof hp==="number" && typeof ap==="number" && hp > ap;
+      const scoreAgreesPick = (isHomePick && scoreFavorsHome) || (!isHomePick && !scoreFavorsHome);
+      if(typeof hp==="number"&&typeof ap==="number"&&hp>0&&ap>0&&scoreAgreesPick){
+        $("predScore").textContent=`${awayTeam.split(" ").pop()} ${Math.round(ap)} — ${Math.round(hp)} ${homeTeam.split(" ").pop()}`;
+        $("predScore").style.display="block";$("predScoreLabel").style.display="block";$("heroSub").style.display="none";
       }
     }
 
-    // ── Injury summary ────────────────────────────────────────────────────
-    const injSummary = summarizeInjury(
-      featured.home_team, featured.away_team, injRows, linRows
-    );
+    $("matchup").textContent=`${awayTeam} @ ${homeTeam}`;
+    $("pick").textContent=`Pick: ${d.pick||"—"}`;
 
-    // ── Independent stats model ───────────────────────────────────────────
-    let statsResult = null;
-    try {
-      statsResult = await computeIndependentWinProb(
-        featured.home_team, featured.away_team, liveRaw,
-        { homeInjuries: injSummary.homeInjuries, awayInjuries: injSummary.awayInjuries }
-      );
-    } catch(e) { console.error("[stats_model] failed:", e.message); }
+    // Confidence from actual edge
+    const finalEdgeAbs = Math.abs(d.edge||0);
+    const realConfLabel = finalEdgeAbs >= 0.10 ? "High" : finalEdgeAbs >= 0.05 ? "Medium" : "Low";
+    const realConfPct   = finalEdgeAbs >= 0.10 ? 0.80   : finalEdgeAbs >= 0.05 ? 0.65     : 0.50;
 
-    // ── Market / Live model ───────────────────────────────────────────────
-    let marketModel, liveScoreState = null;
-    if (mode === "live") {
-      marketModel = buildEliteLiveModel({
-        featuredOdds:    featured,
-        liveState:       liveRaw,
-        pregameBaseline: statsResult ? {homeMarketProb: statsResult.homeWinProb} : null,
-        calibrationFn:   safeAC,
-      });
-      liveScoreState = marketModel.scoreState ? {
-        ...marketModel.scoreState,
-        formattedClock: fmtClock(marketModel.scoreState.clockSec),
-      } : null;
-    } else {
-      marketModel = buildElitePregameModel({
-        featuredOdds:          featured,
-        historicalComparisons: histComps || {},
-        propSignal,
-        injurySummary:         injSummary,
-        calibrationFn:         safeAC,
-      });
+    setV("edgeVal",fPct(d.edge));setV("verdict",d.verdict||"—");setVerdictCls(d.verdict||"");
+    setV("gameMode",d.gameMode||"—");
+    setV("confLabel", realConfLabel); setConfCls(realConfLabel);
+    setV("confPct", fPct(realConfPct));
+    setV("bookCount",d.modelDetails?.bookCount??d.bookmakerTable?.length??"-");
+
+    // 2. Kelly Criterion
+    const kelly = d.kellyStake;
+    if(kelly && $("kellyVal")) {
+      $("kellyVal").textContent = kelly.fraction > 0 ? `${(kelly.fraction*100).toFixed(1)}% bankroll` : "Pass";
+      $("kellyLabel").textContent = kelly.label || "Pass";
+    }
+    // 6. Referee
+    if(d.referees?.names?.length && $("refImpact")) {
+      const refStr = d.referees.names.slice(0,2).join(", ");
+      setV("refImpact", d.referees.highFoul ? "High foul ⚠️" : d.referees.lowFoul ? "Low foul" : "Normal");
+      $("refNames").textContent = refStr;
+    }
+    // 7. Travel fatigue
+    if(d.travelFatigue && $("travelFatigueVal")) {
+      const tf = d.travelFatigue;
+      $("travelFatigueVal").textContent = tf.netFatigueAdj > 0.02
+        ? `Away fatigue +${(tf.netFatigueAdj*100).toFixed(0)}%`
+        : tf.awayFatigue > 0 ? `Away tired (${tf.timezoneDiff}TZ)` : "None";
+    }
+    // 9. Correlated parlay warning
+    const parlayEl = $("parlayWarning");
+    if(parlayEl) {
+      if(d.parlayCorrelation) {
+        parlayEl.style.display="block";
+        parlayEl.textContent=`⚠️ Parlay correlation: ${d.parlayCorrelation.player} prop + team ML are ~${Math.round(d.parlayCorrelation.correlation*100)}% correlated`;
+      } else {
+        parlayEl.style.display="none";
+      }
     }
 
-    // ── PURE AI PREDICTION — zero market interference ─────────────────────────
-    // Stats model is the ONLY source for pick and win probability.
-    // Market is used ONLY for edge calculation and display.
+    const ls=d.learningSummary||{};
 
-    const statsHomeProb = statsResult?.homeWinProb ?? null;
+    // ── Team cards — show AI probability as main, market as reference ──────────
+    $("homeCardName").textContent=homeTeam;$("awayCardName").textContent=awayTeam;
+    $("homeCardRecord").textContent=mp?.homeStats?`${(mp.homeStats.win_rate*100).toFixed(0)}% WR · Str ${mp.homeStats.streak>=0?"+":""}${mp.homeStats.streak}`:"";
+    $("awayCardRecord").textContent=mp?.awayStats?`${(mp.awayStats.win_rate*100).toFixed(0)}% WR · Str ${mp.awayStats.streak>=0?"+":""}${mp.awayStats.streak}`:"";
+    // Main big % = AI probability
+    $("homeCardImplied").textContent=fPct(homeAiProb,0);
+    $("awayCardImplied").textContent=fPct(awayAiProb,0);
+    // "TRUE PROB" row = market (for reference)
+    $("homeCardTrue").textContent=fPct(homeMarketProb,1)+" mkt";
+    $("awayCardTrue").textContent=fPct(awayMarketProb,1)+" mkt";
+    $("homeCardEdge").textContent=isHomePick?fPct(d.edge):"—";
+    $("awayCardEdge").textContent=!isHomePick?fPct(d.edge):"—";
+    $("homePickBadge").style.display=isHomePick?"block":"none";
+    $("awayPickBadge").style.display=!isHomePick?"block":"none";
+    selectTeam(selectedTeam);
 
-    // Pick from stats model only
-    const pickSide = statsHomeProb !== null
-      ? (statsHomeProb >= 0.5 ? "home" : "away")
-      : marketModel.pickSide; // fallback only if stats completely unavailable
-    const pickTeam = pickSide === "home" ? featured.home_team : featured.away_team;
-    const pick     = `${pickTeam} to win`;
+    $("wpLabelHome").textContent=homeTeam.split(" ").pop();$("wpLabelAway").textContent=awayTeam.split(" ").pop();
+    updateWinProbChart(homeAiProb||0.5);
+    $("winProbSubtitle").textContent="AI win probability — pure stats model, no market influence";
 
-    // True probability = pure stats output, no market blending
-    const trueProb = statsHomeProb !== null
-      ? (pickSide === "home" ? statsHomeProb : 1 - statsHomeProb)
-      : marketModel.trueProbability;
+    const wr=ls.overallWinRate!=null?(ls.overallWinRate*100).toFixed(1)+"%":"—";
+    setV("overallAcc",wr);setV("gradedCount",ls.gradedSnapshots||0);$("accBadge").textContent=wr;
+    const wrNum=ls.overallWinRate||0;
+    const bar=$("overallAccBar");if(bar){bar.style.width=Math.min(wrNum*100,100)+"%";bar.className="acc-bar-fill"+(wrNum<0.55?" bad":wrNum<0.62?" warn":"");}
+    const bv=ls.byVerdict?.["Bet now"];setV("betNowAcc",bv?.winRate!=null?(bv.winRate*100).toFixed(1)+"%":"—");
+    setV("weightsStatus", ai.playoffMode ? "🏆 PLAYOFF" : "Regular Season");
+    setV("statsBlend", ai.playoffMode ? "Playoff weights" : "Season weights");
+    // 3. SOS display
+    if($("sosDisplay")) {
+      const sosH = ai.sosHome ?? 1.0, sosA = ai.sosAway ?? 1.0;
+      $("sosDisplay").textContent = `H:${sosH.toFixed(2)} A:${sosA.toFixed(2)}`;
+    }
 
-    // Market probability — for display and edge only
-    const homeMarketProb = r2(
-      marketModel.modelDetails?.homeMarketProb ??
-      (marketModel.pickSide === "home"
-        ? marketModel.impliedProbability
-        : 1 - (marketModel.impliedProbability || 0.5))
-    );
-    const marketImplied = pickSide === "home" ? homeMarketProb : 1 - homeMarketProb;
+    renderSignals(ai.signals||null,d.pickSide||"home",ai.activeWeights||null,homeTeam,awayTeam);
+    $("sigSubtitle").textContent=`Pick: ${d.pick||"—"} · sorted by weight`;
 
-    // Edge = how much AI disagrees with market (positive = AI more bullish on pick)
-    const finalEdge  = r2(trueProb - marketImplied);
+    renderAdvStats(mp?.homeStats,mp?.awayStats,homeTeam,awayTeam);
+    $("advSubtitle").textContent=mp?.nba_service_used?"Official NBA metrics (injury-adjusted)":"Estimated — NBA service offline";
 
-    // ── 2. KELLY CRITERION stake sizing ──────────────────────────────────────
-    const bestDecimal = marketModel.sportsbookDecimal || 2.0;
-    const kellyFraction = computeKelly(trueProb, bestDecimal);
-    const kellyStake = {
-      fraction:    r2(kellyFraction),
-      units:       r2(kellyFraction * 100), // % of bankroll
-      label:       kellyFraction >= 0.04 ? "Strong bet" : kellyFraction >= 0.02 ? "Small bet" : "Pass",
-      explanation: kellyFraction > 0
-        ? `Bet ${(kellyFraction*100).toFixed(1)}% of bankroll at ${bestDecimal.toFixed(2)} odds`
-        : "No positive expected value",
-    };
+    const injAdj=ai.injuryAdjustments||{};
+    $("homeInjTitle").textContent=homeTeam.split(" ").pop();$("awayInjTitle").textContent=awayTeam.split(" ").pop();
+    $("homeNetDelta").textContent=`Net adj: ${fSign(injAdj.home?.net_change||0)}`;
+    $("awayNetDelta").textContent=`Net adj: ${fSign(injAdj.away?.net_change||0)}`;
+    renderInjuries(d.injuryStatus?.homeInjuries||[],"homeInjuries");
+    renderInjuries(d.injuryStatus?.awayInjuries||[],"awayInjuries");
 
-    // ── 7. TRAVEL FATIGUE ────────────────────────────────────────────────────
-    const homeForm = statsResult?.matchupProfile?.homeStats;
-    const awayForm = statsResult?.matchupProfile?.awayStats;
-    const travelFatigue = computeTravelFatigue(
-      featured.home_team, featured.away_team, homeForm, awayForm
-    );
+    $("homePlayersH").textContent=homeTeam.split(" ").pop();$("awayPlayersH").textContent=awayTeam.split(" ").pop();
+    renderPlayers(mp?.homeStats?.players||[],"homePlayers");
+    renderPlayers(mp?.awayStats?.players||[],"awayPlayers");
 
-    // ── 6. REFEREE TENDENCIES ────────────────────────────────────────────────
-    const refs = refData || { names: [], highFoul: false, lowFoul: false, paceAdj: 0, foulAdj: 0 };
+    const hist=d.modelDetails?.historicalComparisons||{};
+    const mv=(c,p)=>{if(typeof c!=="number"||typeof p!=="number")return"—";const delta=c-p;return`${delta>=0?"+":""}${(delta*100).toFixed(2)}%`;};
+    setV("move2h",mv(d.impliedProbability,hist["2h"]?.homeMarketProb));
+    setV("move24h",mv(d.impliedProbability,hist["24h"]?.homeMarketProb));
+    const bmRows=d.bookmakerTable||[];
+    const spreads=bmRows.map(b=>b.homeSpread).filter(v=>typeof v==="number");
+    const totals=bmRows.map(b=>b.total).filter(v=>typeof v==="number");
+    setV("avgSpread",spreads.length?(spreads.reduce((s,v)=>s+v,0)/spreads.length).toFixed(1):"—");
+    setV("avgTotal",totals.length?(totals.reduce((s,v)=>s+v,0)/totals.length).toFixed(1):"—");
+    setV("disagPenalty",fPct(d.modelDetails?.disagreementPenalty));
+    setV("refImpact","—");$("refNames").textContent="";
 
-    // ── 9. CORRELATED PARLAY DETECTION ───────────────────────────────────────
-    // Pre-calculate correlation between team pick and top prop
-    const topProp = Object.values(aiPropSections).flat().find(p => p.aiPickProb >= 0.65);
-    const parlayCorrelation = topProp ? {
-      player:      topProp.player,
-      statType:    Object.keys(aiPropSections).find(k => aiPropSections[k].includes(topProp)),
-      correlation: detectParlayCorrelation(pickTeam, topProp.player, topProp.statType),
-      warning:     "Betting team ML + same-team prop reduces diversification",
-    } : null;
+    setV("bestHome",`${d.modelDetails?.bestHomePrice??"-"} / ${fAm(d2a(d.modelDetails?.bestHomePrice))}`);
+    setV("bestAway",`${d.modelDetails?.bestAwayPrice??"-"} / ${fAm(d2a(d.modelDetails?.bestAwayPrice))}`);
+    setV("avgHome",`${d.modelDetails?.avgHomePrice??"-"}`);
+    setV("avgAway",`${d.modelDetails?.avgAwayPrice??"-"}`);
 
-    const finalVerdict = buildVerdict(finalEdge, marketModel.noBetFilter, {});
+    const history=Array.isArray(d.history)?d.history:[];
+    edgeChart.data.labels=history.map(p=>new Date(p.timestamp).toLocaleTimeString());
+    edgeChart.data.datasets[0].data=history.map(p=>p.edge);
+    edgeChart.update();
 
-    // ── Snapshot + edge history ───────────────────────────────────────────
-    const ts      = new Date().toISOString();
-    const ek      = featured.id || gameId || `${featured.home_team}_${featured.away_team}`;
-    const smoothed = addEdgeHist(ek, finalEdge, ts);
+    renderBm(d.bookmakerTable||[]);
 
-    const snapshot = {
-      id: `${ek}_${ts}`, gameId: ek, timestamp: ts,
-      commenceTime: featured.commence_time,
-      homeTeam: featured.home_team, awayTeam: featured.away_team,
-      mode, pickSide, pickTeam, pick,
-      impliedProbability:        r2(marketImplied),
-      trueProbability:           r2(trueProb),
-      calibratedTrueProbability: r2(trueProb),
-      rawEdge:  r2(finalEdge), edge: r2(smoothed), calibratedEdge: r2(finalEdge),
-      sportsbookDecimal: r2(marketModel.sportsbookDecimal),
-      verdict: finalVerdict,
-      statsModelHomeProb: statsHomeProb ? r2(statsHomeProb) : null,
-      statsSignals: statsResult?.signals || null,
-      ...(marketModel.modelDetails||{}),
-      source: mode,
-    };
-    logSnap(ek, snapshot);
-    safeRS({...snapshot, result:null});
+    const ps=d.propSections||{};
+    renderProps(ps.points||[],"propsPoints","pts");renderProps(ps.assists||[],"propsAssists","ast");
+    renderProps(ps.rebounds||[],"propsRebounds","reb");renderProps(ps.threes||[],"propsThrees","3PM");
 
-    const ls  = safeLS();
-    const pls = getPropLearningSummary();
+    renderPbp(scoreState,homeTeam,awayTeam);
+    $("statusMsg").textContent=`${awayTeam} @ ${homeTeam} · ${d.gameMode} · ${new Date(d.updatedAt||Date.now()).toLocaleTimeString()}`;
+  }catch(e){$("statusMsg").textContent=`Error: ${e.message}`;}
+}
 
-    // ── Response ──────────────────────────────────────────────────────────
-    res.json({
-      id: featured.id,
-      homeTeam: featured.home_team,
-      awayTeam: featured.away_team,
-      commenceTime: featured.commence_time,
-      gameMode: mode,
-      pick,
-      verdict: finalVerdict,
-      // Confidence purely from AI edge (not market internal)
-      confidence: (() => {
-        const e = Math.abs(finalEdge);
-        const label = e >= 0.10 ? "High" : e >= 0.05 ? "Medium" : "Low";
-        const pct   = e >= 0.10 ? 0.80   : e >= 0.05 ? 0.65     : 0.50;
-        return { label, percent: r2(pct) };
-      })(),
-      noBetFilter: marketModel.noBetFilter || {blocked:false,reasons:[]},
-
-      // AI probabilities (pure stats, no market)
-      pickSide,
-      trueProbability:           r2(trueProb),
-      homeAiProb:                r2(statsHomeProb ?? 0.5),
-      awayAiProb:                r2(1 - (statsHomeProb ?? 0.5)),
-
-      // Market probabilities (for display/edge only)
-      impliedProbability:        r2(marketImplied),
-      homeMarketProb:            r2(homeMarketProb),
-      awayMarketProb:            r2(1 - homeMarketProb),
-
-      edge:           r2(smoothed),
-      rawEdge:        r2(finalEdge),
-      calibratedEdge: r2(finalEdge),
-
-      // ── 2. Kelly Criterion ──────────────────────────────────────────────
-      kellyStake,
-
-      // ── 6. Referee tendencies ───────────────────────────────────────────
-      referees: refs,
-
-      // ── 7. Travel fatigue ───────────────────────────────────────────────
-      travelFatigue,
-
-      // ── 9. Correlated parlay ────────────────────────────────────────────
-      parlayCorrelation,
-
-      aiModel: {
-        statsHomeWinProb:    statsHomeProb ? r2(statsHomeProb) : null,
-        statsAwayWinProb:    statsHomeProb ? r2(1-statsHomeProb) : null,
-        signals:             statsResult?.signals || null,
-        injuryAdjustments:   statsResult?.injuryAdjustments || null,
-        matchupProfile:      statsResult?.matchupProfile || null,
-        meta:                statsResult?.meta || null,
-        usingLearnedWeights: false,
-        // 1. Playoff mode flag
-        playoffMode:         statsResult?.meta?.playoffMode ?? false,
-        // 3. Strength of schedule
-        sosHome:             statsResult?.meta?.sosHome ?? 1.0,
-        sosAway:             statsResult?.meta?.sosAway ?? 1.0,
-        propLearning: {
-          total:    pls.total    || 0,
-          graded:   pls.graded   || 0,
-          accuracy: pls.accuracy,
-          byType:   pls.byType   || {},
-        },
-      },
-
-      oddsFormats:     buildOddsFormats(marketModel.sportsbookDecimal),
-      stakeSuggestion: stakeLabel(marketModel.stakeSuggestion),
-
-      learningSummary: {
-        totalSnapshots:  ls.totalSnapshots  || 0,
-        gradedSnapshots: ls.gradedSnapshots || 0,
-        overallWinRate:  ls.overallWinRate  != null ? ls.overallWinRate  : null,
-        recentWinRate:   ls.recentWinRate   != null ? ls.recentWinRate   : null,
-        betNowWinRate:   ls.betNowWinRate   != null ? ls.betNowWinRate   : null,
-        watchWinRate:    ls.watchWinRate    != null ? ls.watchWinRate    : null,
-        byVerdict:       ls.byVerdict       || {},
-      },
-
-      calibrationTable: safeCT(),
-      history: (edgeHistoryStore[ek]||[]).map(p => ({timestamp:p.timestamp, edge:r2(p.edge)})),
-
-      modelDetails: {
-        ...(marketModel.modelDetails||{}),
-        historicalComparisons: histComps || {},
-        propSignal,
-        homeMarketProb: r2(homeMarketProb),
-        awayMarketProb: r2(1 - homeMarketProb),
-      },
-
-      bookmakerTable: marketModel.bookmakerTable || [],
-
-      // ── AI-enhanced prop sections ──────────────────────────────────────
-      propSections: aiPropSections,
-
-      injuryStatus: {
-        available:            injSummary.available,
-        homeInjuriesCount:    injSummary.homeInjuriesCount,
-        awayInjuriesCount:    injSummary.awayInjuriesCount,
-        lineupRowsCount:      injSummary.lineupRowsCount,
-        homePenalty:          r2(injSummary.homePenalty),
-        awayPenalty:          r2(injSummary.awayPenalty),
-        homeStartersOut:      injSummary.homeStartersOut,
-        awayStartersOut:      injSummary.awayStartersOut,
-        homeStarterCertainty: r2(injSummary.homeStarterCertainty),
-        awayStarterCertainty: r2(injSummary.awayStarterCertainty),
-        sourceSelection:      {injuries: injInfo?.source||"none", lineups: linInfo?.source||"none"},
-        homeInjuries:         injSummary.homeInjuries,
-        awayInjuries:         injSummary.awayInjuries,
-      },
-
-      scoreState: liveScoreState,
-      updatedAt:  ts,
-    });
-
-  } catch(e) { console.error("/odds error:", e); res.status(500).json({error: e.message}); }
+$("gameSelect").addEventListener("change",async e=>{
+  selId=e.target.value;
+  gMode=$("gameSelect").options[$("gameSelect").selectedIndex]?.dataset?.mode||"pregame";
+  winProbHistory=[];
+  await loadGame();
 });
 
-// ─── Game model endpoints ─────────────────────────────────────────────────────
-app.get("/snapshots", (req, res) => {
-  const gid = req.query.gameId;
-  if (!gid) return res.status(400).json({error:"Missing gameId"});
-  res.json({
-    gameId: gid,
-    snapshots: (snapshotLogStore[gid]||[]).map(s => ({
-      ...s,
-      impliedProbability: r2(s.impliedProbability),
-      trueProbability:    r2(s.trueProbability),
-      edge:               r2(s.edge),
-      calibratedEdge:     r2(s.calibratedEdge),
-    })),
-  });
-});
-
-app.get("/learning/summary",     (req,res) => { try { res.json(safeLS()); }      catch(e) { res.status(500).json({error:e.message}); } });
-app.get("/learning/calibration", (req,res) => { try { res.json({calibration:safeCT()}); } catch(e) { res.status(500).json({error:e.message}); } });
-app.get("/learning/weights", (req,res) => {
-  try {
-    let sw = null;
-    try { sw = require("./data/signal_weights.json"); } catch {}
-    res.json({
-      marketWeights:  learnedWeights,
-      signalWeights:  sw?.weights||null,
-      marketDefaults: DEFAULT_WEIGHTS,
-      usingLearned:   JSON.stringify(learnedWeights)!==JSON.stringify(DEFAULT_WEIGHTS),
-    });
-  } catch(e) { res.status(500).json({error:e.message}); }
-});
-app.post("/learning/run", async (req,res) => {
-  try {
-    const {gradeAllUngraded} = require("./auto_grader");
-    const r = await gradeAllUngraded();
-    learnedWeights = loadLearnedWeights();
-    res.json({...r, weightsReloaded:true});
-  } catch(e) { res.status(500).json({error:e.message}); }
-});
-app.get("/model/review", (req,res) => {
-  try { res.json(buildModelReview(safeGS())); }
-  catch(e) { res.status(500).json({error:e.message}); }
-});
-app.post("/learning/grade", (req,res) => {
-  try {
-    const {gameId,finalWinner,finalHomeScore,finalAwayScore} = req.body||{};
-    if (!gameId||!finalWinner) return res.status(400).json({error:"Missing gameId or finalWinner"});
-    if (!["home","away"].includes(finalWinner)) return res.status(400).json({error:'finalWinner must be "home" or "away"'});
-    const updated = safeUGR({gameId,finalWinner,finalHomeScore,finalAwayScore});
-    const cal     = safeBCT();
-    learnedWeights = loadLearnedWeights();
-    res.json({updatedSnapshots:updated, calibrationBuckets:Object.keys(cal).length, learningSummary:safeLS()});
-  } catch(e) { res.status(500).json({error:e.message}); }
-});
-
-// ─── Prop learning endpoints ──────────────────────────────────────────────────
-app.get("/props/learning", (req, res) => {
-  try {
-    res.json(getPropLearningSummary());
-  } catch(e) { res.status(500).json({error:e.message}); }
-});
-
-app.post("/props/grade", async (req, res) => {
-  try {
-    const result = await gradeProps();
-    res.json(result);
-  } catch(e) { res.status(500).json({error:e.message}); }
-});
-
-app.get("/props/snapshots", (req, res) => {
-  const { player, statType, graded, limit = 100 } = req.query;
-  try {
-    let snaps = getPropSnapshots();
-    if (player)   snaps = snaps.filter(s => (s.player||"").toLowerCase().includes(player.toLowerCase()));
-    if (statType) snaps = snaps.filter(s => s.statType === statType);
-    if (graded === "true")  snaps = snaps.filter(s => s.result);
-    if (graded === "false") snaps = snaps.filter(s => !s.result);
-    const total  = snaps.length;
-    const gradedCount = snaps.filter(s => s.result).length;
-    const correct     = snaps.filter(s => s.result?.modelCorrect).length;
-    res.json({
-      total,
-      graded:   gradedCount,
-      accuracy: gradedCount ? Math.round(correct / gradedCount * 10000) / 10000 : null,
-      snaps:    snaps.slice(-Number(limit)),
-    });
-  } catch(e) { res.status(500).json({error:e.message}); }
-});
-
-// ─── Start ────────────────────────────────────────────────────────────────────
-app.listen(PORT, () => {
-  console.log(`[server] Running on port ${PORT}`);
-  console.log(`[server] Learned weights active: ${JSON.stringify(learnedWeights) !== JSON.stringify(DEFAULT_WEIGHTS)}`);
-
-  if (reqBdl()) {
-    // Game result grader (every 1 hour)
-    startAutoGradeScheduler(60 * 60 * 1000);
-    // Prop outcome grader (every 2 hours)
-    startPropGradeScheduler(2 * 60 * 60 * 1000);
-  } else {
-    console.warn("[server] No BALLDONTLIE_API_KEY — auto-graders disabled");
-  }
-});
+(async function(){await loadGames();await loadGame();})();
+</script>
+</body>
+</html>
