@@ -22,7 +22,60 @@ const DEFAULT_W = {
   splits:             0.02, pace:               0.02, threePointVariance: 0.01, defense: 0.02,
 };
 
+// ── PLAYOFF MODE — active April 13 through June 22 ───────────────────────────
+// Playoffs are fundamentally different from regular season:
+//   • Pace drops ~5 possessions per game (teams slow down, execute sets)
+//   • Defense intensity increases ~8% (teams game-plan specifically)
+//   • Star players take 30%+ more shots in crunch time
+//   • Clutch performance becomes the biggest predictor
+//   • Head-to-head series history matters enormously
+//   • 3PT variance drops (coaches limit speculative shots)
+//   • Rest/travel matters less (7-day series windows)
+
+const DEFAULT_W = {
+  // Core efficiency — still important but tightened range
+  officialNetRating:   0.18,
+  injuryAdjNetRating:  0.10,
+  predictedSpread:     0.10,
+  // Playoff-critical signals — heavily boosted
+  clutch:              0.10,  // +0.04 vs regular season
+  starPower:           0.09,  // +0.04 — stars take over in playoffs
+  defense:             0.07,  // +0.05 — defense wins championships
+  h2h:                 0.06,  // +0.03 — series history is real
+  hustle:              0.05,  // +0.02 — effort separates teams
+  recentForm:          0.05,  // form within THIS series matters most
+  // Secondary signals
+  pie:                 0.04,
+  shooting:            0.04,
+  momentum:            0.03,
+  rebound:             0.03,
+  turnover:            0.02,
+  shotQuality:         0.02,
+  opponentMatchup:     0.02,
+  splits:              0.01,
+  // Deprioritized in playoffs
+  rest:                0.01,  // less relevant in 2-day series windows
+  pace:                0.01,  // pace forced slow in playoffs
+  threePointVariance:  0.01,  // coaches eliminate variance
+  referee:             0.01,
+  travelFatigue:       0.01,
+};
+
 let SIGNAL_W = { ...DEFAULT_W };
+
+function isPlayoffs() {
+  const d = new Date(), m = d.getUTCMonth() + 1, day = d.getUTCDate();
+  return (m === 4 && day >= 13) || m === 5 || (m === 6 && day <= 22);
+}
+
+// Weights are already playoff-optimized as default.
+// getEffectiveWeights() returns them directly.
+function getEffectiveWeights() {
+  if (isPlayoffs()) {
+    console.log(`[stats_model] 🏆 PLAYOFF MODE — using playoff-tuned weights`);
+  }
+  return SIGNAL_W;
+}
 
 function reloadSignalWeights() {
   try {
@@ -41,29 +94,34 @@ const r4 = n => Math.round(n * 10000) / 10000;
 const sn = (v, f = 0) => { const n = Number(v); return Number.isFinite(n) ? n : f; };
 const hasData = v => typeof v === "number" && Math.abs(v) > 0.001;
 
-// ─── signal builders ──────────────────────────────────────────────────────────
-function sigNetRating(m)       { const d = sn(m?.net_diff); return hasData(d) ? clamp(sigmoid(d/7.5),0.12,0.88) : 0.5; }
-function sigInjuryNet(ia)      { if (!ia?.home||!ia?.away) return 0.5; const d=sn(ia.home?.adjusted_net)-sn(ia.away?.adjusted_net); return hasData(d)?clamp(sigmoid(d/7.0),0.12,0.88):0.5; }
-function sigPredSpread(m)      { const s=sn(m?.predicted_spread); return hasData(s)?clamp(sigmoid(s/3.5),0.10,0.90):0.5; }
-function sigPIE(m)             { const e=sn(m?.pie_edge); return hasData(e)?clamp(0.5+e*7,0.15,0.85):0.5; }
-function sigForm(m)            { const f=sn(m?.form_edge),d=sn(m?.diff5_edge); return (hasData(f)||hasData(d))?clamp(0.5+(f*0.60+clamp(d/14,-0.3,0.3)*0.40)*0.45,0.12,0.88):0.5; }
-function sigClutch(m)          { const wp=sn(m?.clutch_w_pct_edge),pm=sn(m?.clutch_pm_edge); return (hasData(wp)||hasData(pm))?clamp(0.5+(wp*0.55+clamp(pm/8,-0.3,0.3)*0.45)*0.60,0.15,0.85):0.5; }
-function sigStars(m)           { const se=sn(m?.star_power_edge),pe=sn(m?.pie_player_edge); return (hasData(se)||hasData(pe))?clamp(0.5+(se*0.65+pe*7*0.35)*0.55,0.15,0.85):0.5; }
+// ─── signal builders (playoff-tuned) ─────────────────────────────────────────
+// Tighter curves: playoffs are more decisive, signals should be more extreme
+function sigNetRating(m)       { const d = sn(m?.net_diff); return hasData(d) ? clamp(sigmoid(d/6.0),0.10,0.90) : 0.5; }   // was /7.5
+function sigInjuryNet(ia)      { if (!ia?.home||!ia?.away) return 0.5; const d=sn(ia.home?.adjusted_net)-sn(ia.away?.adjusted_net); return hasData(d)?clamp(sigmoid(d/5.5),0.10,0.90):0.5; } // was /7.0
+function sigPredSpread(m)      { const s=sn(m?.predicted_spread); return hasData(s)?clamp(sigmoid(s/2.8),0.08,0.92):0.5; } // was /3.5 — playoff spreads more decisive
+function sigPIE(m)             { const e=sn(m?.pie_edge); return hasData(e)?clamp(0.5+e*9,0.12,0.88):0.5; }                // was *7
+function sigForm(m)            { const f=sn(m?.form_edge),d=sn(m?.diff5_edge); return (hasData(f)||hasData(d))?clamp(0.5+(f*0.65+clamp(d/12,-0.3,0.3)*0.35)*0.50,0.10,0.90):0.5; }
+// Clutch is most important in playoffs — use a much tighter/stronger curve
+function sigClutch(m)          { const wp=sn(m?.clutch_w_pct_edge),pm=sn(m?.clutch_pm_edge); return (hasData(wp)||hasData(pm))?clamp(0.5+(wp*0.60+clamp(pm/6,-0.4,0.4)*0.40)*0.80,0.12,0.88):0.5; }
+// Star power — playoff stars dominate
+function sigStars(m)           { const se=sn(m?.star_power_edge),pe=sn(m?.pie_player_edge); return (hasData(se)||hasData(pe))?clamp(0.5+(se*0.70+pe*9*0.30)*0.65,0.12,0.88):0.5; }
 function sigShooting(m)        { const ts=sn(m?.ts_edge),efg=sn(m?.efg_edge); return (hasData(ts)||hasData(efg))?clamp(0.5+(ts*0.65+efg*0.35)*7.0,0.15,0.85):0.5; }
-function sigTurnover(m)        { const te=sn(m?.tov_edge),ate=sn(m?.ast_to_edge); return (hasData(te)||hasData(ate))?clamp(0.5+te*0.022+ate*0.045,0.15,0.85):0.5; }
-function sigRest(m)            { const re=sn(m?.rest_edge); return hasData(re)?clamp(0.5+re,0.18,0.82):0.5; }
-function sigHustle(m)          { const he=sn(m?.hustle_edge); return hasData(he)?clamp(0.5+clamp(he/25,-0.15,0.15),0.22,0.78):0.5; }
-function sigRebound(m)         { const oe=sn(m?.oreb_edge),de=sn(m?.dreb_edge); return (hasData(oe)||hasData(de))?clamp(0.5+(oe*0.70+de*0.30)*0.9,0.25,0.75):0.5; }
-function sigShotQ(m)           { const sq=sn(m?.shot_quality_edge); return hasData(sq)?clamp(0.5+sq*5.0,0.22,0.78):0.5; }
-function sigH2H(h2h)           { return h2h?.games>0?clamp(sn(h2h.h2h_prob,0.5),0.22,0.78):0.5; }
-function sigMomentum(m)        { const me=sn(m?.momentum_edge),se=sn(m?.streak_edge); return (hasData(me)||hasData(se))?clamp(0.5+(me*0.70+se*0.30)*0.65,0.25,0.75):0.5; }
-function sigReferee(m)         { const ri=sn(m?.ref_impact); return hasData(ri)?clamp(0.5+ri,0.28,0.72):0.5; }
-function sigTravel(m)          { const tf=sn(m?.travel_fatigue); return hasData(tf)?clamp(0.5+tf,0.28,0.72):0.5; }
-function sigOppMatch(hd,ad,m)  { const h=hd?.home_net_rtg||sn(hd?.net_rating,999),a=ad?.away_net_rtg||sn(ad?.net_rating,999); return (h!==999&&a!==999&&hasData(h-a))?clamp(sigmoid((h-a)/8.0),0.20,0.80):0.5; }
+function sigTurnover(m)        { const te=sn(m?.tov_edge),ate=sn(m?.ast_to_edge); return (hasData(te)||hasData(ate))?clamp(0.5+te*0.025+ate*0.05,0.15,0.85):0.5; }  // turnovers more costly in playoffs
+function sigRest(m)            { const re=sn(m?.rest_edge); return hasData(re)?clamp(0.5+re*0.7,0.22,0.78):0.5; }         // less weight in playoffs
+function sigHustle(m)          { const he=sn(m?.hustle_edge); return hasData(he)?clamp(0.5+clamp(he/20,-0.20,0.20),0.20,0.80):0.5; } // hustle more important
+function sigRebound(m)         { const oe=sn(m?.oreb_edge),de=sn(m?.dreb_edge); return (hasData(oe)||hasData(de))?clamp(0.5+(oe*0.70+de*0.30)*1.1,0.22,0.78):0.5; }
+function sigShotQ(m)           { const sq=sn(m?.shot_quality_edge); return hasData(sq)?clamp(0.5+sq*6.0,0.20,0.80):0.5; }
+// H2H record — series history is CRITICAL in playoffs
+function sigH2H(h2h)           { return h2h?.games>0?clamp(sn(h2h.h2h_prob,0.5),0.18,0.82):0.5; }                        // wider range in playoffs
+function sigMomentum(m)        { const me=sn(m?.momentum_edge),se=sn(m?.streak_edge); return (hasData(me)||hasData(se))?clamp(0.5+(me*0.70+se*0.30)*0.75,0.22,0.78):0.5; }
+function sigReferee(m)         { const ri=sn(m?.ref_impact); return hasData(ri)?clamp(0.5+ri,0.30,0.70):0.5; }
+function sigTravel(m)          { const tf=sn(m?.travel_fatigue); return hasData(tf)?clamp(0.5+tf*0.6,0.32,0.68):0.5; }    // less travel impact in playoffs
+function sigOppMatch(hd,ad,m)  { const h=hd?.home_net_rtg||sn(hd?.net_rating,999),a=ad?.away_net_rtg||sn(ad?.net_rating,999); return (h!==999&&a!==999&&hasData(h-a))?clamp(sigmoid((h-a)/7.0),0.20,0.80):0.5; }
 function sigSplits(m)          { const sp=sn(m?.split_prob); return hasData(sp-0.5)?clamp(sp,0.25,0.75):0.5; }
-function sigPace(m)            { const pe=sn(m?.pace_edge),ate=sn(m?.ast_to_edge); return (hasData(pe)||hasData(ate))?clamp(0.5+pe+clamp(ate*0.03,-0.04,0.04),0.25,0.75):0.5; }
-function sig3PVar(m,nd)        { const vf=sn(m?.variance_factor,0.40),ls=clamp(1-vf*1.5,0,0.4); return clamp(nd>=0?0.5+ls*0.05:0.5-ls*0.05,0.35,0.65); }
-function sigDefense(hd,ad)     { const hS=sn(hd?.stl_rate),hB=sn(hd?.blk_rate),aS=sn(ad?.stl_rate),aB=sn(ad?.blk_rate); return (hS>0||aS>0)?clamp(0.5+(hS+hB*50-aS-aB*50)*0.008,0.25,0.75):0.5; }
+function sigPace(m)            { const pe=sn(m?.pace_edge),ate=sn(m?.ast_to_edge); return (hasData(pe)||hasData(ate))?clamp(0.5+pe*0.5+clamp(ate*0.02,-0.03,0.03),0.30,0.70):0.5; } // pace matters less
+function sig3PVar(m,nd)        { const vf=sn(m?.variance_factor,0.30),ls=clamp(1-vf*2.0,0,0.4); return clamp(nd>=0?0.5+ls*0.04:0.5-ls*0.04,0.38,0.62); } // 3PT variance very low in playoffs
+// Defense is king in playoffs
+function sigDefense(hd,ad)     { const hS=sn(hd?.stl_rate),hB=sn(hd?.blk_rate),aS=sn(ad?.stl_rate),aB=sn(ad?.blk_rate); return (hS>0||aS>0)?clamp(0.5+(hS+hB*50-aS-aB*50)*0.012,0.22,0.78):0.5; }
 
 function blend(components) {
   const active = components.filter(c => Math.abs(c.prob - 0.5) > 0.005);
@@ -101,16 +159,23 @@ async function computeIndependentWinProb(homeTeam, awayTeam, liveState=null, inj
   const aInj = computeInjuryImpact(ad, injCtx?.awayInjuries || [], awayOnOff || []);
 
   const hcaLogit = (() => {
-    const LEAGUE = 0.112;
+    // Playoff HCA is stronger — teams protect home court more
+    const LEAGUE = isPlayoffs() ? 0.18 : 0.112;
     const hw = hd?.home_win_rate, aw = hd?.away_win_rate;
     if (hw == null || aw == null) return LEAGUE;
     const split = clamp((hw||0.5)-(aw||0.5),-0.30,0.50);
     const wt = clamp((hd?.games||0)/60, 0, 1);
-    return clamp(LEAGUE*(1-wt)+split*0.45*wt, 0.04, 0.30);
+    return clamp(LEAGUE*(1-wt)+split*0.50*wt, 0.06, 0.35);
   })();
 
-  const W = SIGNAL_W;
+  const W = getEffectiveWeights();
   const netDiff = sn(m?.net_diff);
+
+  // ── 3. STRENGTH OF SCHEDULE adjusted momentum ────────────────────────────
+  // Wins against tougher opponents count more
+  const homeSOS = sn(hd?.sos_factor, 1.0);
+  const awaySOS = sn(ad?.sos_factor, 1.0);
+  const adjMomentumEdge = sn(m?.momentum_edge) * ((homeSOS + awaySOS) / 2);
 
   const sig = {
     officialNetRating:  sigNetRating(m),
@@ -127,7 +192,7 @@ async function computeIndependentWinProb(homeTeam, awayTeam, liveState=null, inj
     rebound:            sigRebound(m),
     shotQuality:        sigShotQ(m),
     h2h:                sigH2H(h2h),
-    momentum:           sigMomentum(m),
+    momentum:           sigMomentum({ ...m, momentum_edge: adjMomentumEdge }),
     referee:            sigReferee(m),
     travelFatigue:      sigTravel(m),
     opponentMatchup:    sigOppMatch(hd, ad, m),
@@ -222,6 +287,9 @@ async function computeIndependentWinProb(homeTeam, awayTeam, liveState=null, inj
       activeSignals:   activeCount,
       usingLearnedW:   JSON.stringify(SIGNAL_W) !== JSON.stringify(DEFAULT_W),
       nbaServiceActive: true,
+      playoffMode:     isPlayoffs(),
+      sosHome:         r4(homeSOS),
+      sosAway:         r4(awaySOS),
     }
   };
 }
