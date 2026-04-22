@@ -242,8 +242,51 @@ function buildVerdict(pickProb, confidence, aiEdgeVsBook) {
   return "Skip";
 }
 
+// ─── 4. PROP INJURY CASCADE ───────────────────────────────────────────────────
+// When a teammate is OUT, other players absorb their usage
+// E.g. LeBron out → AD gets +8% pts boost, +5% reb boost
+function computeInjuryCascade(playerName, statType, teamInjuries) {
+  if (!teamInjuries?.length || !playerName) return 0;
+  const norm = s => String(s||"").toLowerCase().replace(/[^a-z]/g,"");
+
+  // Count starters who are OUT/DOUBTFUL (not the prop player themselves)
+  const outStarters = teamInjuries.filter(inj => {
+    const t = JSON.stringify(inj).toLowerCase();
+    const isOut = t.includes('"out"') || t.includes("out") || t.includes("doubtful");
+    // Extract name to make sure we're not counting the prop player
+    const injName = norm(extractInjName(inj));
+    const propName = norm(playerName);
+    return isOut && injName && injName !== propName && injName.length > 3;
+  });
+
+  if (!outStarters.length) return 0;
+
+  // Redistribute usage — each missing starter adds some boost
+  const t = (statType || "").toLowerCase();
+  const boostPerPlayer = {
+    points:   0.07,  // each missing teammate → player takes ~7% more shots
+    rebounds: 0.05,
+    assists:  0.04,
+    pra:      0.09,
+    blocks:   0.02,
+    steals:   0.02,
+  };
+  const boost = (boostPerPlayer[t] || 0.04) * Math.min(outStarters.length, 2);
+  console.log(`[prop_model] Injury cascade: ${outStarters.length} teammate(s) out → +${(boost*100).toFixed(0)}% boost for ${playerName}`);
+  return boost;
+}
+
+function extractInjName(obj) {
+  if (!obj) return "";
+  if (obj.player && typeof obj.player === "object")
+    return `${obj.player.first_name||""} ${obj.player.last_name||""}`.trim();
+  for (const k of ["PlayerName","playerName","name","Name","full_name"])
+    if (typeof obj[k]==="string" && obj[k].length>1) return obj[k];
+  return "";
+}
+
 // ─── Main single prediction ───────────────────────────────────────────────────
-async function predictProp(playerName, statType, line, opponentTeam = null, bookOverProb = null) {
+async function predictProp(playerName, statType, line, opponentTeam = null, bookOverProb = null, teamInjuries = []) {
   if (!playerName || line == null) {
     return { player: playerName, statType, line, pick: null, error: "Missing input" };
   }
@@ -260,8 +303,17 @@ async function predictProp(playerName, statType, line, opponentTeam = null, book
       };
     }
 
-    const features   = buildFeatures(profile);
-    const overProb   = predictOverProb(features, PROP_W);
+    const features   = buildFeatures({ ...profile, statType });
+    let   overProb   = predictOverProb(features, PROP_W);
+
+    // 4. INJURY CASCADE — boost if star teammates are out
+    const cascade = computeInjuryCascade(playerName, statType, teamInjuries);
+    if (cascade > 0) {
+      // Shift probability toward over proportionally
+      const logitP = Math.log(overProb / (1 - overProb));
+      overProb = clamp(1 / (1 + Math.exp(-(logitP + cascade * 4))), 0.01, 0.99);
+    }
+
     const pick       = overProb >= 0.5 ? "over" : "under";
     const pickProb   = overProb >= 0.5 ? overProb : 1 - overProb;
     const confidence = buildConfidence(overProb, profile, bookOverProb);
@@ -280,15 +332,13 @@ async function predictProp(playerName, statType, line, opponentTeam = null, book
       playerId:     profile.player?.id,
       statType,
       line,
-      // AI prediction
       pick,
       overProb:     r4(overProb),
       pickProb:     r4(pickProb),
       confidence,
       verdict,
-      // Edge vs sportsbook
       aiEdgeVsBook: aiEdgeVsBook != null ? r4(aiEdgeVsBook) : null,
-      // Player profile summary
+      injuryCascade: r4(cascade), // 4. how much the injury cascade boosted this prediction
       profile: {
         seasonAvg:  profile.seasonAvg,
         l5Avg:      profile.l5Avg,
@@ -302,7 +352,6 @@ async function predictProp(playerName, statType, line, opponentTeam = null, book
         minsTrend:  r4(profile.minsTrend),
         statValues: profile.statValues?.slice(0, 5),
       },
-      // Raw features for learning
       features: Object.fromEntries(
         Object.entries(features).map(([k, v]) => [k, r4(v)])
       ),
@@ -319,8 +368,7 @@ async function predictProp(playerName, statType, line, opponentTeam = null, book
 }
 
 // ─── Bulk predictions for a game ─────────────────────────────────────────────
-// Takes propSections from the sportsbook, enhances with AI predictions
-async function predictGameProps(propSections, homeTeam = null, awayTeam = null) {
+async function predictGameProps(propSections, homeTeam = null, awayTeam = null, injuryContext = {}) {
   const statMap = {
     points:   "points",
     assists:  "assists",
@@ -334,11 +382,19 @@ async function predictGameProps(propSections, homeTeam = null, awayTeam = null) 
     const rows = (propSections[section] || []).slice(0, 8);
     if (!rows.length) { results[section] = []; continue; }
 
-    // Run predictions concurrently
+  for (const [section, statType] of Object.entries(statMap)) {
+    const rows = (propSections[section] || []).slice(0, 8);
+    if (!rows.length) { results[section] = []; continue; }
+
     const predictions = await Promise.allSettled(
-      rows.map(row =>
-        predictProp(row.player, statType, row.line, null, row.hitProbability)
-      )
+      rows.map(row => {
+        // Determine which team this player is on and pass their injuries
+        const isHomePlayer = homeTeam && row.team && row.team.toLowerCase().includes(homeTeam.toLowerCase().split(" ").pop().toLowerCase());
+        const teamInj = isHomePlayer
+          ? (injuryContext.homeInjuries || [])
+          : (injuryContext.awayInjuries || []);
+        return predictProp(row.player, statType, row.line, null, row.hitProbability, teamInj);
+      })
     );
 
     results[section] = rows.map((bookRow, i) => {
