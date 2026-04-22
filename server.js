@@ -164,8 +164,8 @@ function buildProps(propsEvt) {
       for (const o of mkt.outcomes||[])
         gm[mkt.key].push({book:bm.key, player:o.description||"", side:o.name||"", point:o.point??null, price:o.price??null});
     }
-  const mm = {"player_points":"points","player_assists":"assists","player_rebounds":"rebounds","player_points_rebounds_assists":"pra"};
-  const sec = {points:[],assists:[],rebounds:[],pra:[]};
+  const mm = {"player_points":"points","player_assists":"assists","player_rebounds":"rebounds","player_threes":"threes","player_threes_made":"threes"};
+  const sec = {points:[],assists:[],rebounds:[],threes:[]};
   for (const [mk,dk] of Object.entries(mm)) {
     const grouped = {};
     for (const o of gm[mk]||[]) {
@@ -187,7 +187,7 @@ function buildProps(propsEvt) {
       .sort((a,b)=>(b.coverage-a.coverage)||((b.pickProbability||0)-(a.pickProbability||0)))
       .slice(0,12);
   }
-  const all = [...sec.points,...sec.assists,...sec.rebounds,...sec.pra];
+  const all = [...sec.points,...sec.assists,...sec.rebounds,...sec.threes];
   if (!all.length) return {sections:sec, signal:{adj:0,depth:0}};
   let str=0, obs=0;
   for (const r of all) {
@@ -517,7 +517,7 @@ function computeTravelFatigue(homeTeam, awayTeam, homeForm, awayForm) {
 function detectParlayCorrelation(pickTeam, propPlayer, propSection) {
   // If we're betting a team to win AND a player from that same team to go over
   // those are highly correlated (~0.7-0.85 depending on role)
-  const ptsCorrHigh = ["points", "pra"]; // strongly correlated with team winning
+  const ptsCorrHigh = ["points", "threes"]; // strongly correlated with team winning
   const ptsCorrMed  = ["assists"];        // moderately correlated
   if (ptsCorrHigh.includes(propSection)) return 0.80;
   if (ptsCorrMed.includes(propSection))  return 0.65;
@@ -612,7 +612,7 @@ app.get("/odds", async (req, res) => {
 
     // ── Record prop snapshots for learning + 5. LINE MOVEMENT TRACKING ──────
     const gameDate  = (featured.commence_time || new Date().toISOString()).slice(0, 10);
-    const statTypeMap = { points:"points", assists:"assists", rebounds:"rebounds", pra:"pra" };
+    const statTypeMap = { points:"points", assists:"assists", rebounds:"rebounds", threes:"threes" };
     for (const [section, rows] of Object.entries(aiPropSections)) {
       for (const row of rows || []) {
         if (!row.playerId || row.line == null || !row.aiPick) continue;
