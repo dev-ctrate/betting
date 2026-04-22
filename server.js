@@ -33,7 +33,7 @@ const SPORT_KEY           = "basketball_nba";
 const REGIONS             = "us";
 const ODDS_FORMAT         = "decimal";
 const FEATURED_MARKETS    = "h2h,spreads,totals";
-const PLAYER_PROP_MARKETS = ["player_points","player_rebounds","player_assists","player_threes"].join(",");
+const PLAYER_PROP_MARKETS = ["player_points","player_rebounds","player_assists","player_threes","player_threes_made","player_three_pointers_made"].join(",");
 const HISTORICAL_LOOKBACKS = [{ label: "2h", ms: 2*60*60*1000 }, { label: "24h", ms: 24*60*60*1000 }];
 
 const currentCache    = new Map();
@@ -164,7 +164,19 @@ function buildProps(propsEvt) {
       for (const o of mkt.outcomes||[])
         gm[mkt.key].push({book:bm.key, player:o.description||"", side:o.name||"", point:o.point??null, price:o.price??null});
     }
-  const mm = {"player_points":"points","player_assists":"assists","player_rebounds":"rebounds","player_threes":"threes","player_threes_made":"threes"};
+
+  // Log all available market keys so we can see what the API returns
+  const allKeys = Object.keys(gm);
+  console.log("[props] Available market keys:", allKeys.join(", "));
+  const mm = {
+    "player_points":"points",
+    "player_assists":"assists",
+    "player_rebounds":"rebounds",
+    "player_threes":"threes",
+    "player_threes_made":"threes",
+    "player_three_pointers_made":"threes",
+    "player_threes_alternate":"threes",
+  };
   const sec = {points:[],assists:[],rebounds:[],threes:[]};
   for (const [mk,dk] of Object.entries(mm)) {
     const grouped = {};
