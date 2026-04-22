@@ -284,16 +284,20 @@ async function fetchBdlTeamGames(bdlTeamId, season) {
   if (!BDL_KEY || !bdlTeamId) return [];
   const k = `bdl:tgames:${bdlTeamId}:${season}`, h = cg(k); if (h) return h;
   try {
-    // Fetch last 100 games sorted newest-first so slice(-8) always gives most recent
-    const data  = await bdlFetch(
-      `/games?team_ids[]=${bdlTeamId}&seasons[]=${season}&per_page=100`
-    );
-    const all = bdlRows(data).filter(g =>
+    // Fetch both pages to get all ~82 regular season + playoff games
+    const [p1, p2] = await Promise.allSettled([
+      bdlFetch(`/games?team_ids[]=${bdlTeamId}&seasons[]=${season}&per_page=100`),
+      bdlFetch(`/games?team_ids[]=${bdlTeamId}&seasons[]=${season}&per_page=100&page=2`),
+    ]);
+    const all = [
+      ...bdlRows(p1.status === "fulfilled" ? p1.value : []),
+      ...bdlRows(p2.status === "fulfilled" ? p2.value : []),
+    ].filter(g =>
       String(g.status || "").toLowerCase().includes("final") &&
       typeof g.home_team_score === "number" &&
       typeof g.visitor_team_score === "number"
     );
-    // Sort ascending by date so index 0 = oldest, last = most recent
+    // Sort ascending so index 0 = oldest, last = most recent
     all.sort((a, b) => {
       const da = new Date(a.date || a.datetime || 0).getTime();
       const db = new Date(b.date || b.datetime || 0).getTime();
@@ -515,9 +519,10 @@ async function fetchBdlTeamRecentStats(bdlTeamId) {
   const season = getBdlSeason();
   const k = `bdl:teamstats:${bdlTeamId}:${season}`, h = cg(k); if (h) return h;
   try {
-    // Step 1: get the 8 most recent final games — fetch 30 so we have room to filter finals
+    // Step 1: get the most recent 8 final games
+    // Fetch 100 so we have the full season and can sort to get the newest
     const gData = await bdlFetch(
-      `/games?team_ids[]=${bdlTeamId}&seasons[]=${season}&per_page=30`
+      `/games?team_ids[]=${bdlTeamId}&seasons[]=${season}&per_page=100`
     );
     const allGames = bdlRows(gData)
       .filter(g => String(g.status || "").toLowerCase().includes("final"))
