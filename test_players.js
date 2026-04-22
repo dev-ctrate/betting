@@ -1,15 +1,12 @@
-/**
- * Run: node test_players.js "Cleveland Cavaliers" "Toronto Raptors"
- */
 const BDL_KEY = process.env.BALLDONTLIE_API_KEY || "";
 if (!BDL_KEY) { console.error("❌ BALLDONTLIE_API_KEY not set"); process.exit(1); }
-const HOME = process.argv[2] || "Cleveland Cavaliers";
-const AWAY = process.argv[3] || "Toronto Raptors";
+const HOME = process.argv[2] || "Boston Celtics";
+const AWAY = process.argv[3] || "Philadelphia 76ers";
 function getBdlSeason() { const d=new Date(),m=d.getUTCMonth()+1,y=d.getUTCFullYear(); return m>=10?y:y-1; }
 const bdlRows = p => Array.isArray(p)?p:Array.isArray(p?.data)?p.data:[];
 const flt = (v,fb=0)=>{ const n=Number(v); return Number.isFinite(n)?n:fb; };
 async function bdl(path) {
-  const res=await fetch(`https://api.balldontlie.io/v1${path}`,{headers:{Authorization:BDL_KEY},signal:AbortSignal.timeout(12000)});
+  const res=await fetch(`https://api.balldontlie.io/v1${path}`,{headers:{Authorization:BDL_KEY},signal:AbortSignal.timeout(15000)});
   const txt=await res.text(); if(!res.ok) throw new Error(`BDL ${res.status}: ${txt.slice(0,100)}`);
   return JSON.parse(txt);
 }
@@ -22,16 +19,29 @@ async function testTeam(teamName) {
   const team  = teams.find(t=>norm(t.full_name)===norm(teamName)||norm(t.full_name).includes(nick));
   if (!team) { console.log("❌ Team not found"); return; }
   console.log(`✅ Team: ${team.full_name} (ID=${team.id})`);
-  const gData = await bdl(`/games?team_ids[]=${team.id}&seasons[]=${season}&per_page=10`);
-  const games = bdlRows(gData).filter(g=>String(g.status||"").toLowerCase().includes("final")).slice(-8);
-  if (!games.length) { console.log(`❌ No final games for season ${season}`); return; }
-  console.log(`✅ Games: ${games.length} recent finals (last: ${games[games.length-1]?.date})`);
-  const idsQ = games.map(g=>`game_ids[]=${g.id}`).join("&");
-  const [p1,p2] = await Promise.allSettled([bdl(`/stats?${idsQ}&per_page=100`),bdl(`/stats?${idsQ}&per_page=100&page=2`)]);
-  const allRows = [...bdlRows(p1.status==="fulfilled"?p1.value:[]),...bdlRows(p2.status==="fulfilled"?p2.value:[])].filter(r=>flt(r.min)>1);
+
+  // Fetch 2 pages to get all season games
+  const [p1,p2] = await Promise.allSettled([
+    bdl(`/games?team_ids[]=${team.id}&seasons[]=${season}&per_page=100`),
+    bdl(`/games?team_ids[]=${team.id}&seasons[]=${season}&per_page=100&page=2`),
+  ]);
+  const allGames = [
+    ...bdlRows(p1.status==="fulfilled"?p1.value:[]),
+    ...bdlRows(p2.status==="fulfilled"?p2.value:[]),
+  ].filter(g=>String(g.status||"").toLowerCase().includes("final"))
+   .sort((a,b)=>new Date(b.date||0)-new Date(a.date||0));
+
+  if (!allGames.length) { console.log(`❌ No final games for season ${season}`); return; }
+  console.log(`✅ Games: ${allGames.length} total finals — most recent: ${allGames[0]?.date}, oldest: ${allGames[allGames.length-1]?.date}`);
+
+  const recent8 = allGames.slice(0,8);
+  const idsQ = recent8.map(g=>`game_ids[]=${g.id}`).join("&");
+  const [s1,s2] = await Promise.allSettled([bdl(`/stats?${idsQ}&per_page=100`),bdl(`/stats?${idsQ}&per_page=100&page=2`)]);
+  const allRows = [...bdlRows(s1.status==="fulfilled"?s1.value:[]),...bdlRows(s2.status==="fulfilled"?s2.value:[])].filter(r=>flt(r.min)>1);
   const teamRows = allRows.filter(r=>{ const tid=r.team?.id??r.team_id; return tid===team.id||tid===String(team.id); });
   const useRows = teamRows.length>=5?teamRows:allRows;
   console.log(`✅ Stat rows: ${allRows.length} total, ${teamRows.length} filtered to team`);
+
   const byP={};
   for (const r of useRows) {
     if(flt(r.min)<1)continue; const id=r.player_id??r.player?.id; if(!id)continue;
