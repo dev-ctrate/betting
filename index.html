@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1.0"/>
-<title>Edge Model</title>
+<title>Saabi</title>
 <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 <style>
 :root{--r-xl:26px;--r-lg:20px;--tf:180ms ease;--tm:320ms ease;}
@@ -189,7 +189,7 @@ canvas{display:block;width:100%;height:100%;background:transparent!important;}
 </div>
 
 <div class="card hero-card">
-  <h1>Edge Model</h1>
+  <h1>Saabi</h1>
   <p class="subtle" id="heroSub">NBA Prediction Engine</p>
   <div class="score-display score-hidden" id="scoreDisplay">
     <div class="score-team">
@@ -391,7 +391,7 @@ canvas{display:block;width:100%;height:100%;background:transparent!important;}
     <div class="prop-sec"><h3 style="margin-bottom:10px">Points</h3><div id="propsPoints">No data</div></div>
     <div class="prop-sec"><h3 style="margin-bottom:10px">Assists</h3><div id="propsAssists">No data</div></div>
     <div class="prop-sec"><h3 style="margin-bottom:10px">Rebounds</h3><div id="propsRebounds">No data</div></div>
-    <div class="prop-sec"><h3 style="margin-bottom:10px">3-Pointers</h3><div id="propsThrees">No data</div></div>
+    <div class="prop-sec"><h3 style="margin-bottom:10px">PRA</h3><div id="propsPRA">No data</div></div>
   </div>
 </div>
 
@@ -897,7 +897,7 @@ async function loadGame(){
 
     const ps=d.propSections||{};
     renderProps(ps.points||[],"propsPoints","pts");renderProps(ps.assists||[],"propsAssists","ast");
-    renderProps(ps.rebounds||[],"propsRebounds","reb");renderProps(ps.threes||[],"propsThrees","3PM");
+    renderProps(ps.rebounds||[],"propsRebounds","reb");renderProps(ps.pra||[],"propsPRA","PRA");
 
     renderPbp(scoreState,homeTeam,awayTeam);
     $("statusMsg").textContent=`${awayTeam} @ ${homeTeam} · ${d.gameMode} · ${new Date(d.updatedAt||Date.now()).toLocaleTimeString()}`;
