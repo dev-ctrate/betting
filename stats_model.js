@@ -12,16 +12,6 @@ const { computeInjuryImpact } = require("./injury_model");
 
 const SIG_W_FILE = path.join(__dirname, "data", "signal_weights.json");
 
-const DEFAULT_W = {
-  officialNetRating:  0.20, injuryAdjNetRating: 0.08, predictedSpread:   0.12,
-  pie:                0.07, recentForm:         0.09, clutch:            0.06,
-  starPower:          0.05, shooting:           0.06, turnover:          0.05,
-  rest:               0.04, hustle:             0.03, rebound:           0.03,
-  shotQuality:        0.03, h2h:                0.03, momentum:          0.03,
-  referee:            0.01, travelFatigue:      0.01, opponentMatchup:   0.02,
-  splits:             0.02, pace:               0.02, threePointVariance: 0.01, defense: 0.02,
-};
-
 // ── PLAYOFF MODE — active April 13 through June 22 ───────────────────────────
 // Playoffs are fundamentally different from regular season:
 //   • Pace drops ~5 possessions per game (teams slow down, execute sets)
