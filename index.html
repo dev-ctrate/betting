@@ -254,6 +254,16 @@ canvas{display:block;width:100%;height:100%;background:transparent!important;}
     <div class="stat"><strong>Confidence</strong><p id="confLabel">—</p><p class="sub" id="confPct">—</p></div>
     <div class="stat"><strong>Books</strong><p id="bookCount">—</p></div>
   </div>
+  <!-- 2. Kelly Criterion -->
+  <div class="main-stats" style="margin-top:8px">
+    <div class="stat"><strong>Kelly Stake</strong><p id="kellyVal" style="color:var(--green)">—</p><p class="sub" id="kellyLabel">—</p></div>
+    <div class="stat"><strong>Travel</strong><p id="travelFatigueVal">—</p></div>
+    <div class="stat"><strong>Ref Impact</strong><p id="refImpact">—</p><p class="sub" id="refNames"></p></div>
+    <div class="stat"><strong>Season</strong><p id="weightsStatus">—</p></div>
+    <div class="stat"><strong>SOS</strong><p id="sosDisplay">—</p></div>
+  </div>
+  <!-- 9. Correlated parlay warning -->
+  <div id="parlayWarning" style="display:none;margin-top:8px;padding:8px 14px;background:rgba(167,140,87,.15);border:1px solid var(--yellow);border-radius:12px;font-size:12px;color:var(--yellow)"></div>
 </div>
 
 <div class="card" id="oddsCard">
@@ -779,6 +789,36 @@ async function loadGame(){
     setV("confPct", fPct(realConfPct));
     setV("bookCount",d.modelDetails?.bookCount??d.bookmakerTable?.length??"-");
 
+    // 2. Kelly Criterion
+    const kelly = d.kellyStake;
+    if(kelly && $("kellyVal")) {
+      $("kellyVal").textContent = kelly.fraction > 0 ? `${(kelly.fraction*100).toFixed(1)}% bankroll` : "Pass";
+      $("kellyLabel").textContent = kelly.label || "Pass";
+    }
+    // 6. Referee
+    if(d.referees?.names?.length && $("refImpact")) {
+      const refStr = d.referees.names.slice(0,2).join(", ");
+      setV("refImpact", d.referees.highFoul ? "High foul ⚠️" : d.referees.lowFoul ? "Low foul" : "Normal");
+      $("refNames").textContent = refStr;
+    }
+    // 7. Travel fatigue
+    if(d.travelFatigue && $("travelFatigueVal")) {
+      const tf = d.travelFatigue;
+      $("travelFatigueVal").textContent = tf.netFatigueAdj > 0.02
+        ? `Away fatigue +${(tf.netFatigueAdj*100).toFixed(0)}%`
+        : tf.awayFatigue > 0 ? `Away tired (${tf.timezoneDiff}TZ)` : "None";
+    }
+    // 9. Correlated parlay warning
+    const parlayEl = $("parlayWarning");
+    if(parlayEl) {
+      if(d.parlayCorrelation) {
+        parlayEl.style.display="block";
+        parlayEl.textContent=`⚠️ Parlay correlation: ${d.parlayCorrelation.player} prop + team ML are ~${Math.round(d.parlayCorrelation.correlation*100)}% correlated`;
+      } else {
+        parlayEl.style.display="none";
+      }
+    }
+
     const ls=d.learningSummary||{};
 
     // ── Team cards — show AI probability as main, market as reference ──────────
@@ -806,9 +846,13 @@ async function loadGame(){
     const wrNum=ls.overallWinRate||0;
     const bar=$("overallAccBar");if(bar){bar.style.width=Math.min(wrNum*100,100)+"%";bar.className="acc-bar-fill"+(wrNum<0.55?" bad":wrNum<0.62?" warn":"");}
     const bv=ls.byVerdict?.["Bet now"];setV("betNowAcc",bv?.winRate!=null?(bv.winRate*100).toFixed(1)+"%":"—");
-    setV("weightsStatus",ai.usingLearnedWeights?"Learned ✓":"Default");
-    setV("statsBlend",typeof ai.statsBlendWeight==="number"?(ai.statsBlendWeight*100).toFixed(0)+"%":"—");
-    setV("nbaStatus",mp?.nba_service_used?"Active ✓":"Offline");
+    setV("weightsStatus", ai.playoffMode ? "🏆 PLAYOFF" : "Regular Season");
+    setV("statsBlend", ai.playoffMode ? "Playoff weights" : "Season weights");
+    // 3. SOS display
+    if($("sosDisplay")) {
+      const sosH = ai.sosHome ?? 1.0, sosA = ai.sosAway ?? 1.0;
+      $("sosDisplay").textContent = `H:${sosH.toFixed(2)} A:${sosA.toFixed(2)}`;
+    }
 
     renderSignals(ai.signals||null,d.pickSide||"home",ai.activeWeights||null,homeTeam,awayTeam);
     $("sigSubtitle").textContent=`Pick: ${d.pick||"—"} · sorted by weight`;
